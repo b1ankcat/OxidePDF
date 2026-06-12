@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{generate, shells::Bash};
 use oxidepdf_core::{
     execute_workflow, AnnotationEditAction, AnnotationEditOptions, AnnotationInspectOptions,
     Artifact, ArtifactRef, ArtifactStore, AttachmentEditAction, AttachmentEditOptions,
@@ -25,460 +26,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-/// OxidePDF command-line arguments.
-#[derive(Debug, Parser)]
-#[command(
-    name = "oxidepdf",
-    version,
-    about = "Pure Rust PDF toolkit",
-    long_about = "OxidePDF is a pure Rust PDF toolkit."
-)]
-pub struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Debug, Subcommand)]
-enum Commands {
-    /// Run a workflow document.
-    Run(RunArgs),
-    /// Edit or create PDF files.
-    #[command(name = "edit")]
-    #[command(subcommand)]
-    Edit(PdfEditCommand),
-    /// Inspect or render PDF files.
-    #[command(name = "inspect")]
-    #[command(subcommand)]
-    Inspect(PdfInspectCommand),
-    /// Compare PDF files.
-    Compare(CompareArgs),
-    /// List or verify PDF digital signatures.
-    #[command(subcommand)]
-    Sign(SignCommand),
-    /// Add document timestamp material.
-    #[command(subcommand)]
-    Timestamp(TimestampCommand),
-    /// Inspect, set, delete, or validate document metadata.
-    #[command(subcommand)]
-    Metadata(MetadataCommand),
-    /// Inspect, set, or delete document outlines.
-    #[command(subcommand)]
-    Outline(OutlineCommand),
-    /// Add, list, extract, or delete embedded file attachments.
-    #[command(name = "attach")]
-    #[command(subcommand)]
-    Attach(AttachCommand),
-    /// List, add, or delete annotations.
-    #[command(name = "annot")]
-    #[command(subcommand)]
-    Annot(AnnotCommand),
-    /// Fill, unlock, inspect, or remove interactive forms.
-    #[command(subcommand)]
-    Form(FormCommand),
-    /// Remove selected interactive document elements.
-    #[command(subcommand)]
-    Interactive(InteractiveCommand),
-    /// Add a text stamp to a PDF.
-    Stamp(StampArgs),
-    /// Overlay one PDF page onto another PDF.
-    #[command(name = "overlay-pdf")]
-    OverlayPdf(OverlayPdfArgs),
-    /// Inspect or edit image XObject resources.
-    #[command(subcommand)]
-    Image(ImageCommand),
-    /// Edit simple page colors.
-    #[command(subcommand)]
-    Color(ColorCommand),
-    /// Encrypt a PDF with owner and user passwords.
-    Encrypt(SecurityEncryptArgs),
-    /// Decrypt a password-protected PDF.
-    Decrypt(SecurityDecryptArgs),
-    /// Inspect or change password permission policy.
-    #[command(subcommand)]
-    Permissions(PermissionsCommand),
-}
-
-#[derive(Debug, Subcommand)]
-enum PdfEditCommand {
-    /// Merge multiple PDFs into one output.
-    Merge(MergeArgs),
-    /// Keep selected pages from a PDF.
-    #[command(name = "keep-pages")]
-    KeepPages(PageSelectionArgs),
-    /// Extract selected pages from a PDF.
-    #[command(name = "extract-pages")]
-    ExtractPages(PageSelectionArgs),
-    /// Reorder pages in a PDF.
-    #[command(name = "reorder-pages")]
-    ReorderPages(PageSelectionArgs),
-    /// Rotate selected PDF pages.
-    #[command(name = "rotate-pages")]
-    RotatePages(RotateArgs),
-    /// Delete selected pages from a PDF.
-    #[command(name = "delete-pages")]
-    DeletePages(PageSelectionArgs),
-    /// Delete structurally blank pages from a PDF.
-    #[command(name = "delete-blank-pages")]
-    DeleteBlankPages(DeleteBlankPagesArgs),
-    /// Crop selected PDF pages.
-    #[command(name = "crop-pages")]
-    CropPages(CropPagesArgs),
-    /// Scale selected PDF pages.
-    #[command(name = "scale-pages")]
-    ScalePages(ScalePagesArgs),
-    /// Combine all pages into one tall page.
-    #[command(name = "single-page")]
-    SinglePage(SinglePageArgs),
-    /// Lay multiple source pages on each output page.
-    #[command(name = "nup")]
-    NUp(NUpArgs),
-    /// Arrange pages for booklet printing.
-    #[command(name = "booklet")]
-    Booklet(BookletArgs),
-    /// Add page numbers to pages.
-    #[command(name = "page-numbers")]
-    PageNumbers(PageNumbersArgs),
-    /// Convert one or more images into PDF pages.
-    #[command(name = "img2pdf")]
-    Img2pdf(ImageToPdfArgs),
-    /// Convert an SVG document into a PDF.
-    #[command(name = "svg2pdf")]
-    Svg2pdf(SvgToPdfArgs),
-    /// Add a text, image, or SVG watermark to a PDF.
-    Watermark(WatermarkArgs),
-    /// Compress and optimize a PDF.
-    Compress(CompressArgs),
-}
-
-#[derive(Debug, Subcommand)]
-enum PdfInspectCommand {
-    /// Render a PDF page into a PNG image.
-    Render(RenderArgs),
-    /// Extract plain text from a PDF.
-    #[command(name = "extract-text")]
-    ExtractText(ExtractTextArgs),
-}
-
-#[derive(Debug, Subcommand)]
-enum SignCommand {
-    /// Add a PDF digital signature.
-    Add(SignAddArgs),
-    /// List PDF signatures.
-    List(ListSignaturesArgs),
-    /// Verify PDF signatures and certificates.
-    Verify(VerifySignaturesArgs),
-    /// Delete a PDF signature field.
-    #[command(name = "delete-field")]
-    DeleteField(SignDeleteFieldArgs),
-    /// Add visual signature appearance only.
-    Appearance(SignatureAppearanceArgs),
-}
-
-#[derive(Debug, Subcommand)]
-enum TimestampCommand {
-    /// Add or inspect explicit timestamp material.
-    Add(TimestampAddArgs),
-}
-
-#[derive(Debug, Subcommand)]
-enum MetadataCommand {
-    Get(InspectOutputArgs),
-    Set(MetadataSetArgs),
-    Delete(MetadataDeleteArgs),
-    Validate(InspectOutputArgs),
-}
-
-#[derive(Debug, Subcommand)]
-enum OutlineCommand {
-    Get(InspectOutputArgs),
-    Set(OutlineSetArgs),
-    Delete(EditOutputArgs),
-}
-
-#[derive(Debug, Subcommand)]
-enum AttachCommand {
-    Add(AttachAddArgs),
-    List(InspectOutputArgs),
-    Extract(AttachExtractArgs),
-    Delete(AttachDeleteArgs),
-}
-
-#[derive(Debug, Subcommand)]
-enum AnnotCommand {
-    List(InspectOutputArgs),
-    Add(AnnotAddArgs),
-    Delete(AnnotDeleteArgs),
-}
-
-#[derive(Debug, Subcommand)]
-enum FormCommand {
-    Inspect(InspectOutputArgs),
-    Fill(FormFillArgs),
-    #[command(name = "unlock-readonly")]
-    UnlockReadonly(EditOutputArgs),
-    Remove(EditOutputArgs),
-}
-
-#[derive(Debug, Subcommand)]
-enum InteractiveCommand {
-    Remove(InteractiveRemoveArgs),
-}
-
-#[derive(Debug, Subcommand)]
-enum ImageCommand {
-    List(InspectOutputArgs),
-    Add(ImageAddArgs),
-    Replace(ImageReplaceArgs),
-    Delete(ImageDeleteArgs),
-    Extract(ImageExtractArgs),
-}
-
-#[derive(Debug, Subcommand)]
-enum ColorCommand {
-    Contrast(ColorContrastArgs),
-    Invert(ColorEditArgs),
-    Replace(ColorReplaceArgs),
-}
-
-#[derive(Debug, Subcommand)]
-enum PermissionsCommand {
-    Get(PermissionsGetArgs),
-    Set(PermissionsSetArgs),
-}
-
-#[derive(Debug, Parser)]
-struct RunArgs {
-    /// Workflow YAML or JSON file, or `-` to read from stdin.
-    #[arg(long)]
-    workflow: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct MergeArgs {
-    /// Input PDF files.
-    #[arg(required = true, num_args = 2..)]
-    inputs: Vec<PathBuf>,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct PageSelectionArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Page range or sequence, for example `1,3-5`.
-    #[arg(long)]
-    pages: String,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct RotateArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Page range, for example `1,3-5`.
-    #[arg(long)]
-    pages: String,
-
-    /// Rotation in degrees. Must be 90, 180, or 270.
-    #[arg(long)]
-    degrees: i16,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct DeleteBlankPagesArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct CropPagesArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Page range, for example `1,3-5`. Defaults to all pages.
-    #[arg(long)]
-    pages: Option<String>,
-
-    /// Left coordinate of the new CropBox.
-    #[arg(long)]
-    left: f32,
-
-    /// Bottom coordinate of the new CropBox.
-    #[arg(long)]
-    bottom: f32,
-
-    /// Right coordinate of the new CropBox.
-    #[arg(long)]
-    right: f32,
-
-    /// Top coordinate of the new CropBox.
-    #[arg(long)]
-    top: f32,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct ScalePagesArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Page range, for example `1,3-5`. Defaults to all pages.
-    #[arg(long)]
-    pages: Option<String>,
-
-    /// Scale factor applied to page boxes and page contents.
-    #[arg(long)]
-    factor: f32,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct SinglePageArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct NUpArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Number of columns on each output page.
-    #[arg(long)]
-    columns: u32,
-
-    /// Number of rows on each output page.
-    #[arg(long)]
-    rows: u32,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct BookletArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct PageNumbersArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Page range, for example `1,3-5`. Defaults to all pages.
-    #[arg(long)]
-    pages: Option<String>,
-
-    /// First number written on the first selected page.
-    #[arg(long, default_value_t = 1)]
-    start: u32,
-
-    /// Text before the number.
-    #[arg(long, default_value = "")]
-    prefix: String,
-
-    /// Text after the number.
-    #[arg(long, default_value = "")]
-    suffix: String,
-
-    /// Font size in PDF points.
-    #[arg(long, default_value_t = 12.0)]
-    font_size: f32,
-
-    /// Page number placement.
-    #[arg(long, value_enum, default_value_t = CliPageNumberPosition::BottomCenter)]
-    position: CliPageNumberPosition,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
-enum CliPageNumberPosition {
-    TopLeft,
-    TopCenter,
-    TopRight,
-    BottomLeft,
-    BottomCenter,
-    BottomRight,
-}
+include!("args.rs");
 
 impl From<CliPageNumberPosition> for PageNumberPosition {
     fn from(value: CliPageNumberPosition) -> Self {
@@ -493,46 +41,6 @@ impl From<CliPageNumberPosition> for PageNumberPosition {
     }
 }
 
-#[derive(Debug, Parser)]
-struct CompressArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Compression mode: lossless or lossy.
-    #[arg(long, value_enum, default_value_t = CliCompressionMode::Lossless)]
-    mode: CliCompressionMode,
-
-    /// Explicit image quality for lossy image recompression, 1-100.
-    #[arg(long)]
-    image_quality: Option<u8>,
-
-    /// Explicit maximum image width for lossy image resampling.
-    #[arg(long)]
-    image_max_width: Option<u32>,
-
-    /// Explicit maximum image height for lossy image resampling.
-    #[arg(long)]
-    image_max_height: Option<u32>,
-
-    /// Explicit target image format for lossy image recompression.
-    #[arg(long, value_enum)]
-    image_format: Option<CliCompressionImageFormat>,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
-enum CliCompressionMode {
-    Lossless,
-    Lossy,
-}
-
 impl From<CliCompressionMode> for CompressionMode {
     fn from(value: CliCompressionMode) -> Self {
         match value {
@@ -540,13 +48,6 @@ impl From<CliCompressionMode> for CompressionMode {
             CliCompressionMode::Lossy => Self::Lossy,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
-enum CliCompressionImageFormat {
-    Jpeg,
-    Png,
-    Webp,
 }
 
 impl From<CliCompressionImageFormat> for CompressionImageFormat {
@@ -557,788 +58,6 @@ impl From<CliCompressionImageFormat> for CompressionImageFormat {
             CliCompressionImageFormat::Webp => Self::Webp,
         }
     }
-}
-
-#[derive(Debug, Parser)]
-struct ImageToPdfArgs {
-    /// Input PNG, JPEG, or WebP image files.
-    #[arg(required = true, num_args = 1..)]
-    inputs: Vec<PathBuf>,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Page layout: `fit` or `original_size`.
-    #[arg(long)]
-    layout: Option<String>,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct SvgToPdfArgs {
-    /// Input SVG file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Rasterize the SVG before placing it into the PDF.
-    #[arg(long)]
-    rasterize: bool,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct RenderArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// One-based page number to render.
-    #[arg(long)]
-    page: u32,
-
-    /// Render scale. For 144 DPI output from a 72 DPI PDF, use 2.0.
-    #[arg(long)]
-    scale: Option<f32>,
-
-    /// Output PNG file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct ExtractTextArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Output text file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct WatermarkArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Watermark kind: `text`, `image`, or `svg`.
-    #[arg(long)]
-    kind: String,
-
-    /// Text content for text watermarks.
-    #[arg(long)]
-    text: Option<String>,
-
-    /// Font family for text watermarks.
-    #[arg(long)]
-    font: Option<String>,
-
-    /// Explicit font file for text watermarks.
-    #[arg(long)]
-    font_path: Option<PathBuf>,
-
-    /// Font size in points for text watermarks.
-    #[arg(long)]
-    font_size: Option<f32>,
-
-    /// Image or SVG watermark file.
-    #[arg(long)]
-    watermark: Option<PathBuf>,
-
-    /// Page range, for example `1,3-5`.
-    #[arg(long)]
-    pages: Option<String>,
-
-    /// Opacity from 0.0 to 1.0.
-    #[arg(long)]
-    opacity: Option<f32>,
-
-    /// Rotation in degrees.
-    #[arg(long)]
-    rotation: Option<f32>,
-
-    /// Position: `center`, `top_left`, `top_right`, `bottom_left`, or `bottom_right`.
-    #[arg(long)]
-    position: Option<String>,
-
-    /// Scale for image and SVG watermarks.
-    #[arg(long)]
-    scale: Option<f32>,
-
-    /// Rasterize SVG before watermarking.
-    #[arg(long)]
-    rasterize: bool,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct SignAddArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Signature field name to create or fill.
-    #[arg(long)]
-    field_name: String,
-
-    /// PEM file containing the signer certificate.
-    #[arg(long)]
-    certificate: PathBuf,
-
-    /// PEM file containing the signer private key.
-    #[arg(long)]
-    private_key: PathBuf,
-
-    /// Reserved signature Contents bytes.
-    #[arg(long)]
-    contents_reserved_bytes: Option<usize>,
-
-    /// Optional visual signature appearance field to bind.
-    #[arg(long)]
-    appearance_field: Option<String>,
-
-    /// Output signed PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct VerifySignaturesArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// PEM file containing explicit trust anchors.
-    #[arg(long)]
-    trust_anchors: Option<PathBuf>,
-
-    /// Output report file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct ListSignaturesArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Output report file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct SignDeleteFieldArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Signature field name to delete.
-    #[arg(long)]
-    field_name: String,
-
-    /// Allow deleting a field that contains signature value material.
-    #[arg(long)]
-    destructive: bool,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct TimestampAddArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Explicit TSA endpoint. Live TSA requests are not performed by this offline build.
-    #[arg(long)]
-    tsa_url: Option<String>,
-
-    /// Explicit RFC 3161 timestamp token DER file.
-    #[arg(long)]
-    token: Option<PathBuf>,
-
-    /// Output report file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct SecurityEncryptArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Output encrypted PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Owner password used to control future permission changes.
-    #[arg(long)]
-    owner_password: String,
-
-    /// User password required to open the document.
-    #[arg(long)]
-    user_password: String,
-
-    #[command(flatten)]
-    permissions: PermissionArgs,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct SecurityDecryptArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Output decrypted PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Owner or user password.
-    #[arg(long)]
-    password: String,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct PermissionsGetArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Output JSON report file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Owner or user password for encrypted PDFs.
-    #[arg(long)]
-    password: Option<String>,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct PermissionsSetArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Output encrypted PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Existing owner password for encrypted PDFs and owner password for the output PDF.
-    #[arg(long)]
-    owner_password: String,
-
-    /// User password required to open the output document.
-    #[arg(long)]
-    user_password: String,
-
-    #[command(flatten)]
-    permissions: PermissionArgs,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Clone, Parser)]
-struct PermissionArgs {
-    /// Disallow printing.
-    #[arg(long)]
-    no_print: bool,
-
-    /// Disallow document modifications.
-    #[arg(long)]
-    no_modify: bool,
-
-    /// Disallow copying text and graphics.
-    #[arg(long)]
-    no_copy: bool,
-
-    /// Disallow annotations.
-    #[arg(long)]
-    no_annotate: bool,
-
-    /// Disallow filling form fields.
-    #[arg(long)]
-    no_fill_forms: bool,
-
-    /// Disallow accessibility extraction.
-    #[arg(long)]
-    no_accessibility: bool,
-
-    /// Disallow page assembly.
-    #[arg(long)]
-    no_assemble: bool,
-
-    /// Disallow high quality printing.
-    #[arg(long)]
-    no_high_quality_print: bool,
-}
-
-#[derive(Debug, Parser)]
-struct CompareArgs {
-    /// Left input PDF file.
-    left: PathBuf,
-
-    /// Right input PDF file.
-    right: PathBuf,
-
-    /// Output report file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Write a rendered visual diff PNG instead of a JSON report.
-    #[arg(long)]
-    visual_diff: bool,
-
-    /// One-based page for visual diff output.
-    #[arg(long, default_value_t = 1)]
-    page: u32,
-
-    /// Render scale for visual diff output.
-    #[arg(long)]
-    scale: Option<f32>,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct InspectOutputArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Output JSON file, attachment file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct EditOutputArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct MetadataSetArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Metadata entry in key=value form. May be repeated.
-    #[arg(long = "entry", required = true)]
-    entries: Vec<String>,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct MetadataDeleteArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Metadata key to delete. May be repeated.
-    #[arg(long = "key", required = true)]
-    keys: Vec<String>,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct OutlineSetArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// JSON file containing an OutlineTree, or `-` to read from stdin.
-    #[arg(long)]
-    tree: PathBuf,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct AttachAddArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// File to embed.
-    file: PathBuf,
-
-    /// Attachment name stored in the PDF. Defaults to the file name.
-    #[arg(long)]
-    name: Option<String>,
-
-    /// Attachment description.
-    #[arg(long)]
-    description: Option<String>,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct AttachExtractArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Attachment name to extract.
-    #[arg(long)]
-    name: String,
-
-    /// Output file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct AttachDeleteArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Attachment name to delete.
-    #[arg(long)]
-    name: String,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct AnnotAddArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// One-based page number.
-    #[arg(long)]
-    page: u32,
-
-    /// Stable annotation id.
-    #[arg(long)]
-    id: String,
-
-    /// Text annotation contents.
-    #[arg(long)]
-    text: String,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct AnnotDeleteArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Stable annotation id.
-    #[arg(long)]
-    id: String,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct FormFillArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    /// Field value in name=value form. May be repeated.
-    #[arg(long = "field", required = true)]
-    fields: Vec<String>,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct InteractiveRemoveArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-
-    #[arg(long)]
-    annotations: bool,
-    #[arg(long)]
-    forms: bool,
-    #[arg(long)]
-    actions: bool,
-    #[arg(long)]
-    javascript: bool,
-    #[arg(long = "embedded-files")]
-    embedded_files: bool,
-
-    /// Output PDF file, or `-` to write to stdout.
-    #[arg(short, long)]
-    output: PathBuf,
-
-    /// Overwrite output files when they already exist.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct StampArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-    #[arg(long)]
-    text: String,
-    #[arg(long)]
-    font: Option<String>,
-    #[arg(long)]
-    font_path: Option<PathBuf>,
-    #[arg(long)]
-    font_size: Option<f32>,
-    #[arg(long)]
-    pages: Option<String>,
-    #[arg(long)]
-    opacity: Option<f32>,
-    #[arg(long)]
-    rotation: Option<f32>,
-    #[arg(long)]
-    position: Option<String>,
-    #[arg(short, long)]
-    output: PathBuf,
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct SignatureAppearanceArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-    #[arg(long)]
-    text: String,
-    #[arg(long)]
-    font: Option<String>,
-    #[arg(long)]
-    font_path: Option<PathBuf>,
-    #[arg(long)]
-    font_size: Option<f32>,
-    #[arg(long)]
-    pages: Option<String>,
-    #[arg(long)]
-    position: Option<String>,
-    #[arg(short, long)]
-    output: PathBuf,
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct OverlayPdfArgs {
-    /// Input PDF file, or `-` to read from stdin.
-    input: PathBuf,
-    /// Overlay PDF file.
-    overlay: PathBuf,
-    #[arg(long)]
-    source_page: Option<u32>,
-    #[arg(long)]
-    pages: Option<String>,
-    #[arg(long)]
-    opacity: Option<f32>,
-    #[arg(long)]
-    scale: Option<f32>,
-    #[arg(long)]
-    position: Option<String>,
-    #[arg(short, long)]
-    output: PathBuf,
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct ImageAddArgs {
-    input: PathBuf,
-    image: PathBuf,
-    #[arg(long)]
-    name: String,
-    #[arg(long)]
-    page: u32,
-    #[arg(short, long)]
-    output: PathBuf,
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct ImageReplaceArgs {
-    input: PathBuf,
-    image: PathBuf,
-    #[arg(long)]
-    name: String,
-    #[arg(short, long)]
-    output: PathBuf,
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct ImageDeleteArgs {
-    input: PathBuf,
-    #[arg(long)]
-    name: String,
-    #[arg(short, long)]
-    output: PathBuf,
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct ImageExtractArgs {
-    input: PathBuf,
-    #[arg(long)]
-    name: String,
-    #[arg(short, long)]
-    output: PathBuf,
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct ColorEditArgs {
-    input: PathBuf,
-    #[arg(long)]
-    pages: Option<String>,
-    #[arg(short, long)]
-    output: PathBuf,
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct ColorContrastArgs {
-    input: PathBuf,
-    #[arg(long)]
-    factor: f32,
-    #[arg(long)]
-    pages: Option<String>,
-    #[arg(short, long)]
-    output: PathBuf,
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-struct ColorReplaceArgs {
-    input: PathBuf,
-    #[arg(long)]
-    from: String,
-    #[arg(long)]
-    to: String,
-    #[arg(long)]
-    pages: Option<String>,
-    #[arg(short, long)]
-    output: PathBuf,
-    #[arg(long)]
-    force: bool,
 }
 
 /// Parses CLI arguments and runs the requested command.
@@ -1423,6 +142,7 @@ fn cli_reads_stdin(cli: &Cli) -> bool {
         Some(Commands::Encrypt(args)) => is_stdio(&args.input),
         Some(Commands::Decrypt(args)) => is_stdio(&args.input),
         Some(Commands::Permissions(command)) => permissions_reads_stdin(command),
+        Some(Commands::Completion(_)) => false,
         None => false,
     }
 }
@@ -1572,8 +292,45 @@ where
         Some(Commands::Encrypt(args)) => run_encrypt(args, stdin, stdout),
         Some(Commands::Decrypt(args)) => run_decrypt(args, stdin, stdout),
         Some(Commands::Permissions(command)) => run_permissions(command, stdin, stdout),
+        Some(Commands::Completion(command)) => run_completion(command, stdout),
         None => Ok(()),
     }
+}
+
+fn run_completion(command: CompletionCommand, stdout: &mut impl Write) -> Result<(), CliError> {
+    match command {
+        CompletionCommand::Bash(args) => run_bash_completion(args, stdout),
+    }
+}
+
+fn run_bash_completion(args: CompletionBashArgs, stdout: &mut impl Write) -> Result<(), CliError> {
+    let mut bytes = Vec::new();
+    write_bash_completion(&mut bytes);
+
+    if let Some(path) = args.output {
+        write_completion_file(&path, &bytes, args.force).map_err(CliError::Io)?;
+        return Ok(());
+    }
+
+    stdout.write_all(&bytes).map_err(CliError::Io)
+}
+
+fn write_bash_completion(output: &mut impl Write) {
+    let mut command = command();
+    generate(Bash, &mut command, "oxidepdf", output);
+}
+
+fn write_completion_file(path: &Path, bytes: &[u8], force: bool) -> io::Result<()> {
+    if path.exists() && !force {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "output file already exists; pass --force to overwrite it",
+        ));
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, bytes)
 }
 
 fn run_pdf_edit(
@@ -3186,6 +1943,119 @@ mod tests {
         assert!(help.contains("edit"));
         assert!(help.contains("inspect"));
         assert!(help.contains("sign"));
+    }
+
+    #[test]
+    fn command_tree_has_useful_help_for_commands_and_arguments() {
+        fn assert_help(command: &clap::Command, path: String) {
+            if command.is_hide_set() {
+                return;
+            }
+
+            if !path.is_empty() {
+                assert!(
+                    command.get_about().is_some() || command.get_long_about().is_some(),
+                    "{path} should describe what it does"
+                );
+            }
+
+            for argument in command.get_arguments() {
+                if argument.is_hide_set() {
+                    continue;
+                }
+                assert!(
+                    argument.get_help().is_some() || argument.get_long_help().is_some(),
+                    "{} {} should describe how to use it",
+                    path,
+                    argument.get_id()
+                );
+            }
+
+            for subcommand in command.get_subcommands() {
+                let child_path = if path.is_empty() {
+                    subcommand.get_name().to_owned()
+                } else {
+                    format!("{path} {}", subcommand.get_name())
+                };
+                assert_help(subcommand, child_path);
+            }
+        }
+
+        let command = command();
+        assert_help(&command, String::new());
+    }
+
+    #[test]
+    fn bash_completion_can_be_written_to_stdout() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            ["oxidepdf", "completion", "bash"],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        let completion = String::from_utf8(stdout).unwrap();
+
+        assert_eq!(code, 0);
+        assert_eq!(stderr, b"");
+        assert!(completion.contains("_oxidepdf()"));
+        assert!(completion.contains("complete -F _oxidepdf"));
+        assert!(completion.contains("oxidepdf__subcmd__sign"));
+    }
+
+    #[test]
+    fn bash_completion_can_be_written_to_file() {
+        let dir = temp_dir("bash_completion_can_be_written_to_file");
+        let output = dir.join("oxidepdf.bash");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "completion",
+                "bash",
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        let completion = fs::read_to_string(output).unwrap();
+        assert!(completion.contains("_oxidepdf()"));
+    }
+
+    #[test]
+    fn bash_completion_rejects_conflicting_destinations() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "completion",
+                "bash",
+                "--stdout",
+                "-o",
+                "oxidepdf.bash",
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 2);
+        assert_eq!(stdout, b"");
+        assert!(String::from_utf8(stderr)
+            .unwrap()
+            .contains("cannot be used"));
     }
 
     #[test]
