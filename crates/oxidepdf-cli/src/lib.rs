@@ -3,7 +3,8 @@
 use clap::{CommandFactory, Parser, Subcommand};
 use oxidepdf_core::{
     execute_workflow, Artifact, ArtifactRef, ArtifactStore, ExtractTextOptions, ImageToPdfOptions,
-    MergeOptions, OperatorSpec, OxideError, PdfOperatorRunner, RenderOptions, ReorderOptions,
+    MergeOptions, OperatorSpec, OxideError, PdfCompareOptions, PdfEditOptions, PdfInspectOptions,
+    PdfOperatorRunner, PdfSecurityOptions, PdfSignOptions, RenderOptions, ReorderOptions,
     RotateOptions, SignatureOptions, SplitOptions, SvgToPdfOptions, TaskId, TaskSpec,
     WatermarkKind, WatermarkOptions, Workflow, WorkflowMetadata, WorkflowVersion,
 };
@@ -28,30 +29,62 @@ pub struct Cli {
 enum Commands {
     /// Run a workflow document.
     Run(RunArgs),
+    /// Edit or create PDF files.
+    #[command(name = "pdf-edit")]
+    #[command(subcommand)]
+    PdfEdit(PdfEditCommand),
+    /// Inspect or render PDF files.
+    #[command(name = "pdf-inspect")]
+    #[command(subcommand)]
+    PdfInspect(PdfInspectCommand),
+    /// Apply password, encryption, or permission operations.
+    #[command(name = "pdf-security")]
+    PdfSecurity(PdfSecurityArgs),
+    /// Compare PDF files.
+    #[command(name = "pdf-compare")]
+    PdfCompare(PdfCompareArgs),
+    /// Sign or verify PDF signature material.
+    #[command(name = "pdf-sign")]
+    #[command(subcommand)]
+    PdfSign(PdfSignCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum PdfEditCommand {
     /// Merge multiple PDFs into one output.
     Merge(MergeArgs),
     /// Keep selected pages from a PDF.
-    Split(PageSelectionArgs),
+    #[command(name = "keep-pages")]
+    KeepPages(PageSelectionArgs),
     /// Reorder pages in a PDF.
-    Reorder(PageSelectionArgs),
+    #[command(name = "reorder-pages")]
+    ReorderPages(PageSelectionArgs),
     /// Rotate selected PDF pages.
-    Rotate(RotateArgs),
+    #[command(name = "rotate-pages")]
+    RotatePages(RotateArgs),
     /// Convert one or more images into PDF pages.
     #[command(name = "img2pdf")]
     Img2pdf(ImageToPdfArgs),
     /// Convert an SVG document into a PDF.
     #[command(name = "svg2pdf")]
     Svg2pdf(SvgToPdfArgs),
+    /// Add a text, image, or SVG watermark to a PDF.
+    Watermark(WatermarkArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum PdfInspectCommand {
     /// Render a PDF page into a PNG image.
     Render(RenderArgs),
     /// Extract plain text from a PDF.
     #[command(name = "extract-text")]
     ExtractText(ExtractTextArgs),
-    /// Add a text, image, or SVG watermark to a PDF.
-    Watermark(WatermarkArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum PdfSignCommand {
     /// Verify PDF signatures and certificates.
-    #[command(name = "verify-signatures")]
-    VerifySignatures(VerifySignaturesArgs),
+    Verify(VerifySignaturesArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -273,6 +306,45 @@ struct VerifySignaturesArgs {
     force: bool,
 }
 
+#[derive(Debug, Parser)]
+struct PdfSecurityArgs {
+    /// Explicit security operation name.
+    #[arg(long)]
+    operation: String,
+
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Output report file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct PdfCompareArgs {
+    /// Explicit compare mode.
+    #[arg(long)]
+    mode: String,
+
+    /// Left input PDF file.
+    left: PathBuf,
+
+    /// Right input PDF file.
+    right: PathBuf,
+
+    /// Output report file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
 /// Parses CLI arguments and runs the requested command.
 pub fn run() -> i32 {
     let args = std::env::args_os().collect::<Vec<_>>();
@@ -337,18 +409,40 @@ where
 fn cli_reads_stdin(cli: &Cli) -> bool {
     match &cli.command {
         Some(Commands::Run(args)) => is_stdio(&args.workflow),
-        Some(Commands::Merge(args)) => args.inputs.iter().any(|input| is_stdio(input)),
-        Some(Commands::Split(args)) | Some(Commands::Reorder(args)) => is_stdio(&args.input),
-        Some(Commands::Rotate(args)) => is_stdio(&args.input),
-        Some(Commands::Img2pdf(args)) => args.inputs.iter().any(|input| is_stdio(input)),
-        Some(Commands::Svg2pdf(args)) => is_stdio(&args.input),
-        Some(Commands::Render(args)) => is_stdio(&args.input),
-        Some(Commands::ExtractText(args)) => is_stdio(&args.input),
-        Some(Commands::Watermark(args)) => {
+        Some(Commands::PdfEdit(command)) => pdf_edit_reads_stdin(command),
+        Some(Commands::PdfInspect(command)) => pdf_inspect_reads_stdin(command),
+        Some(Commands::PdfSecurity(args)) => is_stdio(&args.input),
+        Some(Commands::PdfCompare(args)) => is_stdio(&args.left) || is_stdio(&args.right),
+        Some(Commands::PdfSign(command)) => pdf_sign_reads_stdin(command),
+        None => false,
+    }
+}
+
+fn pdf_edit_reads_stdin(command: &PdfEditCommand) -> bool {
+    match command {
+        PdfEditCommand::Merge(args) => args.inputs.iter().any(|input| is_stdio(input)),
+        PdfEditCommand::KeepPages(args) | PdfEditCommand::ReorderPages(args) => {
+            is_stdio(&args.input)
+        }
+        PdfEditCommand::RotatePages(args) => is_stdio(&args.input),
+        PdfEditCommand::Img2pdf(args) => args.inputs.iter().any(|input| is_stdio(input)),
+        PdfEditCommand::Svg2pdf(args) => is_stdio(&args.input),
+        PdfEditCommand::Watermark(args) => {
             is_stdio(&args.input) || args.watermark.as_ref().is_some_and(|path| is_stdio(path))
         }
-        Some(Commands::VerifySignatures(args)) => is_stdio(&args.input),
-        None => false,
+    }
+}
+
+fn pdf_inspect_reads_stdin(command: &PdfInspectCommand) -> bool {
+    match command {
+        PdfInspectCommand::Render(args) => is_stdio(&args.input),
+        PdfInspectCommand::ExtractText(args) => is_stdio(&args.input),
+    }
+}
+
+fn pdf_sign_reads_stdin(command: &PdfSignCommand) -> bool {
+    match command {
+        PdfSignCommand::Verify(args) => is_stdio(&args.input),
     }
 }
 
@@ -360,19 +454,53 @@ where
     let cli = Cli::try_parse_from(args).map_err(CliError::Arguments)?;
     match cli.command {
         Some(Commands::Run(args)) => run_workflow(args, stdin, stdout),
-        Some(Commands::Merge(args)) => run_merge(args, stdin, stdout),
-        Some(Commands::Split(args)) => run_page_selection(args, stdin, stdout, PageCommand::Split),
-        Some(Commands::Reorder(args)) => {
-            run_page_selection(args, stdin, stdout, PageCommand::Reorder)
-        }
-        Some(Commands::Rotate(args)) => run_rotate(args, stdin, stdout),
-        Some(Commands::Img2pdf(args)) => run_img2pdf(args, stdin, stdout),
-        Some(Commands::Svg2pdf(args)) => run_svg2pdf(args, stdin, stdout),
-        Some(Commands::Render(args)) => run_render(args, stdin, stdout),
-        Some(Commands::ExtractText(args)) => run_extract_text(args, stdin, stdout),
-        Some(Commands::Watermark(args)) => run_watermark(args, stdin, stdout),
-        Some(Commands::VerifySignatures(args)) => run_verify_signatures(args, stdin, stdout),
+        Some(Commands::PdfEdit(command)) => run_pdf_edit(command, stdin, stdout),
+        Some(Commands::PdfInspect(command)) => run_pdf_inspect(command, stdin, stdout),
+        Some(Commands::PdfSecurity(args)) => run_pdf_security(args, stdin, stdout),
+        Some(Commands::PdfCompare(args)) => run_pdf_compare(args, stdin, stdout),
+        Some(Commands::PdfSign(command)) => run_pdf_sign(command, stdin, stdout),
         None => Ok(()),
+    }
+}
+
+fn run_pdf_edit(
+    command: PdfEditCommand,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    match command {
+        PdfEditCommand::Merge(args) => run_merge(args, stdin, stdout),
+        PdfEditCommand::KeepPages(args) => {
+            run_page_selection(args, stdin, stdout, PageCommand::KeepPages)
+        }
+        PdfEditCommand::ReorderPages(args) => {
+            run_page_selection(args, stdin, stdout, PageCommand::ReorderPages)
+        }
+        PdfEditCommand::RotatePages(args) => run_rotate(args, stdin, stdout),
+        PdfEditCommand::Img2pdf(args) => run_img2pdf(args, stdin, stdout),
+        PdfEditCommand::Svg2pdf(args) => run_svg2pdf(args, stdin, stdout),
+        PdfEditCommand::Watermark(args) => run_watermark(args, stdin, stdout),
+    }
+}
+
+fn run_pdf_inspect(
+    command: PdfInspectCommand,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    match command {
+        PdfInspectCommand::Render(args) => run_render(args, stdin, stdout),
+        PdfInspectCommand::ExtractText(args) => run_extract_text(args, stdin, stdout),
+    }
+}
+
+fn run_pdf_sign(
+    command: PdfSignCommand,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    match command {
+        PdfSignCommand::Verify(args) => run_verify_signatures(args, stdin, stdout),
     }
 }
 
@@ -404,7 +532,7 @@ fn run_merge(args: MergeArgs, stdin: &[u8], stdout: &mut impl Write) -> Result<(
             .collect(),
         tasks: vec![TaskSpec {
             id: TaskId::new("merge"),
-            op: OperatorSpec::Merge(MergeOptions {}),
+            op: OperatorSpec::PdfEdit(PdfEditOptions::Merge(MergeOptions {})),
             inputs: input_refs,
         }],
         outputs: vec![oxidepdf_core::OutputSpec {
@@ -425,12 +553,18 @@ fn run_page_selection(
     command: PageCommand,
 ) -> Result<(), CliError> {
     let task_id = match command {
-        PageCommand::Split => "split",
-        PageCommand::Reorder => "reorder",
+        PageCommand::KeepPages => "keep_pages",
+        PageCommand::ReorderPages => "reorder_pages",
     };
     let op = match command {
-        PageCommand::Split => OperatorSpec::Split(SplitOptions { pages: args.pages }),
-        PageCommand::Reorder => OperatorSpec::Reorder(ReorderOptions { pages: args.pages }),
+        PageCommand::KeepPages => OperatorSpec::PdfEdit(PdfEditOptions::KeepPages(SplitOptions {
+            pages: args.pages,
+        })),
+        PageCommand::ReorderPages => {
+            OperatorSpec::PdfEdit(PdfEditOptions::ReorderPages(ReorderOptions {
+                pages: args.pages,
+            }))
+        }
     };
     let workflow = one_input_workflow(args.input, args.output, task_id, op);
 
@@ -441,11 +575,11 @@ fn run_rotate(args: RotateArgs, stdin: &[u8], stdout: &mut impl Write) -> Result
     let workflow = one_input_workflow(
         args.input,
         args.output,
-        "rotate",
-        OperatorSpec::Rotate(RotateOptions {
+        "rotate_pages",
+        OperatorSpec::PdfEdit(PdfEditOptions::RotatePages(RotateOptions {
             pages: args.pages,
             degrees: args.degrees,
-        }),
+        })),
     );
 
     execute_and_write_workflow(workflow, stdin, args.force, stdout)
@@ -472,9 +606,9 @@ fn run_img2pdf(
             .collect(),
         tasks: vec![TaskSpec {
             id: TaskId::new("img2pdf"),
-            op: OperatorSpec::ImageToPdf(ImageToPdfOptions {
+            op: OperatorSpec::PdfEdit(PdfEditOptions::ImageToPdf(ImageToPdfOptions {
                 layout: args.layout,
-            }),
+            })),
             inputs: input_refs,
         }],
         outputs: vec![oxidepdf_core::OutputSpec {
@@ -494,9 +628,9 @@ fn run_svg2pdf(args: SvgToPdfArgs, stdin: &[u8], stdout: &mut impl Write) -> Res
         args.input,
         args.output,
         "svg2pdf",
-        OperatorSpec::SvgToPdf(SvgToPdfOptions {
+        OperatorSpec::PdfEdit(PdfEditOptions::SvgToPdf(SvgToPdfOptions {
             rasterize: args.rasterize,
-        }),
+        })),
     );
 
     execute_and_write_workflow(workflow, stdin, args.force, stdout)
@@ -507,11 +641,11 @@ fn run_render(args: RenderArgs, stdin: &[u8], stdout: &mut impl Write) -> Result
         args.input,
         args.output,
         "render",
-        OperatorSpec::Render(RenderOptions {
+        OperatorSpec::PdfInspect(PdfInspectOptions::Render(RenderOptions {
             page: args.page,
             format: Some("png".to_owned()),
             scale: args.scale,
-        }),
+        })),
     );
 
     execute_and_write_workflow(workflow, stdin, args.force, stdout)
@@ -526,9 +660,9 @@ fn run_extract_text(
         args.input,
         args.output,
         "extract_text",
-        OperatorSpec::ExtractText(ExtractTextOptions {
+        OperatorSpec::PdfInspect(PdfInspectOptions::ExtractText(ExtractTextOptions {
             format: Some("plain".to_owned()),
-        }),
+        })),
     );
 
     execute_and_write_workflow(workflow, stdin, args.force, stdout)
@@ -561,7 +695,7 @@ fn run_watermark(
         inputs: input_specs,
         tasks: vec![TaskSpec {
             id: TaskId::new("watermark"),
-            op: OperatorSpec::Watermark(WatermarkOptions {
+            op: OperatorSpec::PdfEdit(PdfEditOptions::Watermark(WatermarkOptions {
                 kind,
                 text: args.text,
                 font: args.font,
@@ -573,7 +707,7 @@ fn run_watermark(
                 pages: args.pages,
                 scale: args.scale,
                 rasterize: args.rasterize,
-            }),
+            })),
             inputs: task_inputs,
         }],
         outputs: vec![oxidepdf_core::OutputSpec {
@@ -596,12 +730,63 @@ fn run_verify_signatures(
     let workflow = one_input_workflow(
         args.input,
         args.output,
-        "verify_signatures",
-        OperatorSpec::Signature(SignatureOptions {
+        "verify_signature",
+        OperatorSpec::PdfSign(PdfSignOptions::Verify(SignatureOptions {
             mode: Default::default(),
             trust_anchors: Some(args.trust_anchors),
+        })),
+    );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_pdf_security(
+    args: PdfSecurityArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "pdf_security",
+        OperatorSpec::PdfSecurity(PdfSecurityOptions {
+            operation: args.operation,
         }),
     );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_pdf_compare(
+    args: PdfCompareArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    let workflow = Workflow {
+        version: WorkflowVersion::V1,
+        inputs: vec![
+            oxidepdf_core::InputSpec {
+                id: ArtifactRef::new("left"),
+                path: args.left,
+            },
+            oxidepdf_core::InputSpec {
+                id: ArtifactRef::new("right"),
+                path: args.right,
+            },
+        ],
+        tasks: vec![TaskSpec {
+            id: TaskId::new("pdf_compare"),
+            op: OperatorSpec::PdfCompare(PdfCompareOptions { mode: args.mode }),
+            inputs: vec![ArtifactRef::new("left"), ArtifactRef::new("right")],
+        }],
+        outputs: vec![oxidepdf_core::OutputSpec {
+            id: ArtifactRef::new("output"),
+            from: ArtifactRef::new("pdf_compare"),
+            path: args.output,
+        }],
+        limits: Default::default(),
+        metadata: WorkflowMetadata::default(),
+    };
 
     execute_and_write_workflow(workflow, stdin, args.force, stdout)
 }
@@ -658,8 +843,8 @@ fn one_input_workflow(
 
 #[derive(Debug, Clone, Copy)]
 enum PageCommand {
-    Split,
-    Reorder,
+    KeepPages,
+    ReorderPages,
 }
 
 fn parse_workflow(bytes: &[u8], path: &Path) -> Result<Workflow, CliError> {
@@ -864,7 +1049,7 @@ mod tests {
 
         assert!(help.contains("OxidePDF"));
         assert!(help.contains("pure Rust PDF toolkit"));
-        assert!(help.contains("verify-signatures"));
+        assert!(help.contains("pdf-sign"));
     }
 
     #[test]
@@ -904,9 +1089,45 @@ mod tests {
     }
 
     #[test]
+    fn removed_legacy_top_level_commands_are_not_aliases() {
+        for legacy_command in [
+            "merge",
+            "split",
+            "reorder",
+            "rotate",
+            "img2pdf",
+            "svg2pdf",
+            "render",
+            "extract-text",
+            "watermark",
+            "verify-signatures",
+        ] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            let code = run_with_io(
+                ["oxidepdf", legacy_command, "--help"],
+                [],
+                &mut stdout,
+                &mut stderr,
+            );
+
+            assert_eq!(code, 2, "{legacy_command} should not remain as an alias");
+            assert_eq!(stdout, b"");
+            assert!(
+                String::from_utf8(stderr)
+                    .unwrap()
+                    .contains("unrecognized subcommand"),
+                "{legacy_command} should fail at the CLI boundary"
+            );
+        }
+    }
+
+    #[test]
     fn render_file_input_does_not_require_stdin() {
         let stdin = stdin_for_args([
             "oxidepdf",
+            "pdf-inspect",
             "render",
             "input.pdf",
             "--page",
@@ -921,17 +1142,32 @@ mod tests {
 
     #[test]
     fn render_stdio_input_requires_stdin() {
-        let cli =
-            Cli::try_parse_from(["oxidepdf", "render", "-", "--page", "1", "-o", "output.png"])
-                .unwrap();
+        let cli = Cli::try_parse_from([
+            "oxidepdf",
+            "pdf-inspect",
+            "render",
+            "-",
+            "--page",
+            "1",
+            "-o",
+            "output.png",
+        ])
+        .unwrap();
 
         assert!(cli_reads_stdin(&cli));
     }
 
     #[test]
     fn extract_text_stdio_input_requires_stdin() {
-        let cli =
-            Cli::try_parse_from(["oxidepdf", "extract-text", "-", "-o", "output.txt"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "oxidepdf",
+            "pdf-inspect",
+            "extract-text",
+            "-",
+            "-o",
+            "output.txt",
+        ])
+        .unwrap();
 
         assert!(cli_reads_stdin(&cli));
     }
@@ -1053,9 +1289,10 @@ mod tests {
                 tasks:
                   - id: rotate
                     op:
-                      rotate:
-                        pages: "1"
-                        degrees: 90
+                      pdf_edit:
+                        rotate_pages:
+                          pages: "1"
+                          degrees: 90
                     inputs: [source]
                 outputs:
                   - id: final
@@ -1237,6 +1474,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf-edit",
                 "merge",
                 input.to_str().unwrap(),
                 input.to_str().unwrap(),
@@ -1264,7 +1502,8 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "split",
+                "pdf-edit",
+                "keep-pages",
                 fixture_pdf().to_str().unwrap(),
                 "--pages",
                 "1,3",
@@ -1292,7 +1531,8 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "rotate",
+                "pdf-edit",
+                "rotate-pages",
                 fixture_pdf().to_str().unwrap(),
                 "--pages",
                 "1",
@@ -1322,6 +1562,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf-edit",
                 "img2pdf",
                 fixture_jpg().to_str().unwrap(),
                 "-o",
@@ -1350,6 +1591,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf-edit",
                 "svg2pdf",
                 input.to_str().unwrap(),
                 "-o",
@@ -1376,6 +1618,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf-inspect",
                 "extract-text",
                 fixture_pdf().to_str().unwrap(),
                 "-o",
@@ -1404,6 +1647,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf-inspect",
                 "extract-text",
                 input.to_str().unwrap(),
                 "-o",
@@ -1432,6 +1676,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf-edit",
                 "watermark",
                 fixture_pdf().to_str().unwrap(),
                 "--kind",
@@ -1467,6 +1712,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf-edit",
                 "watermark",
                 fixture_pdf().to_str().unwrap(),
                 "--kind",
@@ -1501,6 +1747,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf-edit",
                 "watermark",
                 fixture_pdf().to_str().unwrap(),
                 "--kind",
@@ -1535,6 +1782,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf-edit",
                 "watermark",
                 fixture_pdf().to_str().unwrap(),
                 "--kind",
@@ -1569,7 +1817,8 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "verify-signatures",
+                "pdf-sign",
+                "verify",
                 input.to_str().unwrap(),
                 "--trust-anchors",
                 trust_anchors.to_str().unwrap(),
@@ -1605,7 +1854,8 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "verify-signatures",
+                "pdf-sign",
+                "verify",
                 fixture_signature_pdf().to_str().unwrap(),
                 "-o",
                 output.to_str().unwrap(),
@@ -1638,8 +1888,9 @@ mod tests {
                 tasks:
                   - id: convert
                     op:
-                      image_to_pdf:
-                        layout: original_size
+                      pdf_edit:
+                        image_to_pdf:
+                          layout: original_size
                     inputs: [source]
                 outputs:
                   - id: final
@@ -1683,8 +1934,9 @@ mod tests {
                 tasks:
                   - id: extract
                     op:
-                      extract_text:
-                        format: plain
+                      pdf_inspect:
+                        extract_text:
+                          format: plain
                     inputs: [source]
                 outputs:
                   - id: final
@@ -1730,9 +1982,10 @@ mod tests {
                 tasks:
                   - id: verify
                     op:
-                      signature:
-                        mode: verify
-                        trust_anchors: {}
+                      pdf_sign:
+                        verify:
+                          mode: verify
+                          trust_anchors: {}
                     inputs: [source]
                 outputs:
                   - id: final
@@ -1780,8 +2033,9 @@ mod tests {
                 tasks:
                   - id: verify
                     op:
-                      signature:
-                        mode: verify
+                      pdf_sign:
+                        verify:
+                          mode: verify
                     inputs: [source]
                 outputs:
                   - id: final

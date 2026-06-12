@@ -73,9 +73,10 @@ fn unsupported_operator_exits_with_code_3() {
             tasks:
               - id: rotate
                 op:
-                  rotate:
-                    pages: "1"
-                    degrees: 90
+                  pdf_edit:
+                    rotate_pages:
+                      pages: "1"
+                      degrees: 90
                 inputs: [source]
             outputs:
               - id: final
@@ -115,9 +116,10 @@ fn workflow_rotate_updates_pdf_page_rotation() {
             tasks:
               - id: rotate
                 op:
-                  rotate:
-                    pages: "1"
-                    degrees: 90
+                  pdf_edit:
+                    rotate_pages:
+                      pages: "1"
+                      degrees: 90
                 inputs: [source]
             outputs:
               - id: final
@@ -149,7 +151,8 @@ fn reorder_command_writes_parseable_pdf() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "reorder",
+            "pdf-edit",
+            "reorder-pages",
             fixture_pdf().to_str().unwrap(),
             "--pages",
             "3,1,2",
@@ -172,6 +175,7 @@ fn img2pdf_command_writes_parseable_pdf() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
+            "pdf-edit",
             "img2pdf",
             fixture_jpg().to_str().unwrap(),
             "-o",
@@ -201,6 +205,7 @@ fn svg2pdf_command_writes_parseable_pdf() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
+            "pdf-edit",
             "svg2pdf",
             input.to_str().unwrap(),
             "-o",
@@ -222,6 +227,7 @@ fn render_command_writes_png() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
+            "pdf-inspect",
             "render",
             fixture_pdf().to_str().unwrap(),
             "--page",
@@ -247,6 +253,7 @@ fn extract_text_command_writes_plain_text() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
+            "pdf-inspect",
             "extract-text",
             fixture_pdf().to_str().unwrap(),
             "-o",
@@ -276,8 +283,9 @@ fn workflow_extract_text_writes_plain_text() {
             tasks:
               - id: extract
                 op:
-                  extract_text:
-                    format: plain
+                  pdf_inspect:
+                    extract_text:
+                      format: plain
                 inputs: [source]
             outputs:
               - id: final
@@ -309,6 +317,7 @@ fn watermark_text_command_writes_parseable_pdf() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
+            "pdf-edit",
             "watermark",
             fixture_pdf().to_str().unwrap(),
             "--kind",
@@ -349,11 +358,12 @@ fn workflow_watermark_image_writes_parseable_pdf() {
             tasks:
               - id: watermark
                 op:
-                  watermark:
-                    kind: image
-                    opacity: 0.3
-                    pages: "2"
-                    position: center
+                  pdf_edit:
+                    watermark:
+                      kind: image
+                      opacity: 0.3
+                      pages: "2"
+                      position: center
                 inputs: [source, mark]
             outputs:
               - id: final
@@ -387,6 +397,7 @@ fn render_command_rejects_out_of_range_page() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
+            "pdf-inspect",
             "render",
             fixture_pdf().to_str().unwrap(),
             "--page",

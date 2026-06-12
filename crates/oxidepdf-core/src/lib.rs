@@ -176,41 +176,26 @@ pub struct WorkflowMetadata {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "OperatorSpecDef", into = "OperatorSpecDef")]
 pub enum OperatorSpec {
-    /// Merge multiple PDFs.
-    Merge(MergeOptions),
-    /// Split a PDF by page range.
-    Split(SplitOptions),
-    /// Reorder pages in a PDF.
-    Reorder(ReorderOptions),
-    /// Rotate selected pages.
-    Rotate(RotateOptions),
-    /// Convert images to PDF pages.
-    ImageToPdf(ImageToPdfOptions),
-    /// Convert SVG to PDF.
-    SvgToPdf(SvgToPdfOptions),
-    /// Extract text from a PDF.
-    ExtractText(ExtractTextOptions),
-    /// Add a watermark to a PDF.
-    Watermark(WatermarkOptions),
-    /// Render PDF pages to images.
-    Render(RenderOptions),
-    /// Verify PDF signatures and certificate material.
-    Signature(SignatureOptions),
+    /// Edit or create PDF artifacts.
+    PdfEdit(PdfEditOptions),
+    /// Inspect or render PDF artifacts.
+    PdfInspect(PdfInspectOptions),
+    /// Apply password, encryption, or permission operations.
+    PdfSecurity(PdfSecurityOptions),
+    /// Compare two PDF artifacts.
+    PdfCompare(PdfCompareOptions),
+    /// Sign or verify PDF signature material.
+    PdfSign(PdfSignOptions),
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct OperatorSpecDef {
-    merge: Option<MergeOptions>,
-    split: Option<SplitOptions>,
-    reorder: Option<ReorderOptions>,
-    rotate: Option<RotateOptions>,
-    image_to_pdf: Option<ImageToPdfOptions>,
-    svg_to_pdf: Option<SvgToPdfOptions>,
-    extract_text: Option<ExtractTextOptions>,
-    watermark: Option<WatermarkOptions>,
-    render: Option<RenderOptions>,
-    signature: Option<SignatureOptions>,
+    pdf_edit: Option<PdfEditOptions>,
+    pdf_inspect: Option<PdfInspectOptions>,
+    pdf_security: Option<PdfSecurityOptions>,
+    pdf_compare: Option<PdfCompareOptions>,
+    pdf_sign: Option<PdfSignOptions>,
 }
 
 impl TryFrom<OperatorSpecDef> for OperatorSpec {
@@ -218,16 +203,11 @@ impl TryFrom<OperatorSpecDef> for OperatorSpec {
 
     fn try_from(value: OperatorSpecDef) -> Result<Self, Self::Error> {
         let operator_count = [
-            value.merge.is_some(),
-            value.split.is_some(),
-            value.reorder.is_some(),
-            value.rotate.is_some(),
-            value.image_to_pdf.is_some(),
-            value.svg_to_pdf.is_some(),
-            value.extract_text.is_some(),
-            value.watermark.is_some(),
-            value.render.is_some(),
-            value.signature.is_some(),
+            value.pdf_edit.is_some(),
+            value.pdf_inspect.is_some(),
+            value.pdf_security.is_some(),
+            value.pdf_compare.is_some(),
+            value.pdf_sign.is_some(),
         ]
         .into_iter()
         .filter(|present| *present)
@@ -239,35 +219,20 @@ impl TryFrom<OperatorSpecDef> for OperatorSpec {
             });
         }
 
-        if let Some(options) = value.merge {
-            return Ok(Self::Merge(options));
+        if let Some(options) = value.pdf_edit {
+            return Ok(Self::PdfEdit(options));
         }
-        if let Some(options) = value.split {
-            return Ok(Self::Split(options));
+        if let Some(options) = value.pdf_inspect {
+            return Ok(Self::PdfInspect(options));
         }
-        if let Some(options) = value.reorder {
-            return Ok(Self::Reorder(options));
+        if let Some(options) = value.pdf_security {
+            return Ok(Self::PdfSecurity(options));
         }
-        if let Some(options) = value.rotate {
-            return Ok(Self::Rotate(options));
+        if let Some(options) = value.pdf_compare {
+            return Ok(Self::PdfCompare(options));
         }
-        if let Some(options) = value.image_to_pdf {
-            return Ok(Self::ImageToPdf(options));
-        }
-        if let Some(options) = value.svg_to_pdf {
-            return Ok(Self::SvgToPdf(options));
-        }
-        if let Some(options) = value.extract_text {
-            return Ok(Self::ExtractText(options));
-        }
-        if let Some(options) = value.watermark {
-            return Ok(Self::Watermark(options));
-        }
-        if let Some(options) = value.render {
-            return Ok(Self::Render(options));
-        }
-        if let Some(options) = value.signature {
-            return Ok(Self::Signature(options));
+        if let Some(options) = value.pdf_sign {
+            return Ok(Self::PdfSign(options));
         }
 
         unreachable!("operator count was already checked");
@@ -277,45 +242,253 @@ impl TryFrom<OperatorSpecDef> for OperatorSpec {
 impl From<OperatorSpec> for OperatorSpecDef {
     fn from(value: OperatorSpec) -> Self {
         match value {
-            OperatorSpec::Merge(options) => Self {
+            OperatorSpec::PdfEdit(options) => Self {
+                pdf_edit: Some(options),
+                ..Self::default()
+            },
+            OperatorSpec::PdfInspect(options) => Self {
+                pdf_inspect: Some(options),
+                ..Self::default()
+            },
+            OperatorSpec::PdfSecurity(options) => Self {
+                pdf_security: Some(options),
+                ..Self::default()
+            },
+            OperatorSpec::PdfCompare(options) => Self {
+                pdf_compare: Some(options),
+                ..Self::default()
+            },
+            OperatorSpec::PdfSign(options) => Self {
+                pdf_sign: Some(options),
+                ..Self::default()
+            },
+        }
+    }
+}
+
+/// PDF edit and creation operations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "PdfEditOptionsDef", into = "PdfEditOptionsDef")]
+pub enum PdfEditOptions {
+    /// Merge multiple PDFs.
+    Merge(MergeOptions),
+    /// Keep selected pages from a PDF.
+    KeepPages(SplitOptions),
+    /// Reorder pages in a PDF.
+    ReorderPages(ReorderOptions),
+    /// Rotate selected pages.
+    RotatePages(RotateOptions),
+    /// Convert images to PDF pages.
+    ImageToPdf(ImageToPdfOptions),
+    /// Convert SVG to PDF.
+    SvgToPdf(SvgToPdfOptions),
+    /// Add a watermark to a PDF.
+    Watermark(WatermarkOptions),
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct PdfEditOptionsDef {
+    merge: Option<MergeOptions>,
+    keep_pages: Option<SplitOptions>,
+    reorder_pages: Option<ReorderOptions>,
+    rotate_pages: Option<RotateOptions>,
+    image_to_pdf: Option<ImageToPdfOptions>,
+    svg_to_pdf: Option<SvgToPdfOptions>,
+    watermark: Option<WatermarkOptions>,
+}
+
+impl TryFrom<PdfEditOptionsDef> for PdfEditOptions {
+    type Error = OxideError;
+
+    fn try_from(value: PdfEditOptionsDef) -> Result<Self, Self::Error> {
+        let operation_count = [
+            value.merge.is_some(),
+            value.keep_pages.is_some(),
+            value.reorder_pages.is_some(),
+            value.rotate_pages.is_some(),
+            value.image_to_pdf.is_some(),
+            value.svg_to_pdf.is_some(),
+            value.watermark.is_some(),
+        ]
+        .into_iter()
+        .filter(|present| *present)
+        .count();
+
+        if operation_count != 1 {
+            return Err(OxideError::InvalidWorkflow {
+                reason: "pdf_edit must contain exactly one operation".to_owned(),
+            });
+        }
+
+        if let Some(options) = value.merge {
+            return Ok(Self::Merge(options));
+        }
+        if let Some(options) = value.keep_pages {
+            return Ok(Self::KeepPages(options));
+        }
+        if let Some(options) = value.reorder_pages {
+            return Ok(Self::ReorderPages(options));
+        }
+        if let Some(options) = value.rotate_pages {
+            return Ok(Self::RotatePages(options));
+        }
+        if let Some(options) = value.image_to_pdf {
+            return Ok(Self::ImageToPdf(options));
+        }
+        if let Some(options) = value.svg_to_pdf {
+            return Ok(Self::SvgToPdf(options));
+        }
+        if let Some(options) = value.watermark {
+            return Ok(Self::Watermark(options));
+        }
+
+        unreachable!("operation count was already checked");
+    }
+}
+
+impl From<PdfEditOptions> for PdfEditOptionsDef {
+    fn from(value: PdfEditOptions) -> Self {
+        match value {
+            PdfEditOptions::Merge(options) => Self {
                 merge: Some(options),
                 ..Self::default()
             },
-            OperatorSpec::Split(options) => Self {
-                split: Some(options),
+            PdfEditOptions::KeepPages(options) => Self {
+                keep_pages: Some(options),
                 ..Self::default()
             },
-            OperatorSpec::Reorder(options) => Self {
-                reorder: Some(options),
+            PdfEditOptions::ReorderPages(options) => Self {
+                reorder_pages: Some(options),
                 ..Self::default()
             },
-            OperatorSpec::Rotate(options) => Self {
-                rotate: Some(options),
+            PdfEditOptions::RotatePages(options) => Self {
+                rotate_pages: Some(options),
                 ..Self::default()
             },
-            OperatorSpec::ImageToPdf(options) => Self {
+            PdfEditOptions::ImageToPdf(options) => Self {
                 image_to_pdf: Some(options),
                 ..Self::default()
             },
-            OperatorSpec::SvgToPdf(options) => Self {
+            PdfEditOptions::SvgToPdf(options) => Self {
                 svg_to_pdf: Some(options),
                 ..Self::default()
             },
-            OperatorSpec::ExtractText(options) => Self {
-                extract_text: Some(options),
-                ..Self::default()
-            },
-            OperatorSpec::Watermark(options) => Self {
+            PdfEditOptions::Watermark(options) => Self {
                 watermark: Some(options),
                 ..Self::default()
             },
-            OperatorSpec::Render(options) => Self {
+        }
+    }
+}
+
+/// PDF inspection operations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "PdfInspectOptionsDef", into = "PdfInspectOptionsDef")]
+pub enum PdfInspectOptions {
+    /// Render PDF pages to images.
+    Render(RenderOptions),
+    /// Extract text from a PDF.
+    ExtractText(ExtractTextOptions),
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct PdfInspectOptionsDef {
+    render: Option<RenderOptions>,
+    extract_text: Option<ExtractTextOptions>,
+}
+
+impl TryFrom<PdfInspectOptionsDef> for PdfInspectOptions {
+    type Error = OxideError;
+
+    fn try_from(value: PdfInspectOptionsDef) -> Result<Self, Self::Error> {
+        let operation_count = [value.render.is_some(), value.extract_text.is_some()]
+            .into_iter()
+            .filter(|present| *present)
+            .count();
+
+        if operation_count != 1 {
+            return Err(OxideError::InvalidWorkflow {
+                reason: "pdf_inspect must contain exactly one operation".to_owned(),
+            });
+        }
+
+        if let Some(options) = value.render {
+            return Ok(Self::Render(options));
+        }
+        if let Some(options) = value.extract_text {
+            return Ok(Self::ExtractText(options));
+        }
+
+        unreachable!("operation count was already checked");
+    }
+}
+
+impl From<PdfInspectOptions> for PdfInspectOptionsDef {
+    fn from(value: PdfInspectOptions) -> Self {
+        match value {
+            PdfInspectOptions::Render(options) => Self {
                 render: Some(options),
                 ..Self::default()
             },
-            OperatorSpec::Signature(options) => Self {
-                signature: Some(options),
+            PdfInspectOptions::ExtractText(options) => Self {
+                extract_text: Some(options),
                 ..Self::default()
+            },
+        }
+    }
+}
+
+/// PDF password, encryption, and permission operations.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PdfSecurityOptions {
+    /// Explicit operation name. Stage 18 implements concrete operations.
+    pub operation: String,
+}
+
+/// PDF comparison operations.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PdfCompareOptions {
+    /// Explicit comparison mode. Stage 19 implements concrete modes.
+    pub mode: String,
+}
+
+/// PDF signing and signature verification operations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "PdfSignOptionsDef", into = "PdfSignOptionsDef")]
+pub enum PdfSignOptions {
+    /// Verify PDF signatures and certificate material.
+    Verify(SignatureOptions),
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct PdfSignOptionsDef {
+    verify: Option<SignatureOptions>,
+}
+
+impl TryFrom<PdfSignOptionsDef> for PdfSignOptions {
+    type Error = OxideError;
+
+    fn try_from(value: PdfSignOptionsDef) -> Result<Self, Self::Error> {
+        if let Some(options) = value.verify {
+            return Ok(Self::Verify(options));
+        }
+
+        Err(OxideError::InvalidWorkflow {
+            reason: "pdf_sign must contain exactly one operation".to_owned(),
+        })
+    }
+}
+
+impl From<PdfSignOptions> for PdfSignOptionsDef {
+    fn from(value: PdfSignOptions) -> Self {
+        match value {
+            PdfSignOptions::Verify(options) => Self {
+                verify: Some(options),
             },
         }
     }
@@ -798,47 +971,91 @@ impl PdfOperatorRunner {
 impl OperatorRunner for PdfOperatorRunner {
     fn run(&mut self, task: &TaskSpec, inputs: &[Artifact]) -> Result<Artifact, OxideError> {
         let artifact = match &task.op {
-            OperatorSpec::Merge(_) => {
-                merge_pdf_artifacts_with_limits(inputs, &self.limits).map(Artifact::Pdf)
-            }
-            OperatorSpec::Split(options) => {
-                let input = single_pdf_input(inputs)?;
-                split_pdf_with_limits(input, &options.pages, &self.limits).map(Artifact::Pdf)
-            }
-            OperatorSpec::Reorder(options) => {
-                let input = single_pdf_input(inputs)?;
-                reorder_pdf_with_limits(input, &options.pages, &self.limits).map(Artifact::Pdf)
-            }
-            OperatorSpec::Rotate(options) => {
-                let input = single_pdf_input(inputs)?;
-                rotate_pdf_with_limits(input, &options.pages, options.degrees, &self.limits)
-                    .map(Artifact::Pdf)
-            }
-            OperatorSpec::ImageToPdf(options) => {
-                image_artifacts_to_pdf(inputs, options, &self.limits).map(Artifact::Pdf)
-            }
-            OperatorSpec::SvgToPdf(options) => {
-                let input = single_svg_input(inputs)?;
-                svg_to_pdf(input, options, &self.limits).map(Artifact::Pdf)
-            }
-            OperatorSpec::Render(options) => {
-                let input = single_pdf_input(inputs)?;
-                render_pdf_page(input, options, &self.limits).map(Artifact::Image)
-            }
-            OperatorSpec::ExtractText(options) => {
-                let input = single_pdf_input(inputs)?;
-                extract_text_from_pdf(input, options, &self.limits).map(Artifact::Text)
-            }
-            OperatorSpec::Watermark(options) => {
-                watermark_pdf_artifacts(inputs, options, &self.limits).map(Artifact::Pdf)
-            }
-            OperatorSpec::Signature(options) => {
-                let input = single_pdf_input(inputs)?;
-                verify_pdf_signatures(input, options, &self.limits).map(Artifact::Text)
-            }
+            OperatorSpec::PdfEdit(options) => run_pdf_edit(options, inputs, &self.limits),
+            OperatorSpec::PdfInspect(options) => run_pdf_inspect(options, inputs, &self.limits),
+            OperatorSpec::PdfSecurity(options) => run_pdf_security(options),
+            OperatorSpec::PdfCompare(options) => run_pdf_compare(options),
+            OperatorSpec::PdfSign(options) => run_pdf_sign(options, inputs, &self.limits),
         }?;
         enforce_artifact_output_bytes(&artifact, &self.limits)?;
         Ok(artifact)
+    }
+}
+
+fn run_pdf_edit(
+    options: &PdfEditOptions,
+    inputs: &[Artifact],
+    limits: &ResourceLimits,
+) -> Result<Artifact, OxideError> {
+    match options {
+        PdfEditOptions::Merge(_) => {
+            merge_pdf_artifacts_with_limits(inputs, limits).map(Artifact::Pdf)
+        }
+        PdfEditOptions::KeepPages(options) => {
+            let input = single_pdf_input(inputs)?;
+            split_pdf_with_limits(input, &options.pages, limits).map(Artifact::Pdf)
+        }
+        PdfEditOptions::ReorderPages(options) => {
+            let input = single_pdf_input(inputs)?;
+            reorder_pdf_with_limits(input, &options.pages, limits).map(Artifact::Pdf)
+        }
+        PdfEditOptions::RotatePages(options) => {
+            let input = single_pdf_input(inputs)?;
+            rotate_pdf_with_limits(input, &options.pages, options.degrees, limits)
+                .map(Artifact::Pdf)
+        }
+        PdfEditOptions::ImageToPdf(options) => {
+            image_artifacts_to_pdf(inputs, options, limits).map(Artifact::Pdf)
+        }
+        PdfEditOptions::SvgToPdf(options) => {
+            let input = single_svg_input(inputs)?;
+            svg_to_pdf(input, options, limits).map(Artifact::Pdf)
+        }
+        PdfEditOptions::Watermark(options) => {
+            watermark_pdf_artifacts(inputs, options, limits).map(Artifact::Pdf)
+        }
+    }
+}
+
+fn run_pdf_inspect(
+    options: &PdfInspectOptions,
+    inputs: &[Artifact],
+    limits: &ResourceLimits,
+) -> Result<Artifact, OxideError> {
+    match options {
+        PdfInspectOptions::Render(options) => {
+            let input = single_pdf_input(inputs)?;
+            render_pdf_page(input, options, limits).map(Artifact::Image)
+        }
+        PdfInspectOptions::ExtractText(options) => {
+            let input = single_pdf_input(inputs)?;
+            extract_text_from_pdf(input, options, limits).map(Artifact::Text)
+        }
+    }
+}
+
+fn run_pdf_security(options: &PdfSecurityOptions) -> Result<Artifact, OxideError> {
+    Err(OxideError::UnsupportedPdfFeature {
+        feature: format!("pdf_security operation '{}'", options.operation),
+    })
+}
+
+fn run_pdf_compare(options: &PdfCompareOptions) -> Result<Artifact, OxideError> {
+    Err(OxideError::UnsupportedPdfFeature {
+        feature: format!("pdf_compare mode '{}'", options.mode),
+    })
+}
+
+fn run_pdf_sign(
+    options: &PdfSignOptions,
+    inputs: &[Artifact],
+    limits: &ResourceLimits,
+) -> Result<Artifact, OxideError> {
+    match options {
+        PdfSignOptions::Verify(options) => {
+            let input = single_pdf_input(inputs)?;
+            verify_pdf_signatures(input, options, limits).map(Artifact::Text)
+        }
     }
 }
 
@@ -967,7 +1184,8 @@ pub fn rotate_pdf_with_limits(
 /// This does not cryptographically verify signatures, certificates, digests,
 /// revocation data, timestamp tokens, or PAdES policy. Until the formal
 /// signature implementation is added, production workflows must use
-/// `OperatorSpec::Signature`, which returns `UnsupportedPdfFeature`.
+/// `PdfSignOptions::Verify`, which returns a structured unsupported status
+/// for checks that are not implemented in this verification slice.
 pub fn inspect_pdf_signature_markers_for_research(
     input: &[u8],
 ) -> Result<SignatureResearchReport, OxideError> {
@@ -3223,9 +3441,11 @@ mod tests {
                 {
                   "id": "rotate_pages",
                   "op": {
-                    "rotate": {
-                      "pages": "1,3-5",
-                      "degrees": 90
+                    "pdf_edit": {
+                      "rotate_pages": {
+                        "pages": "1,3-5",
+                        "degrees": 90
+                      }
                     }
                   },
                   "inputs": ["source"]
@@ -3252,7 +3472,10 @@ mod tests {
         assert_eq!(workflow.tasks[0].id.as_str(), "rotate_pages");
         assert!(matches!(
             workflow.tasks[0].op,
-            OperatorSpec::Rotate(RotateOptions { degrees: 90, .. })
+            OperatorSpec::PdfEdit(PdfEditOptions::RotatePages(RotateOptions {
+                degrees: 90,
+                ..
+            }))
         ));
         assert_eq!(workflow.outputs[0].from.as_str(), "rotate_pages");
     }
@@ -3268,17 +3491,19 @@ mod tests {
             tasks:
               - id: rotate_pages
                 op:
-                  rotate:
-                    pages: "1,3-5"
-                    degrees: 90
+                  pdf_edit:
+                    rotate_pages:
+                      pages: "1,3-5"
+                      degrees: 90
                 inputs: [source]
               - id: stamp
                 op:
-                  watermark:
-                    kind: text
-                    text: Confidential
-                    opacity: 0.18
-                    position: center
+                  pdf_edit:
+                    watermark:
+                      kind: text
+                      text: Confidential
+                      opacity: 0.18
+                      position: center
                 inputs: [rotate_pages]
             outputs:
               - id: final
@@ -3298,10 +3523,10 @@ mod tests {
         assert_eq!(workflow.tasks.len(), 2);
         assert!(matches!(
             workflow.tasks[1].op,
-            OperatorSpec::Watermark(WatermarkOptions {
+            OperatorSpec::PdfEdit(PdfEditOptions::Watermark(WatermarkOptions {
                 kind: WatermarkKind::Text,
                 ..
-            })
+            }))
         ));
     }
 
@@ -3316,9 +3541,10 @@ mod tests {
             tasks:
               - id: verify
                 op:
-                  signature:
-                    mode: verify
-                    trust_anchors: ./anchors.pem
+                  pdf_sign:
+                    verify:
+                      mode: verify
+                      trust_anchors: ./anchors.pem
                 inputs: [source]
             outputs:
               - id: final
@@ -3330,13 +3556,13 @@ mod tests {
 
         assert!(matches!(
             workflow.tasks[0].op,
-            OperatorSpec::Signature(SignatureOptions {
+            OperatorSpec::PdfSign(PdfSignOptions::Verify(SignatureOptions {
                 mode: SignatureMode::Verify,
                 trust_anchors: Some(_),
-            })
+            }))
         ));
         match &workflow.tasks[0].op {
-            OperatorSpec::Signature(options) => {
+            OperatorSpec::PdfSign(PdfSignOptions::Verify(options)) => {
                 assert_eq!(
                     options.trust_anchors.as_deref(),
                     Some(std::path::Path::new("./anchors.pem"))
@@ -3369,8 +3595,8 @@ mod tests {
         let err = serde_json::from_str::<OperatorSpec>(
             r#"
             {
-              "rotate": { "pages": "1", "degrees": 90 },
-              "split": { "pages": "1" }
+              "pdf_edit": { "rotate_pages": { "pages": "1", "degrees": 90 } },
+              "pdf_inspect": { "render": { "page": 1 } }
             }
             "#,
         )
@@ -3379,6 +3605,20 @@ mod tests {
         assert!(err
             .to_string()
             .contains("operator spec must contain exactly one operator"));
+    }
+
+    #[test]
+    fn operator_spec_rejects_removed_legacy_operator_keys() {
+        let err = serde_json::from_str::<OperatorSpec>(
+            r#"
+            {
+              "rotate": { "pages": "1", "degrees": 90 }
+            }
+            "#,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("unknown field"));
     }
 
     #[test]
@@ -3412,12 +3652,12 @@ mod tests {
               "tasks": [
                 {
                   "id": "rotate",
-                  "op": { "rotate": { "pages": "1", "degrees": 90 } },
+                  "op": { "pdf_edit": { "rotate_pages": { "pages": "1", "degrees": 90 } } },
                   "inputs": ["source"]
                 },
                 {
                   "id": "render",
-                  "op": { "render": { "page": 1, "format": "png", "scale": 1.0 } },
+                  "op": { "pdf_inspect": { "render": { "page": 1, "format": "png", "scale": 1.0 } } },
                   "inputs": ["rotate"]
                 }
               ],
@@ -3450,17 +3690,17 @@ mod tests {
               "tasks": [
                 {
                   "id": "left",
-                  "op": { "rotate": { "pages": "1", "degrees": 90 } },
+                  "op": { "pdf_edit": { "rotate_pages": { "pages": "1", "degrees": 90 } } },
                   "inputs": ["source"]
                 },
                 {
                   "id": "right",
-                  "op": { "rotate": { "pages": "1", "degrees": 180 } },
+                  "op": { "pdf_edit": { "rotate_pages": { "pages": "1", "degrees": 180 } } },
                   "inputs": ["source"]
                 },
                 {
                   "id": "join",
-                  "op": { "merge": {} },
+                  "op": { "pdf_edit": { "merge": {} } },
                   "inputs": ["left", "right"]
                 }
               ],
@@ -3500,12 +3740,12 @@ mod tests {
               "tasks": [
                 {
                   "id": "a",
-                  "op": { "merge": {} },
+                  "op": { "pdf_edit": { "merge": {} } },
                   "inputs": ["b"]
                 },
                 {
                   "id": "b",
-                  "op": { "merge": {} },
+                  "op": { "pdf_edit": { "merge": {} } },
                   "inputs": ["a"]
                 }
               ],
@@ -3530,7 +3770,7 @@ mod tests {
               "tasks": [
                 {
                   "id": "rotate",
-                  "op": { "rotate": { "pages": "1", "degrees": 90 } },
+                  "op": { "pdf_edit": { "rotate_pages": { "pages": "1", "degrees": 90 } } },
                   "inputs": ["missing"]
                 }
               ],
@@ -3555,7 +3795,7 @@ mod tests {
               "tasks": [
                 {
                   "id": "source",
-                  "op": { "rotate": { "pages": "1", "degrees": 90 } },
+                  "op": { "pdf_edit": { "rotate_pages": { "pages": "1", "degrees": 90 } } },
                   "inputs": ["source"]
                 }
               ],
@@ -3580,12 +3820,12 @@ mod tests {
               "tasks": [
                 {
                   "id": "fail",
-                  "op": { "rotate": { "pages": "1", "degrees": 90 } },
+                  "op": { "pdf_edit": { "rotate_pages": { "pages": "1", "degrees": 90 } } },
                   "inputs": ["source"]
                 },
                 {
                   "id": "after",
-                  "op": { "render": { "page": 1, "format": "png", "scale": 1.0 } },
+                  "op": { "pdf_inspect": { "render": { "page": 1, "format": "png", "scale": 1.0 } } },
                   "inputs": ["fail"]
                 }
               ],
@@ -3729,7 +3969,7 @@ mod tests {
             .run(
                 &TaskSpec {
                     id: TaskId::new("merge"),
-                    op: OperatorSpec::Merge(MergeOptions {}),
+                    op: OperatorSpec::PdfEdit(PdfEditOptions::Merge(MergeOptions {})),
                     inputs: vec![artifact_ref("a"), artifact_ref("b")],
                 },
                 &[Artifact::pdf(pdf), Artifact::pdf(pdf)],
@@ -3751,9 +3991,9 @@ mod tests {
             .run(
                 &TaskSpec {
                     id: TaskId::new("split"),
-                    op: OperatorSpec::Split(SplitOptions {
+                    op: OperatorSpec::PdfEdit(PdfEditOptions::KeepPages(SplitOptions {
                         pages: "1".to_owned(),
-                    }),
+                    })),
                     inputs: vec![artifact_ref("source")],
                 },
                 &[Artifact::pdf(pdf)],
@@ -3778,10 +4018,10 @@ mod tests {
             .run(
                 &TaskSpec {
                     id: TaskId::new("verify"),
-                    op: OperatorSpec::Signature(SignatureOptions {
+                    op: OperatorSpec::PdfSign(PdfSignOptions::Verify(SignatureOptions {
                         mode: SignatureMode::Verify,
                         trust_anchors: Some(trust_anchors),
-                    }),
+                    })),
                     inputs: vec![artifact_ref("source")],
                 },
                 &[Artifact::pdf(&pdf)],
@@ -4230,7 +4470,9 @@ mod tests {
             .run(
                 &TaskSpec {
                     id: TaskId::new("extract"),
-                    op: OperatorSpec::ExtractText(ExtractTextOptions::default()),
+                    op: OperatorSpec::PdfInspect(PdfInspectOptions::ExtractText(
+                        ExtractTextOptions::default(),
+                    )),
                     inputs: vec![artifact_ref("source")],
                 },
                 &[Artifact::pdf(pdf)],
@@ -4253,7 +4495,7 @@ mod tests {
               "tasks": [
                 {
                   "id": "slow",
-                  "op": { "merge": {} },
+                  "op": { "pdf_edit": { "merge": {} } },
                   "inputs": ["source"]
                 }
               ],
