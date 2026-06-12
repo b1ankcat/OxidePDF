@@ -755,7 +755,8 @@ enum CliError {
 impl CliError {
     fn exit_code(&self) -> i32 {
         match self {
-            Self::Arguments(_) | Self::Workflow(_) => 2,
+            Self::Arguments(error) => error.exit_code(),
+            Self::Workflow(_) => 2,
             Self::Input(_) => 3,
             Self::Core(OxideError::InvalidWorkflow { .. }) => 2,
             Self::Core(OxideError::InvalidInput { .. })
@@ -829,6 +830,34 @@ mod tests {
         let version = command.get_version().unwrap();
 
         assert_eq!(version, env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn help_returns_success_exit_code() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(["oxidepdf", "--help"], [], &mut stdout, &mut stderr);
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert!(String::from_utf8(stderr)
+            .unwrap()
+            .contains("Usage: oxidepdf"));
+    }
+
+    #[test]
+    fn invalid_arguments_return_usage_exit_code() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(["oxidepdf", "--missing"], [], &mut stdout, &mut stderr);
+
+        assert_eq!(code, 2);
+        assert_eq!(stdout, b"");
+        assert!(String::from_utf8(stderr)
+            .unwrap()
+            .contains("unexpected argument"));
     }
 
     #[test]
