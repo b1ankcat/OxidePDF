@@ -240,6 +240,68 @@ fn render_command_writes_png() {
 }
 
 #[test]
+fn extract_text_command_writes_plain_text() {
+    let dir = temp_dir("extract_text_command_writes_plain_text");
+    let output = dir.join("extracted.txt");
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args([
+            "extract-text",
+            fixture_pdf().to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq(""))
+        .stderr(predicate::eq(""));
+
+    assert!(!fs::read_to_string(output).unwrap().trim().is_empty());
+}
+
+#[test]
+fn workflow_extract_text_writes_plain_text() {
+    let dir = temp_dir("workflow_extract_text_writes_plain_text");
+    let output = dir.join("extracted.txt");
+    let workflow = dir.join("workflow.yaml");
+    fs::write(
+        &workflow,
+        format!(
+            r#"
+            version: 1
+            inputs:
+              - id: source
+                path: {}
+            tasks:
+              - id: extract
+                op:
+                  extract_text:
+                    format: plain
+                inputs: [source]
+            outputs:
+              - id: final
+                from: extract
+                path: {}
+            "#,
+            fixture_pdf().display(),
+            output.display()
+        ),
+    )
+    .unwrap();
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args(["run", "--workflow", workflow.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::eq(""))
+        .stderr(predicate::eq(""));
+
+    assert!(!fs::read_to_string(output).unwrap().trim().is_empty());
+}
+
+#[test]
 fn render_command_rejects_out_of_range_page() {
     let dir = temp_dir("render_command_rejects_out_of_range_page");
     let output = dir.join("page.png");

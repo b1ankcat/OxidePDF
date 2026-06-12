@@ -2,9 +2,10 @@
 
 use clap::{CommandFactory, Parser, Subcommand};
 use oxidepdf_core::{
-    execute_workflow, Artifact, ArtifactRef, ArtifactStore, ImageToPdfOptions, MergeOptions,
-    OperatorSpec, OxideError, PdfOperatorRunner, RenderOptions, ReorderOptions, RotateOptions,
-    SplitOptions, SvgToPdfOptions, TaskId, TaskSpec, Workflow, WorkflowMetadata, WorkflowVersion,
+    execute_workflow, Artifact, ArtifactRef, ArtifactStore, ExtractTextOptions, ImageToPdfOptions,
+    MergeOptions, OperatorSpec, OxideError, PdfOperatorRunner, RenderOptions, ReorderOptions,
+    RotateOptions, SplitOptions, SvgToPdfOptions, TaskId, TaskSpec, Workflow, WorkflowMetadata,
+    WorkflowVersion,
 };
 use std::fs;
 use std::io::{self, Read, Write};
@@ -43,6 +44,9 @@ enum Commands {
     Svg2pdf(SvgToPdfArgs),
     /// Render a PDF page into a PNG image.
     Render(RenderArgs),
+    /// Extract plain text from a PDF.
+    #[command(name = "extract-text")]
+    ExtractText(ExtractTextArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -170,6 +174,20 @@ struct RenderArgs {
     force: bool,
 }
 
+#[derive(Debug, Parser)]
+struct ExtractTextArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Output text file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
 /// Parses CLI arguments and runs the requested command.
 pub fn run() -> i32 {
     let args = std::env::args_os().collect::<Vec<_>>();
@@ -240,6 +258,7 @@ fn cli_reads_stdin(cli: &Cli) -> bool {
         Some(Commands::Img2pdf(args)) => args.inputs.iter().any(|input| is_stdio(input)),
         Some(Commands::Svg2pdf(args)) => is_stdio(&args.input),
         Some(Commands::Render(args)) => is_stdio(&args.input),
+        Some(Commands::ExtractText(args)) => is_stdio(&args.input),
         None => false,
     }
 }
@@ -261,6 +280,7 @@ where
         Some(Commands::Img2pdf(args)) => run_img2pdf(args, stdin, stdout),
         Some(Commands::Svg2pdf(args)) => run_svg2pdf(args, stdin, stdout),
         Some(Commands::Render(args)) => run_render(args, stdin, stdout),
+        Some(Commands::ExtractText(args)) => run_extract_text(args, stdin, stdout),
         None => Ok(()),
     }
 }
@@ -400,6 +420,23 @@ fn run_render(args: RenderArgs, stdin: &[u8], stdout: &mut impl Write) -> Result
             page: args.page,
             format: Some("png".to_owned()),
             scale: args.scale,
+        }),
+    );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_extract_text(
+    args: ExtractTextArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "extract_text",
+        OperatorSpec::ExtractText(ExtractTextOptions {
+            format: Some("plain".to_owned()),
         }),
     );
 
@@ -618,6 +655,14 @@ mod tests {
         let cli =
             Cli::try_parse_from(["oxidepdf", "render", "-", "--page", "1", "-o", "output.png"])
                 .unwrap();
+
+        assert!(cli_reads_stdin(&cli));
+    }
+
+    #[test]
+    fn extract_text_stdio_input_requires_stdin() {
+        let cli =
+            Cli::try_parse_from(["oxidepdf", "extract-text", "-", "-o", "output.txt"]).unwrap();
 
         assert!(cli_reads_stdin(&cli));
     }
@@ -910,6 +955,62 @@ mod tests {
     }
 
     #[test]
+    fn extract_text_command_writes_plain_text() {
+        let dir = temp_dir("extract_text_command_writes_plain_text");
+        let output = dir.join("extracted.txt");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "extract-text",
+                fixture_pdf().to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert!(!fs::read_to_string(output).unwrap().trim().is_empty());
+    }
+
+    #[test]
+    fn extract_text_command_rejects_pdf_without_text_layer() {
+        let dir = temp_dir("extract_text_command_rejects_pdf_without_text_layer");
+        let input = dir.join("image.pdf");
+        let output = dir.join("extracted.txt");
+        fs::write(&input, image_only_pdf()).unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "extract-text",
+                input.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 3);
+        assert_eq!(stdout, b"");
+        assert!(!output.exists());
+        assert!(String::from_utf8(stderr)
+            .unwrap()
+            .contains("no extractable text layer"));
+    }
+
+    #[test]
     fn workflow_img2pdf_writes_parseable_pdf() {
         let dir = temp_dir("workflow_img2pdf_writes_parseable_pdf");
         let workflow = dir.join("workflow.yaml");
@@ -952,6 +1053,51 @@ mod tests {
         assert_eq!(stdout, b"");
         assert_eq!(stderr, b"");
         assert_eq!(pdf_page_count(&output), 1);
+    }
+
+    #[test]
+    fn workflow_extract_text_writes_plain_text() {
+        let dir = temp_dir("workflow_extract_text_writes_plain_text");
+        let workflow = dir.join("workflow.yaml");
+        let output = dir.join("extracted.txt");
+        fs::write(
+            &workflow,
+            format!(
+                r#"
+                version: 1
+                inputs:
+                  - id: source
+                    path: {}
+                tasks:
+                  - id: extract
+                    op:
+                      extract_text:
+                        format: plain
+                    inputs: [source]
+                outputs:
+                  - id: final
+                    from: extract
+                    path: {}
+                "#,
+                yaml_path(fixture_pdf()),
+                yaml_path(&output)
+            ),
+        )
+        .unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            ["oxidepdf", "run", "--workflow", workflow.to_str().unwrap()],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert!(!fs::read_to_string(output).unwrap().trim().is_empty());
     }
 
     #[test]
@@ -1082,6 +1228,20 @@ mod tests {
         br##"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
             <rect x="10" y="10" width="100" height="60" fill="#2563eb"/>
         </svg>"##
+    }
+
+    fn image_only_pdf() -> Vec<u8> {
+        oxidepdf_core::image_artifacts_to_pdf(
+            &[Artifact::image(fixture_jpg_bytes())],
+            &ImageToPdfOptions::default(),
+            &Default::default(),
+        )
+        .unwrap()
+        .bytes
+    }
+
+    fn fixture_jpg_bytes() -> Vec<u8> {
+        fs::read(fixture_jpg()).unwrap()
     }
 
     fn pdf_page_count(path: &std::path::Path) -> usize {

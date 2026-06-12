@@ -542,6 +542,26 @@ pub struct ImageArtifact {
 pub struct TextArtifact {
     /// Extracted or generated text.
     pub text: String,
+    /// Page-level extraction diagnostics reserved for structured output.
+    pub diagnostics: Vec<TextExtractionDiagnostic>,
+}
+
+/// Page-level diagnostic emitted by text extraction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextExtractionDiagnostic {
+    /// One-based page number.
+    pub page: u32,
+    /// Stable diagnostic code.
+    pub code: TextExtractionDiagnosticCode,
+    /// Non-sensitive diagnostic message.
+    pub message: String,
+}
+
+/// Stable text extraction diagnostic code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextExtractionDiagnosticCode {
+    /// Page has no extractable text layer.
+    NoTextLayer,
 }
 
 /// SVG artifact.
@@ -642,6 +662,10 @@ impl OperatorRunner for PdfOperatorRunner {
             OperatorSpec::Render(options) => {
                 let input = single_pdf_input(inputs)?;
                 render_pdf_page(input, options, &self.limits).map(Artifact::Image)
+            }
+            OperatorSpec::ExtractText(options) => {
+                let input = single_pdf_input(inputs)?;
+                extract_text_from_pdf(input, options, &self.limits).map(Artifact::Text)
             }
             other => Err(OxideError::UnsupportedPdfFeature {
                 feature: format!("{other:?}"),
@@ -823,6 +847,53 @@ pub fn render_pdf_page(
     }
 
     Ok(ImageArtifact { bytes })
+}
+
+/// Extracts plain text from a PDF and records page-level diagnostics.
+pub fn extract_text_from_pdf(
+    input: &[u8],
+    options: &ExtractTextOptions,
+    limits: &ResourceLimits,
+) -> Result<TextArtifact, OxideError> {
+    enforce_input_bytes(input.len(), limits)?;
+    let format = options.format.as_deref().unwrap_or("plain");
+    if format != "plain" {
+        return Err(OxideError::InvalidInput {
+            reason: format!("unsupported text extraction format '{format}'"),
+        });
+    }
+
+    let pages =
+        pdf_extract::extract_text_from_mem_by_pages(input).map_err(map_pdf_extract_error)?;
+    if pages.is_empty() {
+        return Err(OxideError::InvalidInput {
+            reason: "PDF contains no pages".to_owned(),
+        });
+    }
+    enforce_max_pages(pages.len(), limits)?;
+
+    let diagnostics = pages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, page)| match page.trim().is_empty() {
+            true => Some(TextExtractionDiagnostic {
+                page: (index + 1) as u32,
+                code: TextExtractionDiagnosticCode::NoTextLayer,
+                message: "page has no extractable text layer".to_owned(),
+            }),
+            false => None,
+        })
+        .collect::<Vec<_>>();
+    if diagnostics.len() == pages.len() {
+        return Err(OxideError::InvalidInput {
+            reason: "PDF has no extractable text layer".to_owned(),
+        });
+    }
+
+    Ok(TextArtifact {
+        text: pages.concat(),
+        diagnostics,
+    })
 }
 
 /// Validates a workflow and returns a topological execution plan.
@@ -1097,6 +1168,19 @@ fn map_lopdf_read_error(error: lopdf::Error) -> OxideError {
             OxideError::EncryptedPdf
         }
         _ => OxideError::ParsePdf,
+    }
+}
+
+fn map_pdf_extract_error(error: pdf_extract::OutputError) -> OxideError {
+    let message = error.to_string().to_ascii_lowercase();
+    if message.contains("encrypted")
+        || message.contains("decryption")
+        || message.contains("incorrect password")
+        || message.contains("security handler")
+    {
+        OxideError::EncryptedPdf
+    } else {
+        OxideError::ExtractText
     }
 }
 
@@ -2086,6 +2170,77 @@ mod tests {
         assert!(err.to_string().contains("page 99 is out of range"));
     }
 
+    #[test]
+    fn extract_text_from_pdf_returns_plain_text_for_real_pdf() {
+        let pdf = include_bytes!("../../../tests/test.pdf");
+
+        let text = extract_text_from_pdf(
+            pdf,
+            &ExtractTextOptions::default(),
+            &ResourceLimits::default(),
+        )
+        .unwrap();
+
+        assert!(!text.text.trim().is_empty());
+        assert!(text.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn extract_text_from_pdf_rejects_pdf_without_text_layer() {
+        let pdf = empty_page_pdf();
+
+        let err = extract_text_from_pdf(
+            &pdf,
+            &ExtractTextOptions::default(),
+            &ResourceLimits::default(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, OxideError::InvalidInput { .. }));
+        assert!(err.to_string().contains("no extractable text layer"));
+    }
+
+    #[test]
+    fn extract_text_from_pdf_rejects_unknown_format() {
+        let pdf = include_bytes!("../../../tests/test.pdf");
+
+        let err = extract_text_from_pdf(
+            pdf,
+            &ExtractTextOptions {
+                format: Some("json".to_owned()),
+            },
+            &ResourceLimits::default(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, OxideError::InvalidInput { .. }));
+        assert!(err
+            .to_string()
+            .contains("unsupported text extraction format"));
+    }
+
+    #[test]
+    fn pdf_operator_runner_handles_extract_text_tasks() {
+        let pdf = include_bytes!("../../../tests/test.pdf");
+        let mut runner = PdfOperatorRunner::default();
+
+        let extracted = runner
+            .run(
+                &TaskSpec {
+                    id: TaskId::new("extract"),
+                    op: OperatorSpec::ExtractText(ExtractTextOptions::default()),
+                    inputs: vec![artifact_ref("source")],
+                },
+                &[Artifact::pdf(pdf)],
+            )
+            .unwrap();
+
+        let Artifact::Text(text) = extracted else {
+            panic!("expected text artifact");
+        };
+        assert!(!text.text.trim().is_empty());
+    }
+
     fn workflow_from_json(json: &str) -> Workflow {
         serde_json::from_str(json).unwrap()
     }
@@ -2106,6 +2261,22 @@ mod tests {
         page.get(b"Rotate")
             .and_then(lopdf::Object::as_i64)
             .unwrap_or(0)
+    }
+
+    fn empty_page_pdf() -> Vec<u8> {
+        let mut pdf = pdf_writer::Pdf::new();
+        let catalog_id = pdf_writer::Ref::new(1);
+        let pages_id = pdf_writer::Ref::new(2);
+        let page_id = pdf_writer::Ref::new(3);
+
+        pdf.catalog(catalog_id).pages(pages_id);
+        pdf.pages(pages_id).kids([page_id]).count(1);
+        let mut page = pdf.page(page_id);
+        page.media_box(pdf_writer::Rect::new(0.0, 0.0, A4_WIDTH, A4_HEIGHT));
+        page.parent(pages_id);
+        page.finish();
+
+        pdf.finish()
     }
 
     #[derive(Default)]
