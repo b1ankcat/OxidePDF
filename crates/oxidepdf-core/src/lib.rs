@@ -1,10 +1,14 @@
 #![forbid(unsafe_code)]
 #![doc = "Core contracts and shared logic for OxidePDF."]
 
+use pdf_writer::Finish;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use thiserror::Error;
+
+const A4_WIDTH: f32 = 595.0;
+const A4_HEIGHT: f32 = 842.0;
 
 /// Current workflow schema version.
 ///
@@ -503,6 +507,20 @@ impl Artifact {
             bytes: bytes.as_ref().to_vec(),
         })
     }
+
+    /// Creates an image artifact.
+    pub fn image(bytes: impl AsRef<[u8]>) -> Self {
+        Self::Image(ImageArtifact {
+            bytes: bytes.as_ref().to_vec(),
+        })
+    }
+
+    /// Creates an SVG artifact.
+    pub fn svg(bytes: impl AsRef<[u8]>) -> Self {
+        Self::Svg(SvgArtifact {
+            bytes: bytes.as_ref().to_vec(),
+        })
+    }
 }
 
 /// PDF artifact placeholder for later operators.
@@ -586,8 +604,17 @@ pub trait OperatorRunner {
 }
 
 /// Operator runner for object-level PDF page editing.
-#[derive(Debug, Default)]
-pub struct PdfOperatorRunner;
+#[derive(Debug, Clone, Default)]
+pub struct PdfOperatorRunner {
+    limits: ResourceLimits,
+}
+
+impl PdfOperatorRunner {
+    /// Creates a runner using explicit workflow resource limits.
+    pub fn with_limits(limits: ResourceLimits) -> Self {
+        Self { limits }
+    }
+}
 
 impl OperatorRunner for PdfOperatorRunner {
     fn run(&mut self, task: &TaskSpec, inputs: &[Artifact]) -> Result<Artifact, OxideError> {
@@ -604,6 +631,13 @@ impl OperatorRunner for PdfOperatorRunner {
             OperatorSpec::Rotate(options) => {
                 let input = single_pdf_input(inputs)?;
                 rotate_pdf(input, &options.pages, options.degrees).map(Artifact::Pdf)
+            }
+            OperatorSpec::ImageToPdf(options) => {
+                image_artifacts_to_pdf(inputs, options, &self.limits).map(Artifact::Pdf)
+            }
+            OperatorSpec::SvgToPdf(options) => {
+                let input = single_svg_input(inputs)?;
+                svg_to_pdf(input, options, &self.limits).map(Artifact::Pdf)
             }
             other => Err(OxideError::UnsupportedPdfFeature {
                 feature: format!("{other:?}"),
@@ -672,6 +706,64 @@ pub fn rotate_pdf(input: &[u8], pages: &str, degrees: i16) -> Result<PdfArtifact
     }
 
     save_pdf(document).map(|bytes| PdfArtifact { bytes })
+}
+
+/// Converts image artifacts into a PDF with one image per page.
+pub fn image_artifacts_to_pdf(
+    inputs: &[Artifact],
+    options: &ImageToPdfOptions,
+    limits: &ResourceLimits,
+) -> Result<PdfArtifact, OxideError> {
+    if inputs.is_empty() {
+        return Err(OxideError::InvalidInput {
+            reason: "img2pdf requires at least one image input".to_owned(),
+        });
+    }
+    enforce_max_pages(inputs.len(), limits)?;
+
+    let mut images = Vec::with_capacity(inputs.len());
+    let mut total_pixels = 0u64;
+    for input in inputs {
+        let bytes = image_bytes(input)?;
+        enforce_input_bytes(bytes.len(), limits)?;
+        let decoded = decode_image(bytes)?;
+        let pixels = u64::from(decoded.width) * u64::from(decoded.height);
+        total_pixels = total_pixels
+            .checked_add(pixels)
+            .ok_or_else(|| resource_limit("max_pixels"))?;
+        enforce_max_pixels(total_pixels, limits)?;
+        images.push(decoded);
+    }
+
+    let layout = ImageLayout::from_options(options)?;
+    write_images_pdf(&images, layout).map(|bytes| PdfArtifact { bytes })
+}
+
+/// Converts an SVG artifact into a PDF. Defaults to vector output.
+pub fn svg_to_pdf(
+    input: &[u8],
+    options: &SvgToPdfOptions,
+    limits: &ResourceLimits,
+) -> Result<PdfArtifact, OxideError> {
+    enforce_input_bytes(input.len(), limits)?;
+    let tree = parse_svg(input)?;
+    let pixels = svg_pixel_count(&tree)?;
+    enforce_max_pixels(pixels, limits)?;
+    enforce_max_pages(1, limits)?;
+
+    let bytes = if options.rasterize {
+        let image = rasterize_svg(&tree)?;
+        write_images_pdf(&[image], ImageLayout::OriginalSize)?
+    } else {
+        let conversion_options = svg2pdf::ConversionOptions {
+            embed_text: false,
+            ..svg2pdf::ConversionOptions::default()
+        };
+        svg2pdf::to_pdf(&tree, conversion_options, svg2pdf::PageOptions::default())
+            .map_err(|_| OxideError::WritePdf)?
+    };
+
+    Ok(PdfArtifact { bytes })
 }
 
 /// Validates a workflow and returns a topological execution plan.
@@ -879,12 +971,38 @@ fn single_pdf_input(inputs: &[Artifact]) -> Result<&[u8], OxideError> {
     pdf_bytes(&inputs[0])
 }
 
+fn single_svg_input(inputs: &[Artifact]) -> Result<&[u8], OxideError> {
+    if inputs.len() != 1 {
+        return Err(OxideError::InvalidInput {
+            reason: "svg2pdf requires exactly one SVG input".to_owned(),
+        });
+    }
+
+    match &inputs[0] {
+        Artifact::Svg(svg) => Ok(&svg.bytes),
+        Artifact::Bytes(bytes) => Ok(&bytes.bytes),
+        _ => Err(OxideError::InvalidInput {
+            reason: "expected SVG input artifact".to_owned(),
+        }),
+    }
+}
+
 fn pdf_bytes(artifact: &Artifact) -> Result<&[u8], OxideError> {
     match artifact {
         Artifact::Pdf(pdf) => Ok(&pdf.bytes),
         Artifact::Bytes(bytes) => Ok(&bytes.bytes),
         _ => Err(OxideError::InvalidInput {
             reason: "expected PDF input artifact".to_owned(),
+        }),
+    }
+}
+
+fn image_bytes(artifact: &Artifact) -> Result<&[u8], OxideError> {
+    match artifact {
+        Artifact::Image(image) => Ok(&image.bytes),
+        Artifact::Bytes(bytes) => Ok(&bytes.bytes),
+        _ => Err(OxideError::InvalidInput {
+            reason: "expected image input artifact".to_owned(),
         }),
     }
 }
@@ -1101,6 +1219,195 @@ fn merge_documents(documents: Vec<lopdf::Document>) -> Result<Vec<u8>, OxideErro
         .unwrap_or_default();
 
     save_pdf(merged)
+}
+
+#[derive(Debug, Clone)]
+struct DecodedImage {
+    width: u32,
+    height: u32,
+    rgb: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImageLayout {
+    Fit,
+    OriginalSize,
+}
+
+impl ImageLayout {
+    fn from_options(options: &ImageToPdfOptions) -> Result<Self, OxideError> {
+        match options.layout.as_deref().unwrap_or("fit") {
+            "fit" => Ok(Self::Fit),
+            "original_size" => Ok(Self::OriginalSize),
+            other => Err(OxideError::InvalidInput {
+                reason: format!("unsupported image layout '{other}'"),
+            }),
+        }
+    }
+}
+
+fn decode_image(input: &[u8]) -> Result<DecodedImage, OxideError> {
+    let format = image::guess_format(input).map_err(|_| OxideError::ImageDecode)?;
+    match format {
+        image::ImageFormat::Jpeg | image::ImageFormat::Png | image::ImageFormat::WebP => {}
+        _ => return Err(OxideError::ImageDecode),
+    }
+    let image = image::load_from_memory_with_format(input, format)
+        .map_err(|_| OxideError::ImageDecode)?
+        .to_rgb8();
+
+    Ok(DecodedImage {
+        width: image.width(),
+        height: image.height(),
+        rgb: image.into_raw(),
+    })
+}
+
+fn write_images_pdf(images: &[DecodedImage], layout: ImageLayout) -> Result<Vec<u8>, OxideError> {
+    let mut next_ref = 1;
+    let mut alloc_ref = || {
+        let reference = pdf_writer::Ref::new(next_ref);
+        next_ref += 1;
+        reference
+    };
+    let catalog_id = alloc_ref();
+    let pages_id = alloc_ref();
+    let page_ids = (0..images.len()).map(|_| alloc_ref()).collect::<Vec<_>>();
+    let image_ids = (0..images.len()).map(|_| alloc_ref()).collect::<Vec<_>>();
+    let content_ids = (0..images.len()).map(|_| alloc_ref()).collect::<Vec<_>>();
+
+    let mut pdf = pdf_writer::Pdf::new();
+    pdf.catalog(catalog_id).pages(pages_id);
+    pdf.pages(pages_id)
+        .kids(page_ids.iter().copied())
+        .count(images.len() as i32);
+
+    for (((page_id, image_id), content_id), image) in page_ids
+        .iter()
+        .zip(image_ids.iter())
+        .zip(content_ids.iter())
+        .zip(images.iter())
+    {
+        let image_name = pdf_writer::Name(b"Im1");
+        let (page_width, page_height, image_width, image_height, x, y) =
+            image_placement(image, layout);
+
+        let mut page = pdf.page(*page_id);
+        page.media_box(pdf_writer::Rect::new(0.0, 0.0, page_width, page_height));
+        page.parent(pages_id);
+        page.contents(*content_id);
+        page.resources().x_objects().pair(image_name, *image_id);
+        page.finish();
+
+        let mut image_object = pdf.image_xobject(*image_id, &image.rgb);
+        image_object.width(image.width as i32);
+        image_object.height(image.height as i32);
+        image_object.color_space().device_rgb();
+        image_object.bits_per_component(8);
+        image_object.finish();
+
+        let mut content = pdf_writer::Content::new();
+        content.save_state();
+        content.transform([image_width, 0.0, 0.0, image_height, x, y]);
+        content.x_object(image_name);
+        content.restore_state();
+        pdf.stream(*content_id, &content.finish());
+    }
+
+    Ok(pdf.finish())
+}
+
+fn image_placement(image: &DecodedImage, layout: ImageLayout) -> (f32, f32, f32, f32, f32, f32) {
+    let original_width = image.width as f32;
+    let original_height = image.height as f32;
+    match layout {
+        ImageLayout::OriginalSize => (
+            original_width,
+            original_height,
+            original_width,
+            original_height,
+            0.0,
+            0.0,
+        ),
+        ImageLayout::Fit => {
+            let scale = (A4_WIDTH / original_width)
+                .min(A4_HEIGHT / original_height)
+                .min(1.0);
+            let image_width = original_width * scale;
+            let image_height = original_height * scale;
+            let x = (A4_WIDTH - image_width) / 2.0;
+            let y = (A4_HEIGHT - image_height) / 2.0;
+            (A4_WIDTH, A4_HEIGHT, image_width, image_height, x, y)
+        }
+    }
+}
+
+fn parse_svg(input: &[u8]) -> Result<svg2pdf::usvg::Tree, OxideError> {
+    let options = svg2pdf::usvg::Options::default();
+    svg2pdf::usvg::Tree::from_data(input, &options).map_err(|_| OxideError::SvgParse)
+}
+
+fn svg_pixel_count(tree: &svg2pdf::usvg::Tree) -> Result<u64, OxideError> {
+    let size = tree.size().to_int_size();
+    Ok(u64::from(size.width()) * u64::from(size.height()))
+}
+
+fn rasterize_svg(tree: &svg2pdf::usvg::Tree) -> Result<DecodedImage, OxideError> {
+    let size = tree.size().to_int_size();
+    let mut pixmap =
+        resvg::tiny_skia::Pixmap::new(size.width(), size.height()).ok_or(OxideError::RenderPdf)?;
+    resvg::render(
+        tree,
+        resvg::tiny_skia::Transform::identity(),
+        &mut pixmap.as_mut(),
+    );
+    let mut rgb =
+        Vec::with_capacity((u64::from(size.width()) * u64::from(size.height()) * 3) as usize);
+    for pixel in pixmap.data().chunks_exact(4) {
+        rgb.extend_from_slice(&[pixel[0], pixel[1], pixel[2]]);
+    }
+
+    Ok(DecodedImage {
+        width: size.width(),
+        height: size.height(),
+        rgb,
+    })
+}
+
+fn enforce_input_bytes(size: usize, limits: &ResourceLimits) -> Result<(), OxideError> {
+    if let Some(limit) = limits.max_input_bytes {
+        if size as u64 > limit {
+            return Err(resource_limit("max_input_bytes"));
+        }
+    }
+
+    Ok(())
+}
+
+fn enforce_max_pages(pages: usize, limits: &ResourceLimits) -> Result<(), OxideError> {
+    if let Some(limit) = limits.max_pages {
+        if pages as u32 > limit {
+            return Err(resource_limit("max_pages"));
+        }
+    }
+
+    Ok(())
+}
+
+fn enforce_max_pixels(pixels: u64, limits: &ResourceLimits) -> Result<(), OxideError> {
+    if let Some(limit) = limits.max_pixels {
+        if pixels > limit {
+            return Err(resource_limit("max_pixels"));
+        }
+    }
+
+    Ok(())
+}
+
+fn resource_limit(limit: impl Into<String>) -> OxideError {
+    OxideError::ResourceLimitExceeded {
+        limit: limit.into(),
+    }
 }
 
 fn rebuild_pages_tree(
@@ -1559,7 +1866,7 @@ mod tests {
     #[test]
     fn pdf_operator_runner_handles_page_editing_tasks() {
         let pdf = include_bytes!("../../../tests/test.pdf");
-        let mut runner = PdfOperatorRunner;
+        let mut runner = PdfOperatorRunner::default();
 
         let merged = runner
             .run(
@@ -1573,6 +1880,112 @@ mod tests {
             .unwrap();
 
         assert!(matches!(merged, Artifact::Pdf(_)));
+    }
+
+    #[test]
+    fn image_artifacts_to_pdf_converts_real_jpeg() {
+        let image = include_bytes!("../../../tests/test.jpg");
+
+        let pdf = image_artifacts_to_pdf(
+            &[Artifact::image(image)],
+            &ImageToPdfOptions::default(),
+            &ResourceLimits::default(),
+        )
+        .unwrap();
+        let document = lopdf::Document::load_mem(&pdf.bytes).unwrap();
+
+        assert_eq!(document.get_pages().len(), 1);
+    }
+
+    #[test]
+    fn image_artifacts_to_pdf_writes_one_page_per_image() {
+        let image = include_bytes!("../../../tests/test.jpg");
+
+        let pdf = image_artifacts_to_pdf(
+            &[Artifact::image(image), Artifact::image(image)],
+            &ImageToPdfOptions::default(),
+            &ResourceLimits::default(),
+        )
+        .unwrap();
+        let document = lopdf::Document::load_mem(&pdf.bytes).unwrap();
+
+        assert_eq!(document.get_pages().len(), 2);
+    }
+
+    #[test]
+    fn image_artifacts_to_pdf_enforces_pixel_limit() {
+        let image = include_bytes!("../../../tests/test.jpg");
+        let limits = ResourceLimits {
+            max_pixels: Some(1),
+            ..ResourceLimits::default()
+        };
+
+        let err = image_artifacts_to_pdf(
+            &[Artifact::image(image)],
+            &ImageToPdfOptions::default(),
+            &limits,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            OxideError::ResourceLimitExceeded {
+                limit: "max_pixels".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn image_artifacts_to_pdf_rejects_unknown_image_format() {
+        let err = image_artifacts_to_pdf(
+            &[Artifact::image(b"not an image")],
+            &ImageToPdfOptions::default(),
+            &ResourceLimits::default(),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, OxideError::ImageDecode);
+    }
+
+    #[test]
+    fn svg_to_pdf_converts_vector_svg_to_parseable_pdf() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+            <rect x="10" y="10" width="100" height="60" fill="#0077cc"/>
+        </svg>"##;
+
+        let pdf = svg_to_pdf(svg, &SvgToPdfOptions::default(), &ResourceLimits::default()).unwrap();
+        let document = lopdf::Document::load_mem(&pdf.bytes).unwrap();
+
+        assert_eq!(document.get_pages().len(), 1);
+    }
+
+    #[test]
+    fn svg_to_pdf_rasterizes_only_when_requested() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+            <circle cx="60" cy="40" r="30" fill="#ef4444"/>
+        </svg>"##;
+
+        let pdf = svg_to_pdf(
+            svg,
+            &SvgToPdfOptions { rasterize: true },
+            &ResourceLimits::default(),
+        )
+        .unwrap();
+        let document = lopdf::Document::load_mem(&pdf.bytes).unwrap();
+
+        assert_eq!(document.get_pages().len(), 1);
+    }
+
+    #[test]
+    fn svg_to_pdf_rejects_invalid_svg() {
+        let err = svg_to_pdf(
+            b"<svg><broken>",
+            &SvgToPdfOptions::default(),
+            &ResourceLimits::default(),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, OxideError::SvgParse);
     }
 
     fn workflow_from_json(json: &str) -> Workflow {

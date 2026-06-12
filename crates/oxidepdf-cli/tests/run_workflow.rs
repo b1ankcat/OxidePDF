@@ -164,6 +164,56 @@ fn reorder_command_writes_parseable_pdf() {
     assert_eq!(pdf_page_count(&output), 3);
 }
 
+#[test]
+fn img2pdf_command_writes_parseable_pdf() {
+    let dir = temp_dir("img2pdf_command_writes_parseable_pdf");
+    let output = dir.join("image.pdf");
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args([
+            "img2pdf",
+            fixture_jpg().to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq(""))
+        .stderr(predicate::eq(""));
+
+    assert_eq!(pdf_page_count(&output), 1);
+}
+
+#[test]
+fn svg2pdf_command_writes_parseable_pdf() {
+    let dir = temp_dir("svg2pdf_command_writes_parseable_pdf");
+    let input = dir.join("input.svg");
+    let output = dir.join("svg.pdf");
+    fs::write(
+        &input,
+        br##"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+            <rect x="10" y="10" width="100" height="60" fill="#16a34a"/>
+        </svg>"##,
+    )
+    .unwrap();
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args([
+            "svg2pdf",
+            input.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq(""))
+        .stderr(predicate::eq(""));
+
+    assert_eq!(pdf_page_count(&output), 1);
+}
+
 fn temp_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "oxidepdf_cli_integration_{}_{}",
@@ -178,6 +228,13 @@ fn temp_dir(name: &str) -> std::path::PathBuf {
 fn fixture_pdf() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/test.pdf")
+        .canonicalize()
+        .unwrap()
+}
+
+fn fixture_jpg() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/test.jpg")
         .canonicalize()
         .unwrap()
 }

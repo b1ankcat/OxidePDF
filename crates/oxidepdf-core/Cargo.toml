@@ -10,9 +10,14 @@ description = "Core contracts and operators for OxidePDF."
 default = []
 
 [dependencies]
+image.workspace = true
 lopdf.workspace = true
+pdf-writer.workspace = true
+resvg.workspace = true
 serde.workspace = true
+svg2pdf.workspace = true
 thiserror.workspace = true
+usvg.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

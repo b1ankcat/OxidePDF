@@ -2,9 +2,9 @@
 
 use clap::{CommandFactory, Parser, Subcommand};
 use oxidepdf_core::{
-    execute_workflow, Artifact, ArtifactRef, ArtifactStore, MergeOptions, OperatorSpec, OxideError,
-    PdfOperatorRunner, ReorderOptions, RotateOptions, SplitOptions, TaskId, TaskSpec, Workflow,
-    WorkflowMetadata, WorkflowVersion,
+    execute_workflow, Artifact, ArtifactRef, ArtifactStore, ImageToPdfOptions, MergeOptions,
+    OperatorSpec, OxideError, PdfOperatorRunner, ReorderOptions, RotateOptions, SplitOptions,
+    SvgToPdfOptions, TaskId, TaskSpec, Workflow, WorkflowMetadata, WorkflowVersion,
 };
 use std::fs;
 use std::io::{self, Read, Write};
@@ -35,6 +35,12 @@ enum Commands {
     Reorder(PageSelectionArgs),
     /// Rotate selected PDF pages.
     Rotate(RotateArgs),
+    /// Convert one or more images into PDF pages.
+    #[command(name = "img2pdf")]
+    Img2pdf(ImageToPdfArgs),
+    /// Convert an SVG document into a PDF.
+    #[command(name = "svg2pdf")]
+    Svg2pdf(SvgToPdfArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -103,6 +109,43 @@ struct RotateArgs {
     force: bool,
 }
 
+#[derive(Debug, Parser)]
+struct ImageToPdfArgs {
+    /// Input PNG, JPEG, or WebP image files.
+    #[arg(required = true, num_args = 1..)]
+    inputs: Vec<PathBuf>,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Page layout: `fit` or `original_size`.
+    #[arg(long)]
+    layout: Option<String>,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct SvgToPdfArgs {
+    /// Input SVG file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Rasterize the SVG before placing it into the PDF.
+    #[arg(long)]
+    rasterize: bool,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
 /// Parses CLI arguments and runs the requested command.
 pub fn run() -> i32 {
     let mut stdin_buffer = Vec::new();
@@ -157,6 +200,8 @@ where
             run_page_selection(args, stdin, stdout, PageCommand::Reorder)
         }
         Some(Commands::Rotate(args)) => run_rotate(args, stdin, stdout),
+        Some(Commands::Img2pdf(args)) => run_img2pdf(args, stdin, stdout),
+        Some(Commands::Svg2pdf(args)) => run_svg2pdf(args, stdin, stdout),
         None => Ok(()),
     }
 }
@@ -165,7 +210,7 @@ fn run_workflow(args: RunArgs, stdin: &[u8], stdout: &mut impl Write) -> Result<
     let workflow_bytes = read_path_or_stdin(&args.workflow, stdin).map_err(CliError::Input)?;
     let workflow = parse_workflow(&workflow_bytes, &args.workflow)?;
     let store = load_inputs(&workflow, stdin)?;
-    let mut runner = PdfOperatorRunner;
+    let mut runner = PdfOperatorRunner::with_limits(workflow.limits.clone());
     let result = execute_workflow(&workflow, store, &mut runner).map_err(CliError::Core)?;
     write_outputs(&workflow, &result.store, args.force, stdout)?;
 
@@ -236,6 +281,57 @@ fn run_rotate(args: RotateArgs, stdin: &[u8], stdout: &mut impl Write) -> Result
     execute_and_write_workflow(workflow, stdin, args.force, stdout)
 }
 
+fn run_img2pdf(
+    args: ImageToPdfArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    let input_refs = (0..args.inputs.len())
+        .map(|index| ArtifactRef::new(format!("input_{index}")))
+        .collect::<Vec<_>>();
+    let workflow = Workflow {
+        version: WorkflowVersion::V1,
+        inputs: args
+            .inputs
+            .into_iter()
+            .zip(input_refs.iter())
+            .map(|(path, id)| oxidepdf_core::InputSpec {
+                id: id.clone(),
+                path,
+            })
+            .collect(),
+        tasks: vec![TaskSpec {
+            id: TaskId::new("img2pdf"),
+            op: OperatorSpec::ImageToPdf(ImageToPdfOptions {
+                layout: args.layout,
+            }),
+            inputs: input_refs,
+        }],
+        outputs: vec![oxidepdf_core::OutputSpec {
+            id: ArtifactRef::new("output"),
+            from: ArtifactRef::new("img2pdf"),
+            path: args.output,
+        }],
+        limits: Default::default(),
+        metadata: WorkflowMetadata::default(),
+    };
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_svg2pdf(args: SvgToPdfArgs, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError> {
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "svg2pdf",
+        OperatorSpec::SvgToPdf(SvgToPdfOptions {
+            rasterize: args.rasterize,
+        }),
+    );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
 fn execute_and_write_workflow(
     workflow: Workflow,
     stdin: &[u8],
@@ -243,7 +339,7 @@ fn execute_and_write_workflow(
     stdout: &mut impl Write,
 ) -> Result<(), CliError> {
     let store = load_inputs(&workflow, stdin)?;
-    let mut runner = PdfOperatorRunner;
+    let mut runner = PdfOperatorRunner::with_limits(workflow.limits.clone());
     let result = execute_workflow(&workflow, store, &mut runner).map_err(CliError::Core)?;
     write_outputs(&workflow, &result.store, force, stdout)
 }
@@ -661,6 +757,105 @@ mod tests {
     }
 
     #[test]
+    fn img2pdf_command_writes_parseable_pdf() {
+        let dir = temp_dir("img2pdf_command_writes_parseable_pdf");
+        let output = dir.join("image.pdf");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "img2pdf",
+                fixture_jpg().to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert_eq!(pdf_page_count(&output), 1);
+    }
+
+    #[test]
+    fn svg2pdf_command_writes_parseable_pdf() {
+        let dir = temp_dir("svg2pdf_command_writes_parseable_pdf");
+        let input = dir.join("input.svg");
+        let output = dir.join("svg.pdf");
+        fs::write(&input, simple_svg()).unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "svg2pdf",
+                input.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert_eq!(pdf_page_count(&output), 1);
+    }
+
+    #[test]
+    fn workflow_img2pdf_writes_parseable_pdf() {
+        let dir = temp_dir("workflow_img2pdf_writes_parseable_pdf");
+        let workflow = dir.join("workflow.yaml");
+        let output = dir.join("image.pdf");
+        fs::write(
+            &workflow,
+            format!(
+                r#"
+                version: 1
+                inputs:
+                  - id: source
+                    path: {}
+                tasks:
+                  - id: convert
+                    op:
+                      image_to_pdf:
+                        layout: original_size
+                    inputs: [source]
+                outputs:
+                  - id: final
+                    from: convert
+                    path: {}
+                "#,
+                yaml_path(fixture_jpg()),
+                yaml_path(&output)
+            ),
+        )
+        .unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            ["oxidepdf", "run", "--workflow", workflow.to_str().unwrap()],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert_eq!(pdf_page_count(&output), 1);
+    }
+
+    #[test]
     fn invalid_workflow_returns_usage_exit_code() {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -775,6 +970,19 @@ mod tests {
             .join("../../tests/test.pdf")
             .canonicalize()
             .unwrap()
+    }
+
+    fn fixture_jpg() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/test.jpg")
+            .canonicalize()
+            .unwrap()
+    }
+
+    fn simple_svg() -> &'static [u8] {
+        br##"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+            <rect x="10" y="10" width="100" height="60" fill="#2563eb"/>
+        </svg>"##
     }
 
     fn pdf_page_count(path: &std::path::Path) -> usize {
