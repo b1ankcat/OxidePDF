@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      release_date:
+        description: Date-style release tag, for example 20260101. Defaults to today's UTC date.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  linux-musl:
+    runs-on: ubuntu-latest
+    env:
+      TARGET: x86_64-unknown-linux-musl
+      PACKAGE: oxidepdf-cli
+      BIN: oxidepdf
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.TARGET }}
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: Build static musl binary
+        run: cargo zigbuild --release --target "$TARGET" -p "$PACKAGE"
+
+      - name: Compute release date
+        id: release_date
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.release_date }}" ]; then
+            echo "value=${{ github.event.inputs.release_date }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package binary and bash completion
+        shell: bash
+        run: |
+          set -euo pipefail
+          release="${{ steps.release_date.outputs.value }}"
+          package_dir="dist/${BIN}-${release}-${TARGET}"
+          mkdir -p "$package_dir"
+          cp "target/${TARGET}/release/${BIN}" "$package_dir/${BIN}"
+          cp "target/${TARGET}/release/completions/${BIN}.bash" "$package_dir/${BIN}.bash"
+          cp LICENSE "$package_dir/LICENSE"
+          cp README.md "$package_dir/README.md"
+          (cd dist && zip -qr "${BIN}-${release}-${TARGET}.zip" "${BIN}-${release}-${TARGET}")
+          sha256sum "dist/${BIN}-${release}-${TARGET}.zip" > "dist/${BIN}-${release}-${TARGET}.zip.sha256"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: oxidepdf-${{ steps.release_date.outputs.value }}-${{ env.TARGET }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_date.outputs.value }}
+          name: ${{ steps.release_date.outputs.value }}
+          files: |
+            dist/*.zip
+            dist/*.sha256
+          generate_release_notes: true

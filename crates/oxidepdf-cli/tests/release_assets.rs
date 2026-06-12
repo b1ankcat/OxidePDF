@@ -10,7 +10,9 @@ fn release_script_builds_musl_targets_and_checks_linkage() {
     assert!(script.contains("cargo zigbuild --release --target"));
     assert!(script.contains("ldd"));
     assert!(script.contains("not a dynamic executable"));
-    assert!(script.contains("tar"));
+    assert!(script.contains("zip"));
+    assert!(script.contains("$BIN.bash"));
+    assert!(script.contains("README.md"));
     assert!(script.contains("sha256sum"));
 }
 
@@ -30,6 +32,8 @@ fn dockerfile_uses_prebuilt_static_cli_binary() {
 
     assert!(dockerfile.contains("FROM scratch"));
     assert!(dockerfile.contains("COPY target/x86_64-unknown-linux-musl/release/oxidepdf"));
+    assert!(dockerfile
+        .contains("COPY target/x86_64-unknown-linux-musl/release/completions/oxidepdf.bash"));
     assert!(dockerfile.contains("COPY --from=certs /etc/ssl/certs/ca-certificates.crt"));
     assert!(dockerfile.contains("ENTRYPOINT [\"/oxidepdf\"]"));
 }
@@ -48,9 +52,35 @@ fn release_documentation_records_packaging_commands_and_checklist() {
     assert!(docs.contains("ldd target/x86_64-unknown-linux-musl/release/oxidepdf"));
     assert!(docs.contains("docker build"));
     assert!(docs.contains("docker run --rm oxidepdf:local --help"));
-    assert!(docs.contains("macOS"));
-    assert!(docs.contains("Windows"));
+    assert!(docs.contains("oxidepdf.bash"));
+    assert!(docs.contains(".github/workflows/release.yml"));
     assert!(docs.contains("Release Checklist"));
+}
+
+#[test]
+fn readme_documents_open_source_distribution_and_milestones() {
+    let readme = read("README.md");
+
+    assert!(readme.contains("OxidePDF"));
+    assert!(readme.contains("GPLv3"));
+    assert!(readme.contains("oxidepdf completion bash"));
+    assert!(readme.contains("Deployment and Distribution"));
+    assert!(readme.contains("Milestones"));
+    assert!(readme.contains("Native macOS release archives"));
+    assert!(readme.contains("Online TSA requests"));
+}
+
+#[test]
+fn github_release_workflow_builds_musl_zip_release() {
+    let workflow = read(".github/workflows/release.yml");
+
+    assert!(workflow.contains("workflow_dispatch"));
+    assert!(workflow.contains("cargo zigbuild --release --target"));
+    assert!(workflow.contains("x86_64-unknown-linux-musl"));
+    assert!(workflow.contains("${BIN}.bash"));
+    assert!(workflow.contains("zip -qr"));
+    assert!(workflow.contains("softprops/action-gh-release"));
+    assert!(workflow.contains("date -u +%Y%m%d"));
 }
 
 fn read(path: &str) -> String {
