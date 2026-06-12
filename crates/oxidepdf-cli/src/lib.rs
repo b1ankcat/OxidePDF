@@ -52,10 +52,6 @@ enum Commands {
     PdfInspect(PdfInspectCommand),
     /// Compare PDF files.
     Compare(CompareArgs),
-    /// Sign or verify PDF signature material.
-    #[command(name = "pdf-sign")]
-    #[command(subcommand)]
-    PdfSign(PdfSignCommand),
     /// List or verify PDF digital signatures.
     #[command(subcommand)]
     Sign(SignCommand),
@@ -96,8 +92,6 @@ enum Commands {
     /// Edit simple page colors.
     #[command(subcommand)]
     Color(ColorCommand),
-    /// Compress and optimize a PDF without implicit quality loss.
-    Compress(CompressArgs),
     /// Encrypt a PDF with owner and user passwords.
     Encrypt(SecurityEncryptArgs),
     /// Decrypt a password-protected PDF.
@@ -166,12 +160,6 @@ enum PdfInspectCommand {
     /// Extract plain text from a PDF.
     #[command(name = "extract-text")]
     ExtractText(ExtractTextArgs),
-}
-
-#[derive(Debug, Subcommand)]
-enum PdfSignCommand {
-    /// Verify PDF signatures and certificates.
-    Verify(VerifySignaturesArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -1421,7 +1409,6 @@ fn cli_reads_stdin(cli: &Cli) -> bool {
         Some(Commands::PdfEdit(command)) => pdf_edit_reads_stdin(command),
         Some(Commands::PdfInspect(command)) => pdf_inspect_reads_stdin(command),
         Some(Commands::Compare(args)) => is_stdio(&args.left) || is_stdio(&args.right),
-        Some(Commands::PdfSign(command)) => pdf_sign_reads_stdin(command),
         Some(Commands::Sign(command)) => sign_reads_stdin(command),
         Some(Commands::Timestamp(command)) => timestamp_reads_stdin(command),
         Some(Commands::Metadata(command)) => metadata_reads_stdin(command),
@@ -1435,7 +1422,6 @@ fn cli_reads_stdin(cli: &Cli) -> bool {
         Some(Commands::OverlayPdf(args)) => is_stdio(&args.input) || is_stdio(&args.overlay),
         Some(Commands::Image(command)) => image_reads_stdin(command),
         Some(Commands::Color(command)) => color_reads_stdin(command),
-        Some(Commands::Compress(args)) => is_stdio(&args.input),
         Some(Commands::Encrypt(args)) => is_stdio(&args.input),
         Some(Commands::Decrypt(args)) => is_stdio(&args.input),
         Some(Commands::Permissions(command)) => permissions_reads_stdin(command),
@@ -1471,12 +1457,6 @@ fn pdf_inspect_reads_stdin(command: &PdfInspectCommand) -> bool {
     match command {
         PdfInspectCommand::Render(args) => is_stdio(&args.input),
         PdfInspectCommand::ExtractText(args) => is_stdio(&args.input),
-    }
-}
-
-fn pdf_sign_reads_stdin(command: &PdfSignCommand) -> bool {
-    match command {
-        PdfSignCommand::Verify(args) => is_stdio(&args.input),
     }
 }
 
@@ -1578,7 +1558,6 @@ where
         Some(Commands::PdfEdit(command)) => run_pdf_edit(command, stdin, stdout),
         Some(Commands::PdfInspect(command)) => run_pdf_inspect(command, stdin, stdout),
         Some(Commands::Compare(args)) => run_compare(args, stdin, stdout),
-        Some(Commands::PdfSign(command)) => run_pdf_sign(command, stdin, stdout),
         Some(Commands::Sign(command)) => run_sign(command, stdin, stdout),
         Some(Commands::Timestamp(command)) => run_timestamp(command, stdin, stdout),
         Some(Commands::Metadata(command)) => run_metadata(command, stdin, stdout),
@@ -1592,7 +1571,6 @@ where
         Some(Commands::OverlayPdf(args)) => run_overlay_pdf(args, stdin, stdout),
         Some(Commands::Image(command)) => run_image(command, stdin, stdout),
         Some(Commands::Color(command)) => run_color(command, stdin, stdout),
-        Some(Commands::Compress(args)) => run_compress(args, stdin, stdout),
         Some(Commands::Encrypt(args)) => run_encrypt(args, stdin, stdout),
         Some(Commands::Decrypt(args)) => run_decrypt(args, stdin, stdout),
         Some(Commands::Permissions(command)) => run_permissions(command, stdin, stdout),
@@ -1640,16 +1618,6 @@ fn run_pdf_inspect(
     match command {
         PdfInspectCommand::Render(args) => run_render(args, stdin, stdout),
         PdfInspectCommand::ExtractText(args) => run_extract_text(args, stdin, stdout),
-    }
-}
-
-fn run_pdf_sign(
-    command: PdfSignCommand,
-    stdin: &[u8],
-    stdout: &mut impl Write,
-) -> Result<(), CliError> {
-    match command {
-        PdfSignCommand::Verify(args) => run_verify_signatures(args, stdin, stdout),
     }
 }
 
@@ -3216,7 +3184,7 @@ mod tests {
 
         assert!(help.contains("OxidePDF"));
         assert!(help.contains("pure Rust PDF toolkit"));
-        assert!(help.contains("pdf-sign"));
+        assert!(help.contains("sign"));
     }
 
     #[test]
@@ -3269,6 +3237,8 @@ mod tests {
             "watermark",
             "verify-signatures",
             "pdf-compare",
+            "pdf-sign",
+            "compress",
         ] {
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();

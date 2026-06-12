@@ -228,6 +228,7 @@ fn compress_command_writes_parseable_pdf() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
+            "pdf-edit",
             "compress",
             fixture_pdf().to_str().unwrap(),
             "-o",
@@ -251,6 +252,7 @@ fn compress_command_accepts_explicit_lossy_options() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
+            "pdf-edit",
             "compress",
             input.to_str().unwrap(),
             "-o",
