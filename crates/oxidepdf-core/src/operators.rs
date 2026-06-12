@@ -20,8 +20,8 @@ use crate::{
     ImageToPdfOptions, InteractiveRemovalOptions, MergeOptions, MetadataEditOptions,
     MetadataInspectOptions, NUpOptions, OutlineEditOptions, OutlineInspectOptions, OverlayOptions,
     OxideError, PageNumbersOptions, PageSelectionOptions, PdfCompareOptions, PdfSecurityOptions,
-    RenderOptions, ReorderOptions, RotateOptions, ScalePagesOptions, SignatureOptions,
-    SinglePageOptions, SplitOptions, SvgToPdfOptions, WatermarkOptions,
+    RenderOptions, ReorderOptions, RotateOptions, ScalePagesOptions, SignatureMode,
+    SignatureOptions, SinglePageOptions, SplitOptions, SvgToPdfOptions, WatermarkOptions,
 };
 use serde::{Deserialize, Serialize};
 
@@ -525,6 +525,8 @@ impl From<PdfInspectOptions> for PdfInspectOptionsDef {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "PdfSignOptionsDef", into = "PdfSignOptionsDef")]
 pub enum PdfSignOptions {
+    /// List PDF signatures without trust validation.
+    List(SignatureOptions),
     /// Verify PDF signatures and certificate material.
     Verify(SignatureOptions),
 }
@@ -532,6 +534,7 @@ pub enum PdfSignOptions {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct PdfSignOptionsDef {
+    list: Option<SignatureOptions>,
     verify: Option<SignatureOptions>,
 }
 
@@ -539,21 +542,39 @@ impl TryFrom<PdfSignOptionsDef> for PdfSignOptions {
     type Error = OxideError;
 
     fn try_from(value: PdfSignOptionsDef) -> Result<Self, Self::Error> {
+        let operation_count = [value.list.is_some(), value.verify.is_some()]
+            .into_iter()
+            .filter(|present| *present)
+            .count();
+
+        if operation_count != 1 {
+            return Err(OxideError::InvalidWorkflow {
+                reason: "pdf_sign must contain exactly one operation".to_owned(),
+            });
+        }
+
+        if let Some(mut options) = value.list {
+            options.mode = SignatureMode::List;
+            return Ok(Self::List(options));
+        }
         if let Some(options) = value.verify {
             return Ok(Self::Verify(options));
         }
 
-        Err(OxideError::InvalidWorkflow {
-            reason: "pdf_sign must contain exactly one operation".to_owned(),
-        })
+        unreachable!("operation count was already checked");
     }
 }
 
 impl From<PdfSignOptions> for PdfSignOptionsDef {
     fn from(value: PdfSignOptions) -> Self {
         match value {
+            PdfSignOptions::List(options) => Self {
+                list: Some(options),
+                ..Self::default()
+            },
             PdfSignOptions::Verify(options) => Self {
                 verify: Some(options),
+                ..Self::default()
             },
         }
     }
@@ -768,6 +789,10 @@ pub(crate) fn run_pdf_sign(
     limits: &ResourceLimits,
 ) -> Result<Artifact, OxideError> {
     match options {
+        PdfSignOptions::List(options) => {
+            let input = single_pdf_input(inputs)?;
+            verify_pdf_signatures(input, options, limits).map(Artifact::Text)
+        }
         PdfSignOptions::Verify(options) => {
             let input = single_pdf_input(inputs)?;
             verify_pdf_signatures(input, options, limits).map(Artifact::Text)

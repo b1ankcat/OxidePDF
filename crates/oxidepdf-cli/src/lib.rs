@@ -55,6 +55,9 @@ enum Commands {
     #[command(name = "pdf-sign")]
     #[command(subcommand)]
     PdfSign(PdfSignCommand),
+    /// List or verify PDF digital signatures.
+    #[command(subcommand)]
+    Sign(SignCommand),
     /// Inspect, set, delete, or validate document metadata.
     #[command(subcommand)]
     Metadata(MetadataCommand),
@@ -163,6 +166,14 @@ enum PdfInspectCommand {
 
 #[derive(Debug, Subcommand)]
 enum PdfSignCommand {
+    /// Verify PDF signatures and certificates.
+    Verify(VerifySignaturesArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum SignCommand {
+    /// List PDF signatures.
+    List(ListSignaturesArgs),
     /// Verify PDF signatures and certificates.
     Verify(VerifySignaturesArgs),
 }
@@ -688,7 +699,21 @@ struct VerifySignaturesArgs {
 
     /// PEM file containing explicit trust anchors.
     #[arg(long)]
-    trust_anchors: PathBuf,
+    trust_anchors: Option<PathBuf>,
+
+    /// Output report file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct ListSignaturesArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
 
     /// Output report file, or `-` to write to stdout.
     #[arg(short, long)]
@@ -1304,6 +1329,7 @@ fn cli_reads_stdin(cli: &Cli) -> bool {
         Some(Commands::PdfInspect(command)) => pdf_inspect_reads_stdin(command),
         Some(Commands::Compare(args)) => is_stdio(&args.left) || is_stdio(&args.right),
         Some(Commands::PdfSign(command)) => pdf_sign_reads_stdin(command),
+        Some(Commands::Sign(command)) => sign_reads_stdin(command),
         Some(Commands::Metadata(command)) => metadata_reads_stdin(command),
         Some(Commands::Outline(command)) => outline_reads_stdin(command),
         Some(Commands::Attach(command)) => attach_reads_stdin(command),
@@ -1357,6 +1383,13 @@ fn pdf_inspect_reads_stdin(command: &PdfInspectCommand) -> bool {
 fn pdf_sign_reads_stdin(command: &PdfSignCommand) -> bool {
     match command {
         PdfSignCommand::Verify(args) => is_stdio(&args.input),
+    }
+}
+
+fn sign_reads_stdin(command: &SignCommand) -> bool {
+    match command {
+        SignCommand::List(args) => is_stdio(&args.input),
+        SignCommand::Verify(args) => is_stdio(&args.input),
     }
 }
 
@@ -1444,6 +1477,7 @@ where
         Some(Commands::PdfInspect(command)) => run_pdf_inspect(command, stdin, stdout),
         Some(Commands::Compare(args)) => run_compare(args, stdin, stdout),
         Some(Commands::PdfSign(command)) => run_pdf_sign(command, stdin, stdout),
+        Some(Commands::Sign(command)) => run_sign(command, stdin, stdout),
         Some(Commands::Metadata(command)) => run_metadata(command, stdin, stdout),
         Some(Commands::Outline(command)) => run_outline(command, stdin, stdout),
         Some(Commands::Attach(command)) => run_attach(command, stdin, stdout),
@@ -1513,6 +1547,13 @@ fn run_pdf_sign(
 ) -> Result<(), CliError> {
     match command {
         PdfSignCommand::Verify(args) => run_verify_signatures(args, stdin, stdout),
+    }
+}
+
+fn run_sign(command: SignCommand, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError> {
+    match command {
+        SignCommand::List(args) => run_list_signatures(args, stdin, stdout),
+        SignCommand::Verify(args) => run_verify_signatures(args, stdin, stdout),
     }
 }
 
@@ -1918,7 +1959,25 @@ fn run_verify_signatures(
         "verify_signature",
         OperatorSpec::PdfSign(PdfSignOptions::Verify(SignatureOptions {
             mode: Default::default(),
-            trust_anchors: Some(args.trust_anchors),
+            trust_anchors: args.trust_anchors,
+        })),
+    );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_list_signatures(
+    args: ListSignaturesArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "list_signatures",
+        OperatorSpec::PdfSign(PdfSignOptions::List(SignatureOptions {
+            mode: oxidepdf_core::SignatureMode::List,
+            trust_anchors: None,
         })),
     );
 
@@ -4042,7 +4101,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-sign",
+                "sign",
                 "verify",
                 input.to_str().unwrap(),
                 "--trust-anchors",
@@ -4060,7 +4119,7 @@ mod tests {
         assert_eq!(stderr, b"");
         let report: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(output).unwrap()).unwrap();
-        assert_eq!(report["verdict"], "unsupported");
+        assert_eq!(report["verdict"], "invalid");
         assert_eq!(report["trust_anchor_count"], 1);
         assert_eq!(report["signatures"][0]["field_name"], "Approval");
         assert_eq!(
@@ -4070,18 +4129,19 @@ mod tests {
     }
 
     #[test]
-    fn verify_signatures_command_requires_trust_anchors() {
-        let dir = temp_dir("verify_signatures_command_requires_trust_anchors");
-        let output = dir.join("signature-report.json");
+    fn sign_list_command_writes_json_report_without_trust_anchors() {
+        let dir = temp_dir("sign_list_command_writes_json_report");
+        let input = write_signature_pdf(&dir);
+        let output = dir.join("signature-list.json");
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-sign",
-                "verify",
-                fixture_signature_pdf().to_str().unwrap(),
+                "sign",
+                "list",
+                input.to_str().unwrap(),
                 "-o",
                 output.to_str().unwrap(),
             ],
@@ -4089,12 +4149,45 @@ mod tests {
             &mut stdout,
             &mut stderr,
         );
-        let stderr = String::from_utf8(stderr).unwrap();
 
-        assert_eq!(code, 2);
+        assert_eq!(code, 0);
         assert_eq!(stdout, b"");
-        assert!(!output.exists());
-        assert!(stderr.contains("--trust-anchors"));
+        assert_eq!(stderr, b"");
+        let report: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(output).unwrap()).unwrap();
+        assert_eq!(report["signatures"][0]["field_name"], "Approval");
+        assert_eq!(report["signatures"][0]["subfilter"], "adbe.pkcs7.detached");
+    }
+
+    #[test]
+    fn verify_signatures_command_without_trust_anchors_is_not_trusted() {
+        let dir = temp_dir("verify_signatures_command_without_trust_anchors");
+        let input = write_signature_pdf(&dir);
+        let output = dir.join("signature-report.json");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "sign",
+                "verify",
+                input.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        let report: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(output).unwrap()).unwrap();
+        assert_ne!(report["verdict"], "trusted");
+        assert_eq!(report["trust_anchor_count"], 0);
     }
 
     #[test]
@@ -4824,13 +4917,14 @@ mod tests {
         assert_eq!(stderr, b"");
         let report: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(output).unwrap()).unwrap();
-        assert_eq!(report["verdict"], "unsupported");
+        assert_eq!(report["verdict"], "invalid");
         assert_eq!(report["trust_anchor_count"], 1);
     }
 
     #[test]
-    fn workflow_signature_operator_without_trust_anchors_fails_with_invalid_input() {
-        let dir = temp_dir("workflow_signature_operator_without_trust_anchors_fails");
+    fn workflow_signature_operator_without_trust_anchors_is_not_trusted() {
+        let dir = temp_dir("workflow_signature_operator_without_trust_anchors");
+        let input = write_signature_pdf(&dir);
         let workflow = dir.join("workflow.yaml");
         let output = dir.join("signature-report.json");
         fs::write(
@@ -4853,7 +4947,7 @@ mod tests {
                     from: verify
                     path: {}
                 "#,
-                yaml_path(fixture_signature_pdf()),
+                yaml_path(&input),
                 yaml_path(&output)
             ),
         )
@@ -4869,11 +4963,13 @@ mod tests {
         );
         let stderr = String::from_utf8(stderr).unwrap();
 
-        assert_eq!(code, 3);
+        assert_eq!(code, 0);
         assert_eq!(stdout, b"");
-        assert!(!output.exists());
-        assert!(stderr.contains("invalid_input"));
-        assert!(stderr.contains("signature verification requires explicit trust anchors"));
+        assert_eq!(stderr, "");
+        let report: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(output).unwrap()).unwrap();
+        assert_ne!(report["verdict"], "trusted");
+        assert_eq!(report["trust_anchor_count"], 0);
     }
 
     #[test]

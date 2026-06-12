@@ -93,8 +93,9 @@ pub use security::{
 pub use signatures::{
     inspect_pdf_signature_markers_for_research, verify_pdf_signatures, ByteRangeResearch,
     ByteRangeVerification, ContentsVerification, SignatureCheckState, SignatureCheckStatus,
-    SignatureDiagnostic, SignatureEntryReport, SignatureMode, SignatureOptions,
-    SignatureResearchReport, SignatureVerdict, SignatureVerificationReport,
+    SignatureDiagnostic, SignatureEntryReport, SignatureListEntry, SignatureListReport,
+    SignatureMode, SignatureOptions, SignatureResearchReport, SignatureVerdict,
+    SignatureVerificationReport,
 };
 
 #[cfg(test)]

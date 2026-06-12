@@ -157,6 +157,38 @@ fn parses_signature_workflow_operator_schema() {
 }
 
 #[test]
+fn parses_signature_list_workflow_operator_schema() {
+    let workflow: Workflow = serde_yaml::from_str(
+        r#"
+            version: 1
+            inputs:
+              - id: source
+                path: ./signed.pdf
+            tasks:
+              - id: list
+                op:
+                  pdf_sign:
+                    list:
+                      mode: list
+                inputs: [source]
+            outputs:
+              - id: final
+                from: list
+                path: ./report.json
+            "#,
+    )
+    .unwrap();
+
+    assert!(matches!(
+        workflow.tasks[0].op,
+        OperatorSpec::PdfSign(PdfSignOptions::List(SignatureOptions {
+            mode: SignatureMode::List,
+            trust_anchors: None,
+        }))
+    ));
+}
+
+#[test]
 fn parses_compare_workflow_operator_schema() {
     let workflow: Workflow = serde_yaml::from_str(
         r#"
@@ -2137,7 +2169,7 @@ fn pdf_operator_runner_emits_signature_verification_report() {
     };
     let report: SignatureVerificationReport = serde_json::from_str(&report_text.text).unwrap();
     assert_eq!(report.trust_anchor_count, 1);
-    assert_eq!(report.verdict, SignatureVerdict::Unsupported);
+    assert_eq!(report.verdict, SignatureVerdict::Invalid);
     assert_eq!(report.signatures.len(), 1);
     assert_eq!(report.signatures[0].field_name.as_deref(), Some("Approval"));
     assert_eq!(
@@ -2153,7 +2185,7 @@ fn pdf_operator_runner_emits_signature_verification_report() {
     assert_eq!(report.signatures[0].byte_range.gap_len, Some(128));
     assert_eq!(
         report.signatures[0].cms_status.status,
-        SignatureCheckState::Unsupported
+        SignatureCheckState::Failed
     );
     assert_eq!(
         report.signatures[0].revocation_status.status,
@@ -2162,22 +2194,59 @@ fn pdf_operator_runner_emits_signature_verification_report() {
 }
 
 #[test]
-fn verify_pdf_signatures_requires_explicit_trust_anchors() {
-    let pdf = include_bytes!("../../../tests/fixtures/signature-placeholder.pdf");
+fn pdf_operator_runner_emits_signature_list_report_without_trust_anchors() {
+    let pdf = pdf_with_signature_dictionary(vec![0, 64, 192, 64], vec![0x30, 0x82]);
+    let mut runner = PdfOperatorRunner::default();
 
-    let err = verify_pdf_signatures(
-        pdf,
+    let artifact = runner
+        .run(
+            &TaskSpec {
+                id: TaskId::new("list"),
+                op: OperatorSpec::PdfSign(PdfSignOptions::List(SignatureOptions {
+                    mode: SignatureMode::List,
+                    trust_anchors: None,
+                })),
+                inputs: vec![artifact_ref("source")],
+            },
+            &[Artifact::pdf(&pdf)],
+        )
+        .unwrap();
+
+    let Artifact::Text(report_text) = artifact else {
+        panic!("signature list should emit a text JSON report");
+    };
+    let report: SignatureListReport = serde_json::from_str(&report_text.text).unwrap();
+    assert_eq!(report.signatures.len(), 1);
+    assert_eq!(report.signatures[0].field_name.as_deref(), Some("Approval"));
+    assert_eq!(
+        report.signatures[0].subfilter.as_deref(),
+        Some("adbe.pkcs7.detached")
+    );
+    assert_eq!(
+        report.signatures[0].byte_range.values,
+        Some([0, 64, 192, 64])
+    );
+    assert!(report.diagnostics.is_empty());
+}
+
+#[test]
+fn verify_pdf_signatures_without_trust_anchors_is_indeterminate_not_trusted() {
+    let pdf = pdf_with_signature_dictionary(vec![0, 64, 192, 64], vec![0x30, 0x82]);
+
+    let report = verify_pdf_signatures(
+        &pdf,
         &SignatureOptions::default(),
         &ResourceLimits::default(),
     )
-    .unwrap_err();
+    .unwrap();
+    let report: SignatureVerificationReport = serde_json::from_str(&report.text).unwrap();
 
-    assert_eq!(
-        err,
-        OxideError::InvalidInput {
-            reason: "signature verification requires explicit trust anchors".to_owned()
-        }
-    );
+    assert_ne!(report.verdict, SignatureVerdict::Trusted);
+    assert_eq!(report.trust_anchor_count, 0);
+    assert!(report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "trust_anchors_missing"));
 }
 
 #[test]
@@ -2271,6 +2340,34 @@ fn verify_pdf_signatures_reports_malformed_byte_range_as_invalid() {
         .diagnostics
         .iter()
         .any(|diagnostic| diagnostic.code == "byte_range_not_ordered"));
+}
+
+#[test]
+fn verify_pdf_signatures_reports_unknown_subfilter_as_unsupported() {
+    let pdf = pdf_with_signature_dictionary_and_subfilter(
+        vec![0, 64, 192, 64],
+        vec![0x30, 0x82],
+        "adbe.x509.rsa_sha1",
+    );
+    let trust_anchors = write_test_trust_anchors("unknown_subfilter_report");
+
+    let report = verify_pdf_signatures(
+        &pdf,
+        &SignatureOptions {
+            mode: SignatureMode::Verify,
+            trust_anchors: Some(trust_anchors),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let report: SignatureVerificationReport = serde_json::from_str(&report.text).unwrap();
+
+    assert_eq!(report.verdict, SignatureVerdict::Unsupported);
+    assert_eq!(report.signatures.len(), 1);
+    assert!(report.signatures[0]
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "unsupported_subfilter"));
 }
 
 #[test]
@@ -2931,6 +3028,14 @@ fn encrypted_pdf_with_revision(revision: i64) -> Vec<u8> {
 }
 
 fn pdf_with_signature_dictionary(byte_range: Vec<i64>, contents: Vec<u8>) -> Vec<u8> {
+    pdf_with_signature_dictionary_and_subfilter(byte_range, contents, "adbe.pkcs7.detached")
+}
+
+fn pdf_with_signature_dictionary_and_subfilter(
+    byte_range: Vec<i64>,
+    contents: Vec<u8>,
+    subfilter: &str,
+) -> Vec<u8> {
     let mut document = lopdf::Document::with_version("1.7");
     let pages_id = document.new_object_id();
     let page_id = document.new_object_id();
@@ -2946,7 +3051,7 @@ fn pdf_with_signature_dictionary(byte_range: Vec<i64>, contents: Vec<u8>) -> Vec
     let sig_value = lopdf::dictionary! {
         "Type" => "Sig",
         "Filter" => "Adobe.PPKLite",
-        "SubFilter" => "adbe.pkcs7.detached",
+        "SubFilter" => subfilter,
         "ByteRange" => lopdf::Object::Array(byte_range),
         "Contents" => lopdf::Object::String(contents, lopdf::StringFormat::Hexadecimal),
     };
