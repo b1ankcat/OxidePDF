@@ -2,6 +2,7 @@
 #![doc = "Core contracts and shared logic for OxidePDF."]
 
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -91,7 +92,7 @@ pub struct TaskSpec {
 }
 
 /// Task identifier.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct TaskId(String);
 
@@ -103,7 +104,7 @@ impl TaskId {
 }
 
 /// Input, task, or output artifact reference.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ArtifactRef(String);
 
@@ -379,7 +380,7 @@ pub struct RenderOptions {
 }
 
 /// Structured core error.
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum OxideError {
     /// Workflow is invalid.
     #[error("invalid workflow: {reason}")]
@@ -460,6 +461,311 @@ impl OxideError {
             Self::Io => "io",
             Self::Internal => "internal",
         }
+    }
+}
+
+/// Artifact produced or consumed by workflow tasks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Artifact {
+    /// PDF artifact placeholder.
+    Pdf(PdfArtifact),
+    /// Image artifact placeholder.
+    Image(ImageArtifact),
+    /// Text artifact.
+    Text(TextArtifact),
+    /// SVG artifact.
+    Svg(SvgArtifact),
+    /// Raw bytes.
+    Bytes(BytesArtifact),
+}
+
+impl Artifact {
+    /// Creates a raw byte artifact.
+    pub fn bytes(bytes: impl AsRef<[u8]>) -> Self {
+        Self::Bytes(BytesArtifact {
+            bytes: bytes.as_ref().to_vec(),
+        })
+    }
+}
+
+/// PDF artifact placeholder for later operators.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PdfArtifact {
+    /// Serialized bytes until object-level artifacts are added.
+    pub bytes: Vec<u8>,
+}
+
+/// Image artifact placeholder for later operators.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageArtifact {
+    /// Encoded image bytes.
+    pub bytes: Vec<u8>,
+}
+
+/// Text artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextArtifact {
+    /// Extracted or generated text.
+    pub text: String,
+}
+
+/// SVG artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SvgArtifact {
+    /// SVG document bytes.
+    pub bytes: Vec<u8>,
+}
+
+/// Byte artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BytesArtifact {
+    /// Raw bytes.
+    pub bytes: Vec<u8>,
+}
+
+/// In-memory artifact store used by the serial executor.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ArtifactStore {
+    artifacts: BTreeMap<ArtifactRef, Artifact>,
+}
+
+impl ArtifactStore {
+    /// Creates an empty store.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Inserts or replaces an artifact.
+    pub fn insert(&mut self, id: ArtifactRef, artifact: Artifact) -> Option<Artifact> {
+        self.artifacts.insert(id, artifact)
+    }
+
+    /// Returns an artifact by id.
+    pub fn get(&self, id: &ArtifactRef) -> Option<&Artifact> {
+        self.artifacts.get(id)
+    }
+}
+
+/// Validated workflow execution plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionPlan {
+    /// Task ids in topological execution order.
+    pub task_order: Vec<TaskId>,
+}
+
+/// Result of a successful workflow execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionResult {
+    /// Validated execution plan used for this run.
+    pub plan: ExecutionPlan,
+    /// Artifact store containing inputs and task outputs.
+    pub store: ArtifactStore,
+}
+
+/// Operator implementation boundary used by the serial executor.
+pub trait OperatorRunner {
+    /// Runs a task against resolved input artifacts.
+    fn run(&mut self, task: &TaskSpec, inputs: &[Artifact]) -> Result<Artifact, OxideError>;
+}
+
+/// Validates a workflow and returns a topological execution plan.
+pub fn validate_workflow(workflow: &Workflow) -> Result<ExecutionPlan, OxideError> {
+    check_resource_limit_entrypoint(&workflow.limits)?;
+    let ids = collect_ids(workflow)?;
+    validate_task_references(workflow, &ids)?;
+    validate_output_references(workflow, &ids)?;
+    let task_order = topological_sort(workflow)?;
+
+    Ok(ExecutionPlan { task_order })
+}
+
+/// Executes a workflow serially.
+pub fn execute_workflow(
+    workflow: &Workflow,
+    mut store: ArtifactStore,
+    runner: &mut impl OperatorRunner,
+) -> Result<ExecutionResult, OxideError> {
+    let plan = validate_workflow(workflow)?;
+    let tasks_by_id = workflow
+        .tasks
+        .iter()
+        .map(|task| (task.id.clone(), task))
+        .collect::<BTreeMap<_, _>>();
+
+    for task_id in &plan.task_order {
+        let task = tasks_by_id.get(task_id).ok_or_else(|| {
+            invalid_workflow(format!(
+                "task '{}' disappeared after validation",
+                task_id.as_str()
+            ))
+        })?;
+        let inputs = task
+            .inputs
+            .iter()
+            .map(|input| {
+                store.get(input).cloned().ok_or_else(|| {
+                    invalid_workflow(format!(
+                        "artifact '{}' is missing at execution time",
+                        input.as_str()
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let artifact = runner.run(task, &inputs)?;
+        store.insert(ArtifactRef(task.id.as_str().to_owned()), artifact);
+    }
+
+    Ok(ExecutionResult { plan, store })
+}
+
+fn collect_ids(workflow: &Workflow) -> Result<BTreeSet<ArtifactRef>, OxideError> {
+    let mut ids = BTreeSet::new();
+    for input in &workflow.inputs {
+        insert_unique_id(&mut ids, &input.id)?;
+    }
+    for task in &workflow.tasks {
+        insert_unique_id(&mut ids, &ArtifactRef(task.id.as_str().to_owned()))?;
+    }
+    for output in &workflow.outputs {
+        insert_unique_id(&mut ids, &output.id)?;
+    }
+
+    Ok(ids)
+}
+
+fn insert_unique_id(ids: &mut BTreeSet<ArtifactRef>, id: &ArtifactRef) -> Result<(), OxideError> {
+    if id.as_str().is_empty() {
+        return Err(invalid_workflow("artifact id must not be empty"));
+    }
+    if !ids.insert(id.clone()) {
+        return Err(invalid_workflow(format!(
+            "duplicate artifact id '{}'",
+            id.as_str()
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_task_references(
+    workflow: &Workflow,
+    ids: &BTreeSet<ArtifactRef>,
+) -> Result<(), OxideError> {
+    for task in &workflow.tasks {
+        if task.inputs.is_empty() {
+            return Err(invalid_workflow(format!(
+                "task '{}' must declare at least one input",
+                task.id.as_str()
+            )));
+        }
+        for input in &task.inputs {
+            if !ids.contains(input) {
+                return Err(invalid_workflow(format!(
+                    "task '{}' references missing artifact '{}'",
+                    task.id.as_str(),
+                    input.as_str()
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_output_references(
+    workflow: &Workflow,
+    ids: &BTreeSet<ArtifactRef>,
+) -> Result<(), OxideError> {
+    for output in &workflow.outputs {
+        if !ids.contains(&output.from) {
+            return Err(invalid_workflow(format!(
+                "output '{}' references missing artifact '{}'",
+                output.id.as_str(),
+                output.from.as_str()
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn topological_sort(workflow: &Workflow) -> Result<Vec<TaskId>, OxideError> {
+    let task_ids = workflow
+        .tasks
+        .iter()
+        .map(|task| task.id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut incoming_count = workflow
+        .tasks
+        .iter()
+        .map(|task| (task.id.clone(), 0usize))
+        .collect::<BTreeMap<_, _>>();
+    let mut dependents = BTreeMap::<TaskId, Vec<TaskId>>::new();
+
+    for task in &workflow.tasks {
+        for input in &task.inputs {
+            let dependency = TaskId(input.as_str().to_owned());
+            if task_ids.contains(&dependency) {
+                *incoming_count.get_mut(&task.id).ok_or_else(|| {
+                    invalid_workflow(format!("task '{}' is missing", task.id.as_str()))
+                })? += 1;
+                dependents
+                    .entry(dependency)
+                    .or_default()
+                    .push(task.id.clone());
+            }
+        }
+    }
+
+    let mut ready = incoming_count
+        .iter()
+        .filter_map(|(id, count)| (*count == 0).then_some(id.clone()))
+        .collect::<VecDeque<_>>();
+    let mut task_order = Vec::with_capacity(workflow.tasks.len());
+
+    while let Some(task_id) = ready.pop_front() {
+        task_order.push(task_id.clone());
+        if let Some(children) = dependents.get(&task_id) {
+            for child in children {
+                let child_count = incoming_count.get_mut(child).ok_or_else(|| {
+                    invalid_workflow(format!("task '{}' is missing", child.as_str()))
+                })?;
+                *child_count -= 1;
+                if *child_count == 0 {
+                    ready.push_back(child.clone());
+                }
+            }
+        }
+    }
+
+    if task_order.len() != workflow.tasks.len() {
+        return Err(invalid_workflow("workflow task graph contains a cycle"));
+    }
+
+    Ok(task_order)
+}
+
+fn check_resource_limit_entrypoint(limits: &ResourceLimits) -> Result<(), OxideError> {
+    let numeric_limits = [
+        limits.max_input_bytes,
+        limits.max_total_input_bytes,
+        limits.max_pixels,
+        limits.max_output_bytes,
+        limits.timeout_ms,
+    ];
+
+    if numeric_limits.into_iter().flatten().any(|limit| limit == 0) || limits.max_pages == Some(0) {
+        return Err(OxideError::ResourceLimitExceeded {
+            limit: "resource limit must be greater than zero".to_owned(),
+        });
+    }
+
+    Ok(())
+}
+
+fn invalid_workflow(reason: impl Into<String>) -> OxideError {
+    OxideError::InvalidWorkflow {
+        reason: reason.into(),
     }
 }
 
@@ -621,5 +927,239 @@ mod tests {
             .code(),
             "resource_limit_exceeded"
         );
+    }
+
+    #[test]
+    fn linear_workflow_executes_tasks_in_dependency_order() {
+        let workflow = workflow_from_json(
+            r#"
+            {
+              "version": 1,
+              "inputs": [{ "id": "source", "path": "input.pdf" }],
+              "tasks": [
+                {
+                  "id": "rotate",
+                  "op": { "rotate": { "pages": "1", "degrees": 90 } },
+                  "inputs": ["source"]
+                },
+                {
+                  "id": "render",
+                  "op": { "render": { "page": 1, "format": "png", "scale": 1.0 } },
+                  "inputs": ["rotate"]
+                }
+              ],
+              "outputs": [{ "id": "final", "from": "render", "path": "out.png" }]
+            }
+            "#,
+        );
+        let mut store = ArtifactStore::new();
+        store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
+        let mut runner = RecordingRunner::default();
+
+        let result = execute_workflow(&workflow, store, &mut runner).unwrap();
+
+        assert_eq!(runner.executed, ["rotate", "render"]);
+        assert_eq!(
+            result.store.get(&artifact_ref("render")),
+            Some(&Artifact::bytes(b"render"))
+        );
+        assert_eq!(result.plan.task_order[0].as_str(), "rotate");
+        assert_eq!(result.plan.task_order[1].as_str(), "render");
+    }
+
+    #[test]
+    fn dag_workflow_topologically_sorts_before_execution() {
+        let workflow = workflow_from_json(
+            r#"
+            {
+              "version": 1,
+              "inputs": [{ "id": "source", "path": "input.pdf" }],
+              "tasks": [
+                {
+                  "id": "left",
+                  "op": { "rotate": { "pages": "1", "degrees": 90 } },
+                  "inputs": ["source"]
+                },
+                {
+                  "id": "right",
+                  "op": { "rotate": { "pages": "1", "degrees": 180 } },
+                  "inputs": ["source"]
+                },
+                {
+                  "id": "join",
+                  "op": { "merge": {} },
+                  "inputs": ["left", "right"]
+                }
+              ],
+              "outputs": [{ "id": "final", "from": "join", "path": "out.pdf" }]
+            }
+            "#,
+        );
+
+        let plan = validate_workflow(&workflow).unwrap();
+        let left = plan
+            .task_order
+            .iter()
+            .position(|id| id.as_str() == "left")
+            .unwrap();
+        let right = plan
+            .task_order
+            .iter()
+            .position(|id| id.as_str() == "right")
+            .unwrap();
+        let join = plan
+            .task_order
+            .iter()
+            .position(|id| id.as_str() == "join")
+            .unwrap();
+
+        assert!(left < join);
+        assert!(right < join);
+    }
+
+    #[test]
+    fn cyclic_workflow_fails_validation() {
+        let workflow = workflow_from_json(
+            r#"
+            {
+              "version": 1,
+              "inputs": [],
+              "tasks": [
+                {
+                  "id": "a",
+                  "op": { "merge": {} },
+                  "inputs": ["b"]
+                },
+                {
+                  "id": "b",
+                  "op": { "merge": {} },
+                  "inputs": ["a"]
+                }
+              ],
+              "outputs": [{ "id": "final", "from": "b", "path": "out.pdf" }]
+            }
+            "#,
+        );
+
+        let err = validate_workflow(&workflow).unwrap_err();
+
+        assert!(matches!(err, OxideError::InvalidWorkflow { .. }));
+        assert!(err.to_string().contains("cycle"));
+    }
+
+    #[test]
+    fn missing_artifact_reference_fails_validation() {
+        let workflow = workflow_from_json(
+            r#"
+            {
+              "version": 1,
+              "inputs": [{ "id": "source", "path": "input.pdf" }],
+              "tasks": [
+                {
+                  "id": "rotate",
+                  "op": { "rotate": { "pages": "1", "degrees": 90 } },
+                  "inputs": ["missing"]
+                }
+              ],
+              "outputs": [{ "id": "final", "from": "rotate", "path": "out.pdf" }]
+            }
+            "#,
+        );
+
+        let err = validate_workflow(&workflow).unwrap_err();
+
+        assert!(matches!(err, OxideError::InvalidWorkflow { .. }));
+        assert!(err.to_string().contains("missing"));
+    }
+
+    #[test]
+    fn duplicate_artifact_identifiers_fail_validation() {
+        let workflow = workflow_from_json(
+            r#"
+            {
+              "version": 1,
+              "inputs": [{ "id": "source", "path": "input.pdf" }],
+              "tasks": [
+                {
+                  "id": "source",
+                  "op": { "rotate": { "pages": "1", "degrees": 90 } },
+                  "inputs": ["source"]
+                }
+              ],
+              "outputs": [{ "id": "final", "from": "source", "path": "out.pdf" }]
+            }
+            "#,
+        );
+
+        let err = validate_workflow(&workflow).unwrap_err();
+
+        assert!(matches!(err, OxideError::InvalidWorkflow { .. }));
+        assert!(err.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn task_failure_stops_downstream_execution() {
+        let workflow = workflow_from_json(
+            r#"
+            {
+              "version": 1,
+              "inputs": [{ "id": "source", "path": "input.pdf" }],
+              "tasks": [
+                {
+                  "id": "fail",
+                  "op": { "rotate": { "pages": "1", "degrees": 90 } },
+                  "inputs": ["source"]
+                },
+                {
+                  "id": "after",
+                  "op": { "render": { "page": 1, "format": "png", "scale": 1.0 } },
+                  "inputs": ["fail"]
+                }
+              ],
+              "outputs": [{ "id": "final", "from": "after", "path": "out.png" }]
+            }
+            "#,
+        );
+        let mut store = ArtifactStore::new();
+        store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
+        let expected = OxideError::InvalidInput {
+            reason: "runner failed".to_owned(),
+        };
+        let mut runner = RecordingRunner {
+            fail_on: Some("fail"),
+            error: Some(expected.clone()),
+            ..RecordingRunner::default()
+        };
+
+        let err = execute_workflow(&workflow, store, &mut runner).unwrap_err();
+
+        assert_eq!(err, expected);
+        assert_eq!(runner.executed, ["fail"]);
+    }
+
+    fn workflow_from_json(json: &str) -> Workflow {
+        serde_json::from_str(json).unwrap()
+    }
+
+    fn artifact_ref(value: &str) -> ArtifactRef {
+        serde_json::from_str(&format!("{value:?}")).unwrap()
+    }
+
+    #[derive(Default)]
+    struct RecordingRunner {
+        executed: Vec<String>,
+        fail_on: Option<&'static str>,
+        error: Option<OxideError>,
+    }
+
+    impl OperatorRunner for RecordingRunner {
+        fn run(&mut self, task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
+            self.executed.push(task.id.as_str().to_owned());
+            if self.fail_on == Some(task.id.as_str()) {
+                return Err(self.error.take().unwrap());
+            }
+
+            Ok(Artifact::bytes(task.id.as_str().as_bytes()))
+        }
     }
 }
