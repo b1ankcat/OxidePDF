@@ -597,6 +597,35 @@ fn watermark_text_command_writes_parseable_pdf() {
 }
 
 #[test]
+fn sign_appearance_command_writes_parseable_pdf() {
+    let dir = temp_dir("sign_appearance_command_writes_parseable_pdf");
+    let output = dir.join("signature-appearance.pdf");
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args([
+            "sign",
+            "appearance",
+            fixture_pdf().to_str().unwrap(),
+            "--text",
+            "SIGNED",
+            "--font",
+            "Helvetica",
+            "--pages",
+            "1",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq(""))
+        .stderr(predicate::eq(""));
+
+    assert_eq!(pdf_page_count(&output), 3);
+    assert!(page_has_content_operator(&output, 1, "Tj"));
+}
+
+#[test]
 fn workflow_watermark_image_writes_parseable_pdf() {
     let dir = temp_dir("workflow_watermark_image_writes_parseable_pdf");
     let output = dir.join("watermarked.pdf");

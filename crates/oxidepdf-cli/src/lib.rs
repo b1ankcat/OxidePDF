@@ -80,9 +80,6 @@ enum Commands {
     Interactive(InteractiveCommand),
     /// Add a text stamp to a PDF.
     Stamp(StampArgs),
-    /// Add visual signature appearance only.
-    #[command(name = "signature-appearance")]
-    SignatureAppearance(SignatureAppearanceArgs),
     /// Overlay one PDF page onto another PDF.
     #[command(name = "overlay-pdf")]
     OverlayPdf(OverlayPdfArgs),
@@ -173,6 +170,8 @@ enum SignCommand {
     /// Delete a PDF signature field.
     #[command(name = "delete-field")]
     DeleteField(SignDeleteFieldArgs),
+    /// Add visual signature appearance only.
+    Appearance(SignatureAppearanceArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -1418,7 +1417,6 @@ fn cli_reads_stdin(cli: &Cli) -> bool {
         Some(Commands::Form(command)) => form_reads_stdin(command),
         Some(Commands::Interactive(command)) => interactive_reads_stdin(command),
         Some(Commands::Stamp(args)) => is_stdio(&args.input),
-        Some(Commands::SignatureAppearance(args)) => is_stdio(&args.input),
         Some(Commands::OverlayPdf(args)) => is_stdio(&args.input) || is_stdio(&args.overlay),
         Some(Commands::Image(command)) => image_reads_stdin(command),
         Some(Commands::Color(command)) => color_reads_stdin(command),
@@ -1466,6 +1464,7 @@ fn sign_reads_stdin(command: &SignCommand) -> bool {
         SignCommand::List(args) => is_stdio(&args.input),
         SignCommand::Verify(args) => is_stdio(&args.input),
         SignCommand::DeleteField(args) => is_stdio(&args.input),
+        SignCommand::Appearance(args) => is_stdio(&args.input),
     }
 }
 
@@ -1567,7 +1566,6 @@ where
         Some(Commands::Form(command)) => run_form(command, stdin, stdout),
         Some(Commands::Interactive(command)) => run_interactive(command, stdin, stdout),
         Some(Commands::Stamp(args)) => run_stamp(args, stdin, stdout),
-        Some(Commands::SignatureAppearance(args)) => run_signature_appearance(args, stdin, stdout),
         Some(Commands::OverlayPdf(args)) => run_overlay_pdf(args, stdin, stdout),
         Some(Commands::Image(command)) => run_image(command, stdin, stdout),
         Some(Commands::Color(command)) => run_color(command, stdin, stdout),
@@ -1627,6 +1625,7 @@ fn run_sign(command: SignCommand, stdin: &[u8], stdout: &mut impl Write) -> Resu
         SignCommand::List(args) => run_list_signatures(args, stdin, stdout),
         SignCommand::Verify(args) => run_verify_signatures(args, stdin, stdout),
         SignCommand::DeleteField(args) => run_delete_signature_field(args, stdin, stdout),
+        SignCommand::Appearance(args) => run_signature_appearance(args, stdin, stdout),
     }
 }
 
@@ -3243,6 +3242,7 @@ mod tests {
             "compress",
             "pdf-edit",
             "pdf-inspect",
+            "signature-appearance",
         ] {
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
