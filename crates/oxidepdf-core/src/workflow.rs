@@ -1,9 +1,12 @@
 use crate::{
-    OxideError, PdfCompareOptions, PdfEditOptions, PdfInspectOptions, PdfSecurityOptions,
-    PdfSignOptions,
+    enforce_input_bytes, resource_limit, run_pdf_compare, run_pdf_edit, run_pdf_inspect,
+    run_pdf_security, run_pdf_sign, OxideError, PdfCompareOptions, PdfEditOptions,
+    PdfInspectOptions, PdfSecurityOptions, PdfSignOptions,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 /// Current workflow schema version.
 pub const WORKFLOW_SCHEMA_VERSION: u16 = 1;
@@ -251,5 +254,437 @@ impl From<OperatorSpec> for OperatorSpecDef {
                 ..Self::default()
             },
         }
+    }
+}
+
+/// Artifact produced or consumed by workflow tasks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Artifact {
+    /// PDF artifact placeholder.
+    Pdf(PdfArtifact),
+    /// Image artifact placeholder.
+    Image(ImageArtifact),
+    /// Text artifact.
+    Text(TextArtifact),
+    /// SVG artifact.
+    Svg(SvgArtifact),
+    /// Raw bytes.
+    Bytes(BytesArtifact),
+}
+
+impl Artifact {
+    /// Creates a raw byte artifact.
+    pub fn bytes(bytes: impl AsRef<[u8]>) -> Self {
+        Self::Bytes(BytesArtifact {
+            bytes: bytes.as_ref().to_vec(),
+        })
+    }
+
+    /// Creates a PDF artifact.
+    pub fn pdf(bytes: impl AsRef<[u8]>) -> Self {
+        Self::Pdf(PdfArtifact {
+            bytes: bytes.as_ref().to_vec(),
+        })
+    }
+
+    /// Creates an image artifact.
+    pub fn image(bytes: impl AsRef<[u8]>) -> Self {
+        Self::Image(ImageArtifact {
+            bytes: bytes.as_ref().to_vec(),
+        })
+    }
+
+    /// Creates an SVG artifact.
+    pub fn svg(bytes: impl AsRef<[u8]>) -> Self {
+        Self::Svg(SvgArtifact {
+            bytes: bytes.as_ref().to_vec(),
+        })
+    }
+}
+
+/// PDF artifact placeholder for later operators.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PdfArtifact {
+    /// Serialized bytes until object-level artifacts are added.
+    pub bytes: Vec<u8>,
+}
+
+/// Image artifact placeholder for later operators.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageArtifact {
+    /// Encoded image bytes.
+    pub bytes: Vec<u8>,
+}
+
+/// Text artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextArtifact {
+    /// Extracted or generated text.
+    pub text: String,
+    /// Page-level extraction diagnostics reserved for structured output.
+    pub diagnostics: Vec<TextExtractionDiagnostic>,
+}
+
+/// Page-level diagnostic emitted by text extraction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextExtractionDiagnostic {
+    /// One-based page number.
+    pub page: u32,
+    /// Stable diagnostic code.
+    pub code: TextExtractionDiagnosticCode,
+    /// Non-sensitive diagnostic message.
+    pub message: String,
+}
+
+/// Stable text extraction diagnostic code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextExtractionDiagnosticCode {
+    /// Page has no extractable text layer.
+    NoTextLayer,
+}
+
+/// SVG artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SvgArtifact {
+    /// SVG document bytes.
+    pub bytes: Vec<u8>,
+}
+
+/// Byte artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BytesArtifact {
+    /// Raw bytes.
+    pub bytes: Vec<u8>,
+}
+
+/// In-memory artifact store used by the serial executor.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ArtifactStore {
+    artifacts: BTreeMap<ArtifactRef, Artifact>,
+}
+
+impl ArtifactStore {
+    /// Creates an empty store.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Inserts or replaces an artifact.
+    pub fn insert(&mut self, id: ArtifactRef, artifact: Artifact) -> Option<Artifact> {
+        self.artifacts.insert(id, artifact)
+    }
+
+    /// Returns an artifact by id.
+    pub fn get(&self, id: &ArtifactRef) -> Option<&Artifact> {
+        self.artifacts.get(id)
+    }
+}
+
+/// Validated workflow execution plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionPlan {
+    /// Task ids in topological execution order.
+    pub task_order: Vec<TaskId>,
+}
+
+/// Result of a successful workflow execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionResult {
+    /// Validated execution plan used for this run.
+    pub plan: ExecutionPlan,
+    /// Artifact store containing inputs and task outputs.
+    pub store: ArtifactStore,
+}
+
+/// Operator implementation boundary used by the serial executor.
+pub trait OperatorRunner {
+    /// Runs a task against resolved input artifacts.
+    fn run(&mut self, task: &TaskSpec, inputs: &[Artifact]) -> Result<Artifact, OxideError>;
+}
+
+/// Operator runner for object-level PDF page editing.
+#[derive(Debug, Clone, Default)]
+pub struct PdfOperatorRunner {
+    limits: ResourceLimits,
+}
+
+impl PdfOperatorRunner {
+    /// Creates a runner using explicit workflow resource limits.
+    pub fn with_limits(limits: ResourceLimits) -> Self {
+        Self { limits }
+    }
+}
+
+impl OperatorRunner for PdfOperatorRunner {
+    fn run(&mut self, task: &TaskSpec, inputs: &[Artifact]) -> Result<Artifact, OxideError> {
+        let artifact = match &task.op {
+            OperatorSpec::PdfEdit(options) => run_pdf_edit(options, inputs, &self.limits),
+            OperatorSpec::PdfInspect(options) => run_pdf_inspect(options, inputs, &self.limits),
+            OperatorSpec::PdfSecurity(options) => run_pdf_security(options),
+            OperatorSpec::PdfCompare(options) => run_pdf_compare(options),
+            OperatorSpec::PdfSign(options) => run_pdf_sign(options, inputs, &self.limits),
+        }?;
+        enforce_artifact_output_bytes(&artifact, &self.limits)?;
+        Ok(artifact)
+    }
+}
+
+/// Validates a workflow and returns a topological execution plan.
+pub fn validate_workflow(workflow: &Workflow) -> Result<ExecutionPlan, OxideError> {
+    check_resource_limit_entrypoint(&workflow.limits)?;
+    let ids = collect_ids(workflow)?;
+    validate_task_references(workflow, &ids)?;
+    validate_output_references(workflow, &ids)?;
+    let task_order = topological_sort(workflow)?;
+
+    Ok(ExecutionPlan { task_order })
+}
+
+/// Executes a workflow serially.
+pub fn execute_workflow(
+    workflow: &Workflow,
+    mut store: ArtifactStore,
+    runner: &mut impl OperatorRunner,
+) -> Result<ExecutionResult, OxideError> {
+    let plan = validate_workflow(workflow)?;
+    enforce_workflow_input_limits(workflow, &store)?;
+    let started_at = Instant::now();
+    let timeout = workflow.limits.timeout_ms.map(Duration::from_millis);
+    let tasks_by_id = workflow
+        .tasks
+        .iter()
+        .map(|task| (task.id.clone(), task))
+        .collect::<BTreeMap<_, _>>();
+
+    for task_id in &plan.task_order {
+        enforce_timeout(started_at, timeout)?;
+        let task = tasks_by_id.get(task_id).ok_or_else(|| {
+            invalid_workflow(format!(
+                "task '{}' disappeared after validation",
+                task_id.as_str()
+            ))
+        })?;
+        let inputs = task
+            .inputs
+            .iter()
+            .map(|input| {
+                store.get(input).cloned().ok_or_else(|| {
+                    invalid_workflow(format!(
+                        "artifact '{}' is missing at execution time",
+                        input.as_str()
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let artifact = runner.run(task, &inputs)?;
+        enforce_timeout(started_at, timeout)?;
+        store.insert(ArtifactRef::new(task.id.as_str()), artifact);
+    }
+
+    Ok(ExecutionResult { plan, store })
+}
+
+fn enforce_workflow_input_limits(
+    workflow: &Workflow,
+    store: &ArtifactStore,
+) -> Result<(), OxideError> {
+    let mut total_input_bytes = 0u64;
+    for input in &workflow.inputs {
+        let artifact = store.get(&input.id).ok_or_else(|| {
+            invalid_workflow(format!(
+                "input artifact '{}' is missing at execution time",
+                input.id.as_str()
+            ))
+        })?;
+        let size = artifact_size(artifact);
+        enforce_input_bytes(size, &workflow.limits)?;
+        total_input_bytes = total_input_bytes
+            .checked_add(size as u64)
+            .ok_or_else(|| resource_limit("max_total_input_bytes"))?;
+        if workflow
+            .limits
+            .max_total_input_bytes
+            .is_some_and(|limit| total_input_bytes > limit)
+        {
+            return Err(resource_limit("max_total_input_bytes"));
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_ids(workflow: &Workflow) -> Result<BTreeSet<ArtifactRef>, OxideError> {
+    let mut ids = BTreeSet::new();
+    for input in &workflow.inputs {
+        insert_unique_id(&mut ids, &input.id)?;
+    }
+    for task in &workflow.tasks {
+        insert_unique_id(&mut ids, &ArtifactRef::new(task.id.as_str()))?;
+    }
+    for output in &workflow.outputs {
+        insert_unique_id(&mut ids, &output.id)?;
+    }
+
+    Ok(ids)
+}
+
+fn insert_unique_id(ids: &mut BTreeSet<ArtifactRef>, id: &ArtifactRef) -> Result<(), OxideError> {
+    if id.as_str().is_empty() {
+        return Err(invalid_workflow("artifact id must not be empty"));
+    }
+    if !ids.insert(id.clone()) {
+        return Err(invalid_workflow(format!(
+            "duplicate artifact id '{}'",
+            id.as_str()
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_task_references(
+    workflow: &Workflow,
+    ids: &BTreeSet<ArtifactRef>,
+) -> Result<(), OxideError> {
+    for task in &workflow.tasks {
+        if task.inputs.is_empty() {
+            return Err(invalid_workflow(format!(
+                "task '{}' must declare at least one input",
+                task.id.as_str()
+            )));
+        }
+        for input in &task.inputs {
+            if !ids.contains(input) {
+                return Err(invalid_workflow(format!(
+                    "task '{}' references missing artifact '{}'",
+                    task.id.as_str(),
+                    input.as_str()
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_output_references(
+    workflow: &Workflow,
+    ids: &BTreeSet<ArtifactRef>,
+) -> Result<(), OxideError> {
+    for output in &workflow.outputs {
+        if !ids.contains(&output.from) {
+            return Err(invalid_workflow(format!(
+                "output '{}' references missing artifact '{}'",
+                output.id.as_str(),
+                output.from.as_str()
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn topological_sort(workflow: &Workflow) -> Result<Vec<TaskId>, OxideError> {
+    let task_ids = workflow
+        .tasks
+        .iter()
+        .map(|task| task.id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut incoming_count = workflow
+        .tasks
+        .iter()
+        .map(|task| (task.id.clone(), 0usize))
+        .collect::<BTreeMap<_, _>>();
+    let mut dependents = BTreeMap::<TaskId, Vec<TaskId>>::new();
+
+    for task in &workflow.tasks {
+        for input in &task.inputs {
+            let dependency = TaskId::new(input.as_str());
+            if task_ids.contains(&dependency) {
+                *incoming_count.get_mut(&task.id).ok_or_else(|| {
+                    invalid_workflow(format!("task '{}' is missing", task.id.as_str()))
+                })? += 1;
+                dependents
+                    .entry(dependency)
+                    .or_default()
+                    .push(task.id.clone());
+            }
+        }
+    }
+
+    let mut ready = incoming_count
+        .iter()
+        .filter_map(|(id, count)| (*count == 0).then_some(id.clone()))
+        .collect::<VecDeque<_>>();
+    let mut task_order = Vec::with_capacity(workflow.tasks.len());
+
+    while let Some(task_id) = ready.pop_front() {
+        task_order.push(task_id.clone());
+        if let Some(children) = dependents.get(&task_id) {
+            for child in children {
+                let child_count = incoming_count.get_mut(child).ok_or_else(|| {
+                    invalid_workflow(format!("task '{}' is missing", child.as_str()))
+                })?;
+                *child_count -= 1;
+                if *child_count == 0 {
+                    ready.push_back(child.clone());
+                }
+            }
+        }
+    }
+
+    if task_order.len() != workflow.tasks.len() {
+        return Err(invalid_workflow("workflow task graph contains a cycle"));
+    }
+
+    Ok(task_order)
+}
+
+fn check_resource_limit_entrypoint(limits: &ResourceLimits) -> Result<(), OxideError> {
+    let numeric_limits = [
+        limits.max_input_bytes,
+        limits.max_total_input_bytes,
+        limits.max_pixels,
+        limits.max_output_bytes,
+        limits.timeout_ms,
+    ];
+
+    if numeric_limits.into_iter().flatten().any(|limit| limit == 0) || limits.max_pages == Some(0) {
+        return Err(OxideError::ResourceLimitExceeded {
+            limit: "resource limit must be greater than zero".to_owned(),
+        });
+    }
+
+    Ok(())
+}
+
+fn enforce_artifact_output_bytes(
+    artifact: &Artifact,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
+    crate::enforce_output_bytes(artifact_size(artifact), limits)
+}
+
+fn artifact_size(artifact: &Artifact) -> usize {
+    match artifact {
+        Artifact::Pdf(pdf) => pdf.bytes.len(),
+        Artifact::Image(image) => image.bytes.len(),
+        Artifact::Text(text) => text.text.len(),
+        Artifact::Svg(svg) => svg.bytes.len(),
+        Artifact::Bytes(bytes) => bytes.bytes.len(),
+    }
+}
+
+fn enforce_timeout(started_at: Instant, timeout: Option<Duration>) -> Result<(), OxideError> {
+    if timeout.is_some_and(|timeout| started_at.elapsed() > timeout) {
+        return Err(resource_limit("timeout_ms"));
+    }
+
+    Ok(())
+}
+
+fn invalid_workflow(reason: impl Into<String>) -> OxideError {
+    OxideError::InvalidWorkflow {
+        reason: reason.into(),
     }
 }
