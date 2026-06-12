@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use lopdf::dictionary;
 use predicates::prelude::*;
 use std::fs;
 
@@ -210,6 +211,54 @@ fn svg2pdf_command_writes_parseable_pdf() {
             input.to_str().unwrap(),
             "-o",
             output.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq(""))
+        .stderr(predicate::eq(""));
+
+    assert_eq!(pdf_page_count(&output), 1);
+}
+
+#[test]
+fn compress_command_writes_parseable_pdf() {
+    let dir = temp_dir("compress_command_writes_parseable_pdf");
+    let output = dir.join("compressed.pdf");
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args([
+            "compress",
+            fixture_pdf().to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq(""))
+        .stderr(predicate::eq(""));
+
+    assert_eq!(pdf_page_count(&output), 3);
+}
+
+#[test]
+fn compress_command_accepts_explicit_lossy_options() {
+    let dir = temp_dir("compress_command_accepts_explicit_lossy_options");
+    let input = dir.join("image.pdf");
+    let output = dir.join("compressed.pdf");
+    fs::write(&input, pdf_with_rgb_image()).unwrap();
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args([
+            "compress",
+            input.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--mode",
+            "lossy",
+            "--image-quality",
+            "80",
         ])
         .assert()
         .success()
@@ -587,4 +636,68 @@ fn page_has_content_operator(path: &std::path::Path, page_number: u32, operator:
         .filter_map(|stream| lopdf::content::Content::decode(&stream.content).ok())
         .flat_map(|content| content.operations)
         .any(|operation| operation.operator == operator)
+}
+
+fn pdf_with_rgb_image() -> Vec<u8> {
+    let mut document = lopdf::Document::with_version("1.7");
+    let pages_id = document.new_object_id();
+    let page_id = document.new_object_id();
+    let image_id = document.new_object_id();
+    let content_id = document.new_object_id();
+    let catalog_id = document.new_object_id();
+    document.objects.insert(
+        image_id,
+        lopdf::Object::Stream(lopdf::Stream::new(
+            lopdf::dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Image",
+                "Width" => 1,
+                "Height" => 3,
+                "ColorSpace" => "DeviceRGB",
+                "BitsPerComponent" => 8,
+            },
+            b"rgbpixel!".to_vec(),
+        )),
+    );
+    document.objects.insert(
+        content_id,
+        lopdf::Object::Stream(lopdf::Stream::new(
+            lopdf::Dictionary::new(),
+            b"q 1 0 0 3 0 0 cm /Im1 Do Q".to_vec(),
+        )),
+    );
+    document.objects.insert(
+        page_id,
+        lopdf::Object::Dictionary(lopdf::dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => lopdf::Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]),
+            "Resources" => lopdf::Object::Dictionary(lopdf::dictionary! {
+                "XObject" => lopdf::Object::Dictionary(lopdf::dictionary! {
+                    "Im1" => image_id,
+                }),
+            }),
+            "Contents" => content_id,
+        }),
+    );
+    document.objects.insert(
+        pages_id,
+        lopdf::Object::Dictionary(lopdf::dictionary! {
+            "Type" => "Pages",
+            "Kids" => lopdf::Object::Array(vec![page_id.into()]),
+            "Count" => 1,
+        }),
+    );
+    document.objects.insert(
+        catalog_id,
+        lopdf::Object::Dictionary(lopdf::dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        }),
+    );
+    document.trailer.set("Root", catalog_id);
+
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
 }

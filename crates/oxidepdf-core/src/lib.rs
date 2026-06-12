@@ -4,6 +4,7 @@
 mod annotations;
 mod attachments;
 mod compare;
+mod compression;
 mod errors;
 mod forms;
 mod interactive;
@@ -57,6 +58,10 @@ pub(crate) use pdf_io::{
 };
 
 pub use compare::PdfCompareOptions;
+pub use compression::{
+    compress_pdf, CompressionImageFormat, CompressionImageOptions, CompressionMode,
+    CompressionOptions,
+};
 pub use overlay::{
     edit_pdf_colors, edit_pdf_images_artifacts, extract_pdf_image, extract_text_from_pdf,
     image_artifacts_to_pdf, inspect_pdf_images, overlay_pdf_artifacts, render_pdf_page, svg_to_pdf,

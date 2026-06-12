@@ -1150,6 +1150,38 @@ fn parses_overlay_image_color_operator_schema() {
 }
 
 #[test]
+fn parses_compression_operator_schema() {
+    let workflow: Workflow = serde_yaml::from_str(
+        r#"
+        version: 1
+        inputs:
+          - id: source
+            path: ./input.pdf
+        tasks:
+          - id: compress
+            op:
+              pdf_edit:
+                compression:
+                  mode: lossless
+            inputs: [source]
+        outputs:
+          - id: final
+            from: compress
+            path: ./output.pdf
+        "#,
+    )
+    .unwrap();
+
+    assert!(matches!(
+        workflow.tasks[0].op,
+        OperatorSpec::PdfEdit(PdfEditOptions::Compression(CompressionOptions {
+            mode: CompressionMode::Lossless,
+            images: None,
+        }))
+    ));
+}
+
+#[test]
 fn overlay_pdf_page_and_signature_appearance_are_visual_only() {
     let pdf = empty_page_pdf();
     let overlay = include_bytes!("../../../tests/test.pdf");
@@ -1281,6 +1313,213 @@ fn image_resources_list_add_replace_delete_and_extract() {
         .text;
     let report: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert!(report["images"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn compress_pdf_lossless_prunes_and_preserves_pages() {
+    let pdf = pdf_with_unreferenced_stream_object();
+    let before = lopdf::Document::load_mem(&pdf).unwrap();
+    assert_eq!(before.get_pages().len(), 1);
+    assert_eq!(before.objects.len(), 4);
+
+    let compressed = compress_pdf(
+        &pdf,
+        &CompressionOptions::default(),
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let after = lopdf::Document::load_mem(&compressed.bytes).unwrap();
+
+    assert_eq!(after.get_pages().len(), 1);
+    assert_eq!(after.objects.len(), 3);
+    assert!(compressed.bytes.starts_with(b"%PDF-"));
+}
+
+#[test]
+fn compress_pdf_recompresses_plain_content_streams() {
+    let pdf = pdf_with_large_plain_content_stream();
+    let before = lopdf::Document::load_mem(&pdf).unwrap();
+    let before_stream = first_page_content_stream(&before);
+    assert!(!before_stream.dict.has(b"Filter"));
+
+    let compressed = compress_pdf(
+        &pdf,
+        &CompressionOptions::default(),
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let after = lopdf::Document::load_mem(&compressed.bytes).unwrap();
+    let after_stream = first_page_content_stream(&after);
+
+    assert_eq!(
+        after_stream.dict.get(b"Filter").unwrap().as_name().unwrap(),
+        b"FlateDecode"
+    );
+    assert_eq!(
+        after_stream.get_plain_content().unwrap(),
+        before_stream.content
+    );
+}
+
+#[test]
+fn compress_pdf_merges_duplicate_image_resources_without_reencoding() {
+    let pdf = pdf_with_duplicate_image_resources();
+    let before = lopdf::Document::load_mem(&pdf).unwrap();
+    let (left_before, right_before) = duplicate_image_resource_ids(&before);
+    assert_ne!(left_before, right_before);
+
+    let compressed = compress_pdf(
+        &pdf,
+        &CompressionOptions::default(),
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let after = lopdf::Document::load_mem(&compressed.bytes).unwrap();
+    let (left_after, right_after) = duplicate_image_resource_ids(&after);
+
+    assert_eq!(after.get_pages().len(), 1);
+    assert_eq!(left_after, right_after);
+    let image_stream = after.get_object(left_after).unwrap().as_stream().unwrap();
+    assert_eq!(image_stream.content, b"rgbpixel!");
+    assert!(!image_stream.dict.has(b"Filter"));
+}
+
+#[test]
+fn compress_pdf_lossless_keeps_jpeg_image_streams() {
+    let image = include_bytes!("../../../tests/test.jpg");
+    let pdf = image_artifacts_to_pdf(
+        &[Artifact::image(image)],
+        &ImageToPdfOptions {
+            layout: Some("original_size".to_owned()),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+
+    let compressed = compress_pdf(
+        &pdf.bytes,
+        &CompressionOptions::default(),
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let document = lopdf::Document::load_mem(&compressed.bytes).unwrap();
+
+    assert_eq!(document.get_pages().len(), 1);
+}
+
+#[test]
+fn compress_pdf_rejects_lossless_image_options() {
+    let err = compress_pdf(
+        &empty_page_pdf(),
+        &CompressionOptions {
+            mode: CompressionMode::Lossless,
+            images: Some(CompressionImageOptions {
+                quality: Some(80),
+                max_width: None,
+                max_height: None,
+                format: None,
+            }),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        err,
+        OxideError::InvalidInput {
+            reason: "lossless compression does not accept image resampling or reencoding options"
+                .to_owned()
+        }
+    );
+}
+
+#[test]
+fn compress_pdf_rejects_lossy_without_explicit_image_options() {
+    let err = compress_pdf(
+        &empty_page_pdf(),
+        &CompressionOptions {
+            mode: CompressionMode::Lossy,
+            images: None,
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        err,
+        OxideError::InvalidInput {
+            reason: "lossy compression requires explicit image options".to_owned()
+        }
+    );
+}
+
+#[test]
+fn compress_pdf_reencodes_images_when_lossy_options_are_explicit() {
+    let compressed = compress_pdf(
+        &pdf_with_duplicate_image_resources(),
+        &CompressionOptions {
+            mode: CompressionMode::Lossy,
+            images: Some(CompressionImageOptions {
+                quality: Some(80),
+                max_width: Some(1),
+                max_height: None,
+                format: Some(CompressionImageFormat::Jpeg),
+            }),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let document = lopdf::Document::load_mem(&compressed.bytes).unwrap();
+    let (left, right) = duplicate_image_resource_ids(&document);
+    assert_eq!(left, right);
+    let image_stream = document.get_object(left).unwrap().as_stream().unwrap();
+    assert_eq!(
+        image_stream.dict.get(b"Filter").unwrap().as_name().unwrap(),
+        b"DCTDecode"
+    );
+    assert!(image_stream.content.starts_with(&[0xFF, 0xD8]));
+}
+
+#[test]
+fn compress_pdf_returns_unsupported_for_non_jpeg_lossy_target() {
+    let err = compress_pdf(
+        &pdf_with_duplicate_image_resources(),
+        &CompressionOptions {
+            mode: CompressionMode::Lossy,
+            images: Some(CompressionImageOptions {
+                quality: Some(80),
+                max_width: None,
+                max_height: None,
+                format: Some(CompressionImageFormat::Png),
+            }),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        err,
+        OxideError::UnsupportedPdfFeature {
+            feature: "lossy image target formats other than jpeg".to_owned()
+        }
+    );
+}
+
+#[test]
+fn compress_pdf_rejects_unsupported_stream_filter() {
+    let err = compress_pdf(
+        &pdf_with_unsupported_filtered_stream(),
+        &CompressionOptions::default(),
+        &ResourceLimits::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        err,
+        OxideError::UnsupportedPdfFeature {
+            feature: "stream filter 'DCTDecode'".to_owned()
+        }
+    );
 }
 
 #[test]
@@ -2449,6 +2688,134 @@ fn empty_page_pdf() -> Vec<u8> {
     page.finish();
 
     pdf.finish()
+}
+
+fn pdf_with_unreferenced_stream_object() -> Vec<u8> {
+    let mut document = lopdf::Document::load_mem(&empty_page_pdf()).unwrap();
+    let unused_id = document.new_object_id();
+    document.objects.insert(
+        unused_id,
+        Object::Stream(Stream::new(Dictionary::new(), b"unused".to_vec())),
+    );
+
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+fn pdf_with_large_plain_content_stream() -> Vec<u8> {
+    let content = b"0 0 0 rg\n0 0 100 100 re f\n".repeat(64);
+    pdf_with_content_stream(Stream::new(Dictionary::new(), content))
+}
+
+fn pdf_with_unsupported_filtered_stream() -> Vec<u8> {
+    let mut stream = Stream::new(Dictionary::new(), b"not jpeg data".to_vec());
+    stream.dict.set("Filter", "DCTDecode");
+    pdf_with_content_stream(stream)
+}
+
+fn pdf_with_content_stream(stream: Stream) -> Vec<u8> {
+    let mut document = lopdf::Document::with_version("1.7");
+    let pages_id = document.new_object_id();
+    let page_id = document.new_object_id();
+    let content_id = document.new_object_id();
+    let catalog_id = document.new_object_id();
+
+    document.objects.insert(content_id, Object::Stream(stream));
+    document.objects.insert(
+        page_id,
+        Object::Dictionary(lopdf::dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => Object::Array(vec![0.into(), 0.into(), 100.into(), 100.into()]),
+            "Contents" => content_id,
+        }),
+    );
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(lopdf::dictionary! {
+            "Type" => "Pages",
+            "Kids" => Object::Array(vec![page_id.into()]),
+            "Count" => 1,
+        }),
+    );
+    document.objects.insert(
+        catalog_id,
+        Object::Dictionary(lopdf::dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        }),
+    );
+    document.trailer.set("Root", catalog_id);
+
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+fn pdf_with_duplicate_image_resources() -> Vec<u8> {
+    let mut document = lopdf::Document::load_mem(&empty_page_pdf()).unwrap();
+    let page_id = *document.get_pages().get(&1).unwrap();
+    let left_id = document.add_object(test_image_stream());
+    let right_id = document.add_object(test_image_stream());
+
+    document
+        .get_object_mut(page_id)
+        .unwrap()
+        .as_dict_mut()
+        .unwrap()
+        .set(
+            "Resources",
+            Object::Dictionary(lopdf::dictionary! {
+                "XObject" => Object::Dictionary(lopdf::dictionary! {
+                    "Left" => left_id,
+                    "Right" => right_id,
+                }),
+            }),
+        );
+
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+fn test_image_stream() -> Stream {
+    Stream::new(
+        lopdf::dictionary! {
+            "Type" => "XObject",
+            "Subtype" => "Image",
+            "Width" => 1,
+            "Height" => 3,
+            "ColorSpace" => "DeviceRGB",
+            "BitsPerComponent" => 8,
+        },
+        b"rgbpixel!".to_vec(),
+    )
+}
+
+fn first_page_content_stream(document: &lopdf::Document) -> &Stream {
+    let page_id = *document.get_pages().get(&1).unwrap();
+    let content_id = document
+        .get_dictionary(page_id)
+        .unwrap()
+        .get(b"Contents")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    document
+        .get_object(content_id)
+        .unwrap()
+        .as_stream()
+        .unwrap()
+}
+
+fn duplicate_image_resource_ids(document: &lopdf::Document) -> (lopdf::ObjectId, lopdf::ObjectId) {
+    let resources = page_resources(document, 1);
+    let xobjects = resources.get(b"XObject").unwrap().as_dict().unwrap();
+    (
+        xobjects.get(b"Left").unwrap().as_reference().unwrap(),
+        xobjects.get(b"Right").unwrap().as_reference().unwrap(),
+    )
 }
 
 fn metadata_entries<const N: usize>(entries: [(&str, &str); N]) -> Vec<MetadataEntry> {

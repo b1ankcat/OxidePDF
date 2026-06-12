@@ -1,25 +1,26 @@
 use crate::workflow::ResourceLimits;
 use crate::{
-    add_pdf_page_numbers_with_limits, booklet_pdf_pages_with_limits, crop_pdf_pages_with_limits,
-    delete_blank_pdf_pages_with_limits, delete_pdf_pages_with_limits, edit_pdf_annotations,
-    edit_pdf_attachment_artifacts, edit_pdf_colors, edit_pdf_images_artifacts, edit_pdf_metadata,
-    edit_pdf_outline, extract_pdf_attachment, extract_pdf_image, extract_pdf_pages_with_limits,
-    extract_text_from_pdf, fill_pdf_form, image_artifacts_to_pdf, inspect_pdf_annotations,
-    inspect_pdf_attachments, inspect_pdf_forms, inspect_pdf_images, inspect_pdf_metadata,
-    inspect_pdf_outline, merge_pdf_artifacts_with_limits, nup_pdf_pages_with_limits,
-    overlay_pdf_artifacts, pdf_bytes, pdf_to_single_page_with_limits, remove_pdf_forms,
-    remove_pdf_interactive_elements, render_pdf_page, reorder_pdf_with_limits,
+    add_pdf_page_numbers_with_limits, booklet_pdf_pages_with_limits, compress_pdf,
+    crop_pdf_pages_with_limits, delete_blank_pdf_pages_with_limits, delete_pdf_pages_with_limits,
+    edit_pdf_annotations, edit_pdf_attachment_artifacts, edit_pdf_colors,
+    edit_pdf_images_artifacts, edit_pdf_metadata, edit_pdf_outline, extract_pdf_attachment,
+    extract_pdf_image, extract_pdf_pages_with_limits, extract_text_from_pdf, fill_pdf_form,
+    image_artifacts_to_pdf, inspect_pdf_annotations, inspect_pdf_attachments, inspect_pdf_forms,
+    inspect_pdf_images, inspect_pdf_metadata, inspect_pdf_outline, merge_pdf_artifacts_with_limits,
+    nup_pdf_pages_with_limits, overlay_pdf_artifacts, pdf_bytes, pdf_to_single_page_with_limits,
+    remove_pdf_forms, remove_pdf_interactive_elements, render_pdf_page, reorder_pdf_with_limits,
     rotate_pdf_with_limits, scale_pdf_pages_with_limits, split_pdf_with_limits, svg_to_pdf,
     unlock_pdf_form_readonly, verify_pdf_signatures, watermark_pdf_artifacts,
     AnnotationEditOptions, AnnotationInspectOptions, Artifact, AttachmentEditOptions,
     AttachmentExtractOptions, AttachmentInspectOptions, BookletOptions, ColorEditOptions,
-    CropPagesOptions, DeleteBlankPagesOptions, ExtractTextOptions, FormFillOptions,
-    FormInspectOptions, ImageEditOptions, ImageExtractOptions, ImageInspectOptions,
-    ImageToPdfOptions, InteractiveRemovalOptions, MergeOptions, MetadataEditOptions,
-    MetadataInspectOptions, NUpOptions, OutlineEditOptions, OutlineInspectOptions, OverlayOptions,
-    OxideError, PageNumbersOptions, PageSelectionOptions, PdfCompareOptions, PdfSecurityOptions,
-    RenderOptions, ReorderOptions, RotateOptions, ScalePagesOptions, SignatureOptions,
-    SinglePageOptions, SplitOptions, SvgToPdfOptions, WatermarkOptions,
+    CompressionOptions, CropPagesOptions, DeleteBlankPagesOptions, ExtractTextOptions,
+    FormFillOptions, FormInspectOptions, ImageEditOptions, ImageExtractOptions,
+    ImageInspectOptions, ImageToPdfOptions, InteractiveRemovalOptions, MergeOptions,
+    MetadataEditOptions, MetadataInspectOptions, NUpOptions, OutlineEditOptions,
+    OutlineInspectOptions, OverlayOptions, OxideError, PageNumbersOptions, PageSelectionOptions,
+    PdfCompareOptions, PdfSecurityOptions, RenderOptions, ReorderOptions, RotateOptions,
+    ScalePagesOptions, SignatureOptions, SinglePageOptions, SplitOptions, SvgToPdfOptions,
+    WatermarkOptions,
 };
 use serde::{Deserialize, Serialize};
 
@@ -81,6 +82,8 @@ pub enum PdfEditOptions {
     FormRemove,
     /// Remove selected interactive document elements.
     InteractiveRemove(InteractiveRemovalOptions),
+    /// Compress and optimize a PDF without implicit quality loss.
+    Compression(CompressionOptions),
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -113,6 +116,7 @@ struct PdfEditOptionsDef {
     form_unlock_readonly: Option<()>,
     form_remove: Option<()>,
     interactive_remove: Option<InteractiveRemovalOptions>,
+    compression: Option<CompressionOptions>,
 }
 
 impl TryFrom<PdfEditOptionsDef> for PdfEditOptions {
@@ -147,6 +151,7 @@ impl TryFrom<PdfEditOptionsDef> for PdfEditOptions {
             value.form_unlock_readonly.is_some(),
             value.form_remove.is_some(),
             value.interactive_remove.is_some(),
+            value.compression.is_some(),
         ]
         .into_iter()
         .filter(|present| *present)
@@ -238,6 +243,9 @@ impl TryFrom<PdfEditOptionsDef> for PdfEditOptions {
         }
         if let Some(options) = value.interactive_remove {
             return Ok(Self::InteractiveRemove(options));
+        }
+        if let Some(options) = value.compression {
+            return Ok(Self::Compression(options));
         }
 
         unreachable!("operation count was already checked");
@@ -353,6 +361,10 @@ impl From<PdfEditOptions> for PdfEditOptionsDef {
             },
             PdfEditOptions::InteractiveRemove(options) => Self {
                 interactive_remove: Some(options),
+                ..Self::default()
+            },
+            PdfEditOptions::Compression(options) => Self {
+                compression: Some(options),
                 ..Self::default()
             },
         }
@@ -654,6 +666,10 @@ pub(crate) fn run_pdf_edit(
         PdfEditOptions::InteractiveRemove(options) => {
             let input = single_pdf_input(inputs)?;
             remove_pdf_interactive_elements(input, options, limits).map(Artifact::Pdf)
+        }
+        PdfEditOptions::Compression(options) => {
+            let input = single_pdf_input(inputs)?;
+            compress_pdf(input, options, limits).map(Artifact::Pdf)
         }
     }
 }

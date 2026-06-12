@@ -5,7 +5,8 @@ use oxidepdf_core::{
     execute_workflow, AnnotationEditAction, AnnotationEditOptions, AnnotationInspectOptions,
     Artifact, ArtifactRef, ArtifactStore, AttachmentEditAction, AttachmentEditOptions,
     AttachmentExtractOptions, AttachmentInspectOptions, BookletOptions, ColorEditAction,
-    ColorEditOptions, CropPagesOptions, DeleteBlankPagesOptions, ExtractTextOptions,
+    ColorEditOptions, CompressionImageFormat, CompressionImageOptions, CompressionMode,
+    CompressionOptions, CropPagesOptions, DeleteBlankPagesOptions, ExtractTextOptions,
     FormFieldValue, FormFillOptions, FormInspectOptions, ImageEditAction, ImageEditOptions,
     ImageExtractOptions, ImageInspectOptions, ImageToPdfOptions, InteractiveRemovalOptions,
     MergeOptions, MetadataEditAction, MetadataEditOptions, MetadataEntry, MetadataInspectOptions,
@@ -89,6 +90,8 @@ enum Commands {
     /// Edit simple page colors.
     #[command(subcommand)]
     Color(ColorCommand),
+    /// Compress and optimize a PDF without implicit quality loss.
+    Compress(CompressArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -139,6 +142,8 @@ enum PdfEditCommand {
     Svg2pdf(SvgToPdfArgs),
     /// Add a text, image, or SVG watermark to a PDF.
     Watermark(WatermarkArgs),
+    /// Compress and optimize a PDF.
+    Compress(CompressArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -459,6 +464,72 @@ impl From<CliPageNumberPosition> for PageNumberPosition {
             CliPageNumberPosition::BottomLeft => Self::BottomLeft,
             CliPageNumberPosition::BottomCenter => Self::BottomCenter,
             CliPageNumberPosition::BottomRight => Self::BottomRight,
+        }
+    }
+}
+
+#[derive(Debug, Parser)]
+struct CompressArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Compression mode: lossless or lossy.
+    #[arg(long, value_enum, default_value_t = CliCompressionMode::Lossless)]
+    mode: CliCompressionMode,
+
+    /// Explicit image quality for lossy image recompression, 1-100.
+    #[arg(long)]
+    image_quality: Option<u8>,
+
+    /// Explicit maximum image width for lossy image resampling.
+    #[arg(long)]
+    image_max_width: Option<u32>,
+
+    /// Explicit maximum image height for lossy image resampling.
+    #[arg(long)]
+    image_max_height: Option<u32>,
+
+    /// Explicit target image format for lossy image recompression.
+    #[arg(long, value_enum)]
+    image_format: Option<CliCompressionImageFormat>,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum CliCompressionMode {
+    Lossless,
+    Lossy,
+}
+
+impl From<CliCompressionMode> for CompressionMode {
+    fn from(value: CliCompressionMode) -> Self {
+        match value {
+            CliCompressionMode::Lossless => Self::Lossless,
+            CliCompressionMode::Lossy => Self::Lossy,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum CliCompressionImageFormat {
+    Jpeg,
+    Png,
+    Webp,
+}
+
+impl From<CliCompressionImageFormat> for CompressionImageFormat {
+    fn from(value: CliCompressionImageFormat) -> Self {
+        match value {
+            CliCompressionImageFormat::Jpeg => Self::Jpeg,
+            CliCompressionImageFormat::Png => Self::Png,
+            CliCompressionImageFormat::Webp => Self::Webp,
         }
     }
 }
@@ -1122,6 +1193,7 @@ fn cli_reads_stdin(cli: &Cli) -> bool {
         Some(Commands::OverlayPdf(args)) => is_stdio(&args.input) || is_stdio(&args.overlay),
         Some(Commands::Image(command)) => image_reads_stdin(command),
         Some(Commands::Color(command)) => color_reads_stdin(command),
+        Some(Commands::Compress(args)) => is_stdio(&args.input),
         None => false,
     }
 }
@@ -1146,6 +1218,7 @@ fn pdf_edit_reads_stdin(command: &PdfEditCommand) -> bool {
         PdfEditCommand::Watermark(args) => {
             is_stdio(&args.input) || args.watermark.as_ref().is_some_and(|path| is_stdio(path))
         }
+        PdfEditCommand::Compress(args) => is_stdio(&args.input),
     }
 }
 
@@ -1251,6 +1324,7 @@ where
         Some(Commands::OverlayPdf(args)) => run_overlay_pdf(args, stdin, stdout),
         Some(Commands::Image(command)) => run_image(command, stdin, stdout),
         Some(Commands::Color(command)) => run_color(command, stdin, stdout),
+        Some(Commands::Compress(args)) => run_compress(args, stdin, stdout),
         None => Ok(()),
     }
 }
@@ -1283,6 +1357,7 @@ fn run_pdf_edit(
         PdfEditCommand::Img2pdf(args) => run_img2pdf(args, stdin, stdout),
         PdfEditCommand::Svg2pdf(args) => run_svg2pdf(args, stdin, stdout),
         PdfEditCommand::Watermark(args) => run_watermark(args, stdin, stdout),
+        PdfEditCommand::Compress(args) => run_compress(args, stdin, stdout),
     }
 }
 
@@ -1426,6 +1501,38 @@ fn run_delete_blank_pages(
     );
 
     execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_compress(args: CompressArgs, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError> {
+    let images = compression_image_options(&args);
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "compress",
+        OperatorSpec::PdfEdit(PdfEditOptions::Compression(CompressionOptions {
+            mode: args.mode.into(),
+            images,
+        })),
+    );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn compression_image_options(args: &CompressArgs) -> Option<CompressionImageOptions> {
+    if args.image_quality.is_none()
+        && args.image_max_width.is_none()
+        && args.image_max_height.is_none()
+        && args.image_format.is_none()
+    {
+        return None;
+    }
+
+    Some(CompressionImageOptions {
+        quality: args.image_quality,
+        max_width: args.image_max_width,
+        max_height: args.image_max_height,
+        format: args.image_format.map(Into::into),
+    })
 }
 
 fn run_crop_pages(
