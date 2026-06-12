@@ -2,13 +2,18 @@
 
 use clap::{CommandFactory, Parser, Subcommand};
 use oxidepdf_core::{
-    execute_workflow, Artifact, ArtifactRef, ArtifactStore, BookletOptions, CropPagesOptions,
-    DeleteBlankPagesOptions, ExtractTextOptions, ImageToPdfOptions, MergeOptions, NUpOptions,
-    OperatorSpec, OxideError, PageNumberPosition, PageNumbersOptions, PageSelectionOptions,
-    PdfCompareOptions, PdfEditOptions, PdfInspectOptions, PdfOperatorRunner, PdfSecurityOptions,
-    PdfSignOptions, RenderOptions, ReorderOptions, RotateOptions, ScalePagesOptions,
-    SignatureOptions, SinglePageOptions, SplitOptions, SvgToPdfOptions, TaskId, TaskSpec,
-    WatermarkKind, WatermarkOptions, Workflow, WorkflowMetadata, WorkflowVersion,
+    execute_workflow, AnnotationEditAction, AnnotationEditOptions, AnnotationInspectOptions,
+    Artifact, ArtifactRef, ArtifactStore, AttachmentEditAction, AttachmentEditOptions,
+    AttachmentExtractOptions, AttachmentInspectOptions, BookletOptions, CropPagesOptions,
+    DeleteBlankPagesOptions, ExtractTextOptions, FormFieldValue, FormFillOptions,
+    FormInspectOptions, ImageToPdfOptions, InteractiveRemovalOptions, MergeOptions,
+    MetadataEditAction, MetadataEditOptions, MetadataEntry, MetadataInspectOptions, NUpOptions,
+    OperatorSpec, OutlineEditAction, OutlineEditOptions, OutlineInspectOptions, OutlineTree,
+    OxideError, PageNumberPosition, PageNumbersOptions, PageSelectionOptions, PdfCompareOptions,
+    PdfEditOptions, PdfInspectOptions, PdfOperatorRunner, PdfSecurityOptions, PdfSignOptions,
+    RenderOptions, ReorderOptions, RotateOptions, ScalePagesOptions, SignatureOptions,
+    SinglePageOptions, SplitOptions, SvgToPdfOptions, TaskId, TaskSpec, WatermarkKind,
+    WatermarkOptions, Workflow, WorkflowMetadata, WorkflowVersion,
 };
 use std::fs;
 use std::io::{self, Read, Write};
@@ -49,6 +54,26 @@ enum Commands {
     #[command(name = "pdf-sign")]
     #[command(subcommand)]
     PdfSign(PdfSignCommand),
+    /// Inspect, set, delete, or validate document metadata.
+    #[command(subcommand)]
+    Metadata(MetadataCommand),
+    /// Inspect, set, or delete document outlines.
+    #[command(subcommand)]
+    Outline(OutlineCommand),
+    /// Add, list, extract, or delete embedded file attachments.
+    #[command(name = "attach")]
+    #[command(subcommand)]
+    Attach(AttachCommand),
+    /// List, add, or delete annotations.
+    #[command(name = "annot")]
+    #[command(subcommand)]
+    Annot(AnnotCommand),
+    /// Fill, unlock, inspect, or remove interactive forms.
+    #[command(subcommand)]
+    Form(FormCommand),
+    /// Remove selected interactive document elements.
+    #[command(subcommand)]
+    Interactive(InteractiveCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -114,6 +139,50 @@ enum PdfInspectCommand {
 enum PdfSignCommand {
     /// Verify PDF signatures and certificates.
     Verify(VerifySignaturesArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum MetadataCommand {
+    Get(InspectOutputArgs),
+    Set(MetadataSetArgs),
+    Delete(MetadataDeleteArgs),
+    Validate(InspectOutputArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum OutlineCommand {
+    Get(InspectOutputArgs),
+    Set(OutlineSetArgs),
+    Delete(EditOutputArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum AttachCommand {
+    Add(AttachAddArgs),
+    List(InspectOutputArgs),
+    Extract(AttachExtractArgs),
+    Delete(AttachDeleteArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum AnnotCommand {
+    List(InspectOutputArgs),
+    Add(AnnotAddArgs),
+    Delete(AnnotDeleteArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum FormCommand {
+    Inspect(InspectOutputArgs),
+    Fill(FormFillArgs),
+    #[command(name = "unlock-readonly")]
+    UnlockReadonly(EditOutputArgs),
+    Remove(EditOutputArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum InteractiveCommand {
+    Remove(InteractiveRemoveArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -555,6 +624,236 @@ struct PdfCompareArgs {
     force: bool,
 }
 
+#[derive(Debug, Parser)]
+struct InspectOutputArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Output JSON file, attachment file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct EditOutputArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct MetadataSetArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Metadata entry in key=value form. May be repeated.
+    #[arg(long = "entry", required = true)]
+    entries: Vec<String>,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct MetadataDeleteArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Metadata key to delete. May be repeated.
+    #[arg(long = "key", required = true)]
+    keys: Vec<String>,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct OutlineSetArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// JSON file containing an OutlineTree, or `-` to read from stdin.
+    #[arg(long)]
+    tree: PathBuf,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct AttachAddArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// File to embed.
+    file: PathBuf,
+
+    /// Attachment name stored in the PDF. Defaults to the file name.
+    #[arg(long)]
+    name: Option<String>,
+
+    /// Attachment description.
+    #[arg(long)]
+    description: Option<String>,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct AttachExtractArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Attachment name to extract.
+    #[arg(long)]
+    name: String,
+
+    /// Output file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct AttachDeleteArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Attachment name to delete.
+    #[arg(long)]
+    name: String,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct AnnotAddArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// One-based page number.
+    #[arg(long)]
+    page: u32,
+
+    /// Stable annotation id.
+    #[arg(long)]
+    id: String,
+
+    /// Text annotation contents.
+    #[arg(long)]
+    text: String,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct AnnotDeleteArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Stable annotation id.
+    #[arg(long)]
+    id: String,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct FormFillArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Field value in name=value form. May be repeated.
+    #[arg(long = "field", required = true)]
+    fields: Vec<String>,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct InteractiveRemoveArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    #[arg(long)]
+    annotations: bool,
+    #[arg(long)]
+    forms: bool,
+    #[arg(long)]
+    actions: bool,
+    #[arg(long)]
+    javascript: bool,
+    #[arg(long = "embedded-files")]
+    embedded_files: bool,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
 /// Parses CLI arguments and runs the requested command.
 pub fn run() -> i32 {
     let args = std::env::args_os().collect::<Vec<_>>();
@@ -624,6 +923,12 @@ fn cli_reads_stdin(cli: &Cli) -> bool {
         Some(Commands::PdfSecurity(args)) => is_stdio(&args.input),
         Some(Commands::PdfCompare(args)) => is_stdio(&args.left) || is_stdio(&args.right),
         Some(Commands::PdfSign(command)) => pdf_sign_reads_stdin(command),
+        Some(Commands::Metadata(command)) => metadata_reads_stdin(command),
+        Some(Commands::Outline(command)) => outline_reads_stdin(command),
+        Some(Commands::Attach(command)) => attach_reads_stdin(command),
+        Some(Commands::Annot(command)) => annot_reads_stdin(command),
+        Some(Commands::Form(command)) => form_reads_stdin(command),
+        Some(Commands::Interactive(command)) => interactive_reads_stdin(command),
         None => false,
     }
 }
@@ -664,6 +969,53 @@ fn pdf_sign_reads_stdin(command: &PdfSignCommand) -> bool {
     }
 }
 
+fn metadata_reads_stdin(command: &MetadataCommand) -> bool {
+    match command {
+        MetadataCommand::Get(args) | MetadataCommand::Validate(args) => is_stdio(&args.input),
+        MetadataCommand::Set(args) => is_stdio(&args.input),
+        MetadataCommand::Delete(args) => is_stdio(&args.input),
+    }
+}
+
+fn outline_reads_stdin(command: &OutlineCommand) -> bool {
+    match command {
+        OutlineCommand::Get(args) => is_stdio(&args.input),
+        OutlineCommand::Set(args) => is_stdio(&args.input) || is_stdio(&args.tree),
+        OutlineCommand::Delete(args) => is_stdio(&args.input),
+    }
+}
+
+fn attach_reads_stdin(command: &AttachCommand) -> bool {
+    match command {
+        AttachCommand::Add(args) => is_stdio(&args.input) || is_stdio(&args.file),
+        AttachCommand::List(args) => is_stdio(&args.input),
+        AttachCommand::Extract(args) => is_stdio(&args.input),
+        AttachCommand::Delete(args) => is_stdio(&args.input),
+    }
+}
+
+fn annot_reads_stdin(command: &AnnotCommand) -> bool {
+    match command {
+        AnnotCommand::List(args) => is_stdio(&args.input),
+        AnnotCommand::Add(args) => is_stdio(&args.input),
+        AnnotCommand::Delete(args) => is_stdio(&args.input),
+    }
+}
+
+fn form_reads_stdin(command: &FormCommand) -> bool {
+    match command {
+        FormCommand::Inspect(args) => is_stdio(&args.input),
+        FormCommand::Fill(args) => is_stdio(&args.input),
+        FormCommand::UnlockReadonly(args) | FormCommand::Remove(args) => is_stdio(&args.input),
+    }
+}
+
+fn interactive_reads_stdin(command: &InteractiveCommand) -> bool {
+    match command {
+        InteractiveCommand::Remove(args) => is_stdio(&args.input),
+    }
+}
+
 fn run_with_io_result<I, S>(args: I, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError>
 where
     I: IntoIterator<Item = S>,
@@ -677,6 +1029,12 @@ where
         Some(Commands::PdfSecurity(args)) => run_pdf_security(args, stdin, stdout),
         Some(Commands::PdfCompare(args)) => run_pdf_compare(args, stdin, stdout),
         Some(Commands::PdfSign(command)) => run_pdf_sign(command, stdin, stdout),
+        Some(Commands::Metadata(command)) => run_metadata(command, stdin, stdout),
+        Some(Commands::Outline(command)) => run_outline(command, stdin, stdout),
+        Some(Commands::Attach(command)) => run_attach(command, stdin, stdout),
+        Some(Commands::Annot(command)) => run_annot(command, stdin, stdout),
+        Some(Commands::Form(command)) => run_form(command, stdin, stdout),
+        Some(Commands::Interactive(command)) => run_interactive(command, stdin, stdout),
         None => Ok(()),
     }
 }
@@ -1161,6 +1519,335 @@ fn run_pdf_compare(
     execute_and_write_workflow(workflow, stdin, args.force, stdout)
 }
 
+fn run_metadata(
+    command: MetadataCommand,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    match command {
+        MetadataCommand::Get(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "metadata_get",
+                OperatorSpec::PdfInspect(PdfInspectOptions::Metadata(
+                    MetadataInspectOptions::default(),
+                )),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+        MetadataCommand::Set(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "metadata_set",
+                OperatorSpec::PdfEdit(PdfEditOptions::Metadata(MetadataEditOptions {
+                    action: MetadataEditAction::Set,
+                    entries: parse_metadata_entries(args.entries)?,
+                    keys: Vec::new(),
+                })),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+        MetadataCommand::Delete(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "metadata_delete",
+                OperatorSpec::PdfEdit(PdfEditOptions::Metadata(MetadataEditOptions {
+                    action: MetadataEditAction::Delete,
+                    entries: Vec::new(),
+                    keys: args.keys,
+                })),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+        MetadataCommand::Validate(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "metadata_validate",
+                OperatorSpec::PdfInspect(PdfInspectOptions::Metadata(
+                    MetadataInspectOptions::default(),
+                )),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+    }
+}
+
+fn run_outline(
+    command: OutlineCommand,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    match command {
+        OutlineCommand::Get(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "outline_get",
+                OperatorSpec::PdfInspect(PdfInspectOptions::Outline(
+                    OutlineInspectOptions::default(),
+                )),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+        OutlineCommand::Set(args) => {
+            reject_shared_stdin_inputs(&args.input, &args.tree)?;
+            let tree_bytes = read_path_or_stdin(&args.tree, stdin).map_err(CliError::Input)?;
+            let tree: OutlineTree = serde_json::from_slice(&tree_bytes)
+                .map_err(|error| CliError::Workflow(error.to_string()))?;
+            execute_and_write_workflow(
+                one_input_workflow(
+                    args.input,
+                    args.output,
+                    "outline_set",
+                    OperatorSpec::PdfEdit(PdfEditOptions::Outline(OutlineEditOptions {
+                        action: OutlineEditAction::Set,
+                        tree: Some(tree),
+                    })),
+                ),
+                stdin,
+                args.force,
+                stdout,
+            )
+        }
+        OutlineCommand::Delete(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "outline_delete",
+                OperatorSpec::PdfEdit(PdfEditOptions::Outline(OutlineEditOptions {
+                    action: OutlineEditAction::Delete,
+                    tree: None,
+                })),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+    }
+}
+
+fn run_attach(
+    command: AttachCommand,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    match command {
+        AttachCommand::Add(args) => {
+            reject_shared_stdin_inputs(&args.input, &args.file)?;
+            let name = match args.name {
+                Some(name) => Some(name),
+                None => Some(
+                    args.file
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .ok_or_else(|| {
+                            CliError::Workflow(
+                                "attachment name must be explicit for this path".to_owned(),
+                            )
+                        })?
+                        .to_owned(),
+                ),
+            };
+            let workflow = two_input_workflow(
+                args.input,
+                args.file,
+                args.output,
+                "attach_add",
+                OperatorSpec::PdfEdit(PdfEditOptions::Attachment(AttachmentEditOptions {
+                    action: AttachmentEditAction::Add,
+                    name,
+                    description: args.description,
+                })),
+            );
+            execute_and_write_workflow(workflow, stdin, args.force, stdout)
+        }
+        AttachCommand::List(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "attach_list",
+                OperatorSpec::PdfInspect(PdfInspectOptions::Attachments(
+                    AttachmentInspectOptions::default(),
+                )),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+        AttachCommand::Extract(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "attach_extract",
+                OperatorSpec::PdfInspect(PdfInspectOptions::AttachmentExtract(
+                    AttachmentExtractOptions { name: args.name },
+                )),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+        AttachCommand::Delete(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "attach_delete",
+                OperatorSpec::PdfEdit(PdfEditOptions::Attachment(AttachmentEditOptions {
+                    action: AttachmentEditAction::Delete,
+                    name: Some(args.name),
+                    description: None,
+                })),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+    }
+}
+
+fn run_annot(command: AnnotCommand, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError> {
+    match command {
+        AnnotCommand::List(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "annot_list",
+                OperatorSpec::PdfInspect(PdfInspectOptions::Annotations(
+                    AnnotationInspectOptions::default(),
+                )),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+        AnnotCommand::Add(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "annot_add",
+                OperatorSpec::PdfEdit(PdfEditOptions::Annotation(AnnotationEditOptions {
+                    action: AnnotationEditAction::AddText,
+                    page: Some(args.page),
+                    id: Some(args.id),
+                    text: Some(args.text),
+                })),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+        AnnotCommand::Delete(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "annot_delete",
+                OperatorSpec::PdfEdit(PdfEditOptions::Annotation(AnnotationEditOptions {
+                    action: AnnotationEditAction::Delete,
+                    page: None,
+                    id: Some(args.id),
+                    text: None,
+                })),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+    }
+}
+
+fn run_form(command: FormCommand, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError> {
+    match command {
+        FormCommand::Inspect(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "form_inspect",
+                OperatorSpec::PdfInspect(PdfInspectOptions::Forms(FormInspectOptions::default())),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+        FormCommand::Fill(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "form_fill",
+                OperatorSpec::PdfEdit(PdfEditOptions::FormFill(FormFillOptions {
+                    fields: parse_form_fields(args.fields)?,
+                })),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+        FormCommand::UnlockReadonly(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "form_unlock_readonly",
+                OperatorSpec::PdfEdit(PdfEditOptions::FormUnlockReadonly),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+        FormCommand::Remove(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "form_remove",
+                OperatorSpec::PdfEdit(PdfEditOptions::FormRemove),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+    }
+}
+
+fn run_interactive(
+    command: InteractiveCommand,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    match command {
+        InteractiveCommand::Remove(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "interactive_remove",
+                OperatorSpec::PdfEdit(PdfEditOptions::InteractiveRemove(
+                    InteractiveRemovalOptions {
+                        annotations: args.annotations,
+                        forms: args.forms,
+                        actions: args.actions,
+                        javascript: args.javascript,
+                        embedded_files: args.embedded_files,
+                    },
+                )),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+    }
+}
+
 fn parse_watermark_kind(value: &str) -> Result<WatermarkKind, CliError> {
     match value {
         "text" => Ok(WatermarkKind::Text),
@@ -1209,6 +1896,81 @@ fn one_input_workflow(
         limits: Default::default(),
         metadata: WorkflowMetadata::default(),
     }
+}
+
+fn two_input_workflow(
+    first: PathBuf,
+    second: PathBuf,
+    output: PathBuf,
+    task_id: &'static str,
+    op: OperatorSpec,
+) -> Workflow {
+    Workflow {
+        version: WorkflowVersion::V1,
+        inputs: vec![
+            oxidepdf_core::InputSpec {
+                id: ArtifactRef::new("input"),
+                path: first,
+            },
+            oxidepdf_core::InputSpec {
+                id: ArtifactRef::new("attachment"),
+                path: second,
+            },
+        ],
+        tasks: vec![TaskSpec {
+            id: TaskId::new(task_id),
+            op,
+            inputs: vec![ArtifactRef::new("input"), ArtifactRef::new("attachment")],
+        }],
+        outputs: vec![oxidepdf_core::OutputSpec {
+            id: ArtifactRef::new("output"),
+            from: ArtifactRef::new(task_id),
+            path: output,
+        }],
+        limits: Default::default(),
+        metadata: WorkflowMetadata::default(),
+    }
+}
+
+fn parse_metadata_entries(entries: Vec<String>) -> Result<Vec<MetadataEntry>, CliError> {
+    entries
+        .into_iter()
+        .map(|entry| {
+            let (key, value) = parse_key_value(&entry, "metadata entry")?;
+            Ok(MetadataEntry { key, value })
+        })
+        .collect()
+}
+
+fn parse_form_fields(fields: Vec<String>) -> Result<Vec<FormFieldValue>, CliError> {
+    fields
+        .into_iter()
+        .map(|field| {
+            let (name, value) = parse_key_value(&field, "form field")?;
+            Ok(FormFieldValue { name, value })
+        })
+        .collect()
+}
+
+fn parse_key_value(value: &str, label: &str) -> Result<(String, String), CliError> {
+    let Some((key, value)) = value.split_once('=') else {
+        return Err(CliError::Workflow(format!(
+            "{label} must use key=value syntax"
+        )));
+    };
+    if key.is_empty() {
+        return Err(CliError::Workflow(format!("{label} key must not be empty")));
+    }
+    Ok((key.to_owned(), value.to_owned()))
+}
+
+fn reject_shared_stdin_inputs(first: &Path, second: &Path) -> Result<(), CliError> {
+    if is_stdio(first) && is_stdio(second) {
+        return Err(CliError::Workflow(
+            "commands with two independent inputs cannot read both inputs from stdin".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2528,6 +3290,380 @@ mod tests {
     }
 
     #[test]
+    fn metadata_commands_set_and_get_json_report() {
+        let dir = temp_dir("metadata_commands_set_and_get_json_report");
+        let input = dir.join("input.pdf");
+        let edited = dir.join("metadata.pdf");
+        let report = dir.join("metadata.json");
+        fs::write(&input, empty_page_pdf()).unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "metadata",
+                "set",
+                input.to_str().unwrap(),
+                "--entry",
+                "title=Quarterly Report",
+                "--entry",
+                "author=OxidePDF",
+                "-o",
+                edited.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+        assert_eq!(stderr, b"");
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "metadata",
+                "get",
+                edited.to_str().unwrap(),
+                "-o",
+                report.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+        let report: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(report).unwrap()).unwrap();
+        assert_eq!(report["entries"]["title"], "Quarterly Report");
+        assert_eq!(report["entries"]["author"], "OxidePDF");
+    }
+
+    #[test]
+    fn attachment_commands_add_list_extract_and_delete() {
+        let dir = temp_dir("attachment_commands_add_list_extract_and_delete");
+        let input = dir.join("input.pdf");
+        let note = dir.join("note.txt");
+        let attached = dir.join("attached.pdf");
+        let report = dir.join("attachments.json");
+        let extracted = dir.join("extracted.txt");
+        let deleted = dir.join("deleted.pdf");
+        fs::write(&input, empty_page_pdf()).unwrap();
+        fs::write(&note, b"attachment bytes").unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "attach",
+                "add",
+                input.to_str().unwrap(),
+                note.to_str().unwrap(),
+                "--description",
+                "Review note",
+                "-o",
+                attached.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+        assert_eq!(stderr, b"");
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "attach",
+                "list",
+                attached.to_str().unwrap(),
+                "-o",
+                report.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+        let report: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&report).unwrap()).unwrap();
+        assert_eq!(report["attachments"][0]["name"], "note.txt");
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "attach",
+                "extract",
+                attached.to_str().unwrap(),
+                "--name",
+                "note.txt",
+                "-o",
+                extracted.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+        assert_eq!(fs::read(&extracted).unwrap(), b"attachment bytes");
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "attach",
+                "delete",
+                attached.to_str().unwrap(),
+                "--name",
+                "note.txt",
+                "-o",
+                deleted.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+        assert_eq!(pdf_page_count(&deleted), 1);
+    }
+
+    #[test]
+    fn commands_with_two_inputs_reject_shared_stdin() {
+        let dir = temp_dir("commands_with_two_inputs_reject_shared_stdin");
+        let outline_output = dir.join("outline.pdf");
+        let attach_output = dir.join("attached.pdf");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "outline",
+                "set",
+                "-",
+                "--tree",
+                "-",
+                "-o",
+                outline_output.to_str().unwrap(),
+            ],
+            empty_page_pdf(),
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 2);
+        assert!(!outline_output.exists());
+        assert!(String::from_utf8(stderr.clone())
+            .unwrap()
+            .contains("cannot read both inputs from stdin"));
+
+        stdout.clear();
+        stderr.clear();
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "attach",
+                "add",
+                "-",
+                "-",
+                "--name",
+                "note.txt",
+                "-o",
+                attach_output.to_str().unwrap(),
+            ],
+            empty_page_pdf(),
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 2);
+        assert!(!attach_output.exists());
+        assert!(String::from_utf8(stderr)
+            .unwrap()
+            .contains("cannot read both inputs from stdin"));
+    }
+
+    #[test]
+    fn annotation_and_interactive_commands_remove_selected_elements() {
+        let dir = temp_dir("annotation_and_interactive_commands_remove_selected_elements");
+        let input = dir.join("input.pdf");
+        let annotated = dir.join("annotated.pdf");
+        let report = dir.join("annotations.json");
+        let removed = dir.join("removed.pdf");
+        let empty_report = dir.join("empty-annotations.json");
+        fs::write(&input, empty_page_pdf()).unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "annot",
+                "add",
+                input.to_str().unwrap(),
+                "--page",
+                "1",
+                "--id",
+                "review-note",
+                "--text",
+                "Review this page",
+                "-o",
+                annotated.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "annot",
+                "list",
+                annotated.to_str().unwrap(),
+                "-o",
+                report.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+        let report: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&report).unwrap()).unwrap();
+        assert_eq!(report["annotations"][0]["id"], "review-note");
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "interactive",
+                "remove",
+                annotated.to_str().unwrap(),
+                "--annotations",
+                "-o",
+                removed.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "annot",
+                "list",
+                removed.to_str().unwrap(),
+                "-o",
+                empty_report.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+        let report: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(empty_report).unwrap()).unwrap();
+        assert!(report["annotations"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn form_commands_fill_inspect_unlock_and_remove() {
+        let dir = temp_dir("form_commands_fill_inspect_unlock_and_remove");
+        let input = dir.join("input.pdf");
+        let filled = dir.join("filled.pdf");
+        let report = dir.join("forms.json");
+        let unlocked = dir.join("unlocked.pdf");
+        let removed = dir.join("removed.pdf");
+        let empty_report = dir.join("empty-forms.json");
+        fs::write(&input, form_pdf(true)).unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "form",
+                "fill",
+                input.to_str().unwrap(),
+                "--field",
+                "customer=Ada",
+                "-o",
+                filled.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "form",
+                "inspect",
+                filled.to_str().unwrap(),
+                "-o",
+                report.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+        let report: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&report).unwrap()).unwrap();
+        assert_eq!(report["fields"][0]["value"], "Ada");
+        assert_eq!(report["fields"][0]["readonly"], true);
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "form",
+                "unlock-readonly",
+                filled.to_str().unwrap(),
+                "-o",
+                unlocked.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "form",
+                "remove",
+                unlocked.to_str().unwrap(),
+                "-o",
+                removed.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "form",
+                "inspect",
+                removed.to_str().unwrap(),
+                "-o",
+                empty_report.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+        let report: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(empty_report).unwrap()).unwrap();
+        assert!(report["fields"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
     fn workflow_img2pdf_writes_parseable_pdf() {
         let dir = temp_dir("workflow_img2pdf_writes_parseable_pdf");
         let workflow = dir.join("workflow.yaml");
@@ -3053,6 +4189,99 @@ mod tests {
             lopdf::Object::Dictionary(lopdf::dictionary! {
                 "Type" => "Catalog",
                 "Pages" => pages_id,
+            }),
+        );
+        document.trailer.set("Root", catalog_id);
+
+        let mut bytes = Vec::new();
+        document.save_to(&mut bytes).unwrap();
+        bytes
+    }
+
+    fn empty_page_pdf() -> Vec<u8> {
+        let mut document = lopdf::Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let page_id = document.new_object_id();
+        let catalog_id = document.new_object_id();
+        document.objects.insert(
+            page_id,
+            lopdf::Object::Dictionary(lopdf::dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "MediaBox" => lopdf::Object::Array(vec![0.into(), 0.into(), 595.into(), 842.into()]),
+            }),
+        );
+        document.objects.insert(
+            pages_id,
+            lopdf::Object::Dictionary(lopdf::dictionary! {
+                "Type" => "Pages",
+                "Kids" => lopdf::Object::Array(vec![page_id.into()]),
+                "Count" => 1,
+            }),
+        );
+        document.objects.insert(
+            catalog_id,
+            lopdf::Object::Dictionary(lopdf::dictionary! {
+                "Type" => "Catalog",
+                "Pages" => pages_id,
+            }),
+        );
+        document.trailer.set("Root", catalog_id);
+
+        let mut bytes = Vec::new();
+        document.save_to(&mut bytes).unwrap();
+        bytes
+    }
+
+    fn form_pdf(readonly: bool) -> Vec<u8> {
+        let mut document = lopdf::Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let page_id = document.new_object_id();
+        let field_id = document.new_object_id();
+        let acroform_id = document.new_object_id();
+        let catalog_id = document.new_object_id();
+        let flags = if readonly { 1 } else { 0 };
+
+        document.objects.insert(
+            field_id,
+            lopdf::Object::Dictionary(lopdf::dictionary! {
+                "FT" => "Tx",
+                "T" => lopdf::Object::string_literal("customer"),
+                "V" => lopdf::Object::string_literal(""),
+                "Ff" => flags,
+                "Rect" => lopdf::Object::Array(vec![10.into(), 10.into(), 120.into(), 30.into()]),
+                "P" => page_id,
+            }),
+        );
+        document.objects.insert(
+            page_id,
+            lopdf::Object::Dictionary(lopdf::dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "MediaBox" => lopdf::Object::Array(vec![0.into(), 0.into(), 200.into(), 200.into()]),
+                "Annots" => lopdf::Object::Array(vec![field_id.into()]),
+            }),
+        );
+        document.objects.insert(
+            pages_id,
+            lopdf::Object::Dictionary(lopdf::dictionary! {
+                "Type" => "Pages",
+                "Kids" => lopdf::Object::Array(vec![page_id.into()]),
+                "Count" => 1,
+            }),
+        );
+        document.objects.insert(
+            acroform_id,
+            lopdf::Object::Dictionary(lopdf::dictionary! {
+                "Fields" => lopdf::Object::Array(vec![field_id.into()]),
+            }),
+        );
+        document.objects.insert(
+            catalog_id,
+            lopdf::Object::Dictionary(lopdf::dictionary! {
+                "Type" => "Catalog",
+                "Pages" => pages_id,
+                "AcroForm" => acroform_id,
             }),
         );
         document.trailer.set("Root", catalog_id);

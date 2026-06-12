@@ -2,11 +2,14 @@
 #![doc = "Core contracts and shared logic for OxidePDF."]
 
 mod annotations;
+mod attachments;
 mod compare;
 mod errors;
 mod forms;
+mod interactive;
 mod metadata;
 mod operators;
+mod outlines;
 mod overlay;
 mod page_ops;
 mod pdf_io;
@@ -14,8 +17,30 @@ mod security;
 mod signatures;
 mod workflow;
 
+pub use annotations::{
+    edit_pdf_annotations, inspect_pdf_annotations, AnnotationEditAction, AnnotationEditOptions,
+    AnnotationInspectOptions,
+};
+pub use attachments::{
+    edit_pdf_attachment_artifacts, extract_pdf_attachment, inspect_pdf_attachments,
+    AttachmentEditAction, AttachmentEditOptions, AttachmentExtractOptions,
+    AttachmentInspectOptions,
+};
 pub use errors::OxideError;
+pub use forms::{
+    fill_pdf_form, inspect_pdf_forms, remove_pdf_forms, unlock_pdf_form_readonly, FormFieldValue,
+    FormFillOptions, FormInspectOptions,
+};
+pub use interactive::{remove_pdf_interactive_elements, InteractiveRemovalOptions};
+pub use metadata::{
+    edit_pdf_metadata, inspect_pdf_metadata, MetadataEditAction, MetadataEditOptions,
+    MetadataEntry, MetadataInspectOptions,
+};
 pub use operators::{PdfEditOptions, PdfInspectOptions, PdfSignOptions};
+pub use outlines::{
+    edit_pdf_outline, inspect_pdf_outline, OutlineEditAction, OutlineEditOptions,
+    OutlineInspectOptions, OutlineItem, OutlineTree,
+};
 pub use workflow::{
     execute_workflow, validate_workflow, Artifact, ArtifactRef, ArtifactStore, BytesArtifact,
     ExecutionPlan, ExecutionResult, ImageArtifact, InputSpec, OperatorRunner, OperatorSpec,

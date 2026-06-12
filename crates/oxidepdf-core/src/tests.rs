@@ -157,6 +157,62 @@ fn parses_signature_workflow_operator_schema() {
 }
 
 #[test]
+fn parses_document_interaction_workflow_operator_schema() {
+    let workflow: Workflow = serde_yaml::from_str(
+        r#"
+            version: 1
+            inputs:
+              - id: source
+                path: ./input.pdf
+              - id: attachment
+                path: ./note.txt
+            tasks:
+              - id: metadata
+                op:
+                  pdf_edit:
+                    metadata:
+                      action: set
+                      entries:
+                        - key: title
+                          value: Quarterly Report
+                        - key: author
+                          value: OxidePDF
+                inputs: [source]
+              - id: attach
+                op:
+                  pdf_edit:
+                    attachment:
+                      action: add
+                      name: note.txt
+                      description: Review note
+                inputs: [metadata, attachment]
+              - id: inspect_forms
+                op:
+                  pdf_inspect:
+                    forms: {}
+                inputs: [attach]
+            outputs:
+              - id: final
+                from: inspect_forms
+                path: ./forms.json
+            "#,
+    )
+    .unwrap();
+
+    assert!(matches!(
+        workflow.tasks[0].op,
+        OperatorSpec::PdfEdit(PdfEditOptions::Metadata(MetadataEditOptions {
+            action: MetadataEditAction::Set,
+            ..
+        }))
+    ));
+    assert!(matches!(
+        workflow.tasks[2].op,
+        OperatorSpec::PdfInspect(PdfInspectOptions::Forms(FormInspectOptions {}))
+    ));
+}
+
+#[test]
 fn missing_required_workflow_field_fails() {
     let err = serde_json::from_str::<Workflow>(
         r#"
@@ -742,6 +798,295 @@ fn add_pdf_page_numbers_rejects_non_ascii_text() {
 
     assert!(matches!(err, OxideError::InvalidInput { .. }));
     assert!(err.to_string().contains("ASCII"));
+}
+
+#[test]
+fn metadata_set_delete_validate_and_report_are_deterministic() {
+    let pdf = empty_page_pdf();
+    let edited = edit_pdf_metadata(
+        &pdf,
+        &MetadataEditOptions {
+            action: MetadataEditAction::Set,
+            entries: metadata_entries([("title", "Quarterly Report"), ("author", "OxidePDF")]),
+            keys: Vec::new(),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+
+    let report = inspect_pdf_metadata(&edited.bytes, &MetadataInspectOptions::default()).unwrap();
+    let report: serde_json::Value = serde_json::from_str(&report.text).unwrap();
+    assert_eq!(report["valid"], true);
+    assert_eq!(report["entries"]["title"], "Quarterly Report");
+    assert_eq!(report["entries"]["author"], "OxidePDF");
+
+    let deleted = edit_pdf_metadata(
+        &edited.bytes,
+        &MetadataEditOptions {
+            action: MetadataEditAction::Delete,
+            entries: Vec::new(),
+            keys: vec!["author".to_owned()],
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let deleted_again = edit_pdf_metadata(
+        &deleted.bytes,
+        &MetadataEditOptions {
+            action: MetadataEditAction::Delete,
+            entries: Vec::new(),
+            keys: vec!["author".to_owned()],
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        inspect_pdf_metadata(&deleted.bytes, &MetadataInspectOptions::default())
+            .unwrap()
+            .text,
+        inspect_pdf_metadata(&deleted_again.bytes, &MetadataInspectOptions::default())
+            .unwrap()
+            .text
+    );
+}
+
+#[test]
+fn outline_set_get_and_delete_are_stable() {
+    let pdf = empty_page_pdf();
+    let outline = OutlineTree {
+        items: vec![OutlineItem {
+            title: "Chapter 1".to_owned(),
+            page: 1,
+            children: vec![OutlineItem {
+                title: "Section 1.1".to_owned(),
+                page: 1,
+                children: Vec::new(),
+            }],
+        }],
+    };
+
+    let edited = edit_pdf_outline(
+        &pdf,
+        &OutlineEditOptions {
+            action: OutlineEditAction::Set,
+            tree: Some(outline.clone()),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let report = inspect_pdf_outline(&edited.bytes, &OutlineInspectOptions::default()).unwrap();
+    let report: OutlineTree = serde_json::from_str(&report.text).unwrap();
+    assert_eq!(report, outline);
+
+    let deleted = edit_pdf_outline(
+        &edited.bytes,
+        &OutlineEditOptions {
+            action: OutlineEditAction::Delete,
+            tree: None,
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let report = inspect_pdf_outline(&deleted.bytes, &OutlineInspectOptions::default()).unwrap();
+    let report: OutlineTree = serde_json::from_str(&report.text).unwrap();
+    assert!(report.items.is_empty());
+}
+
+#[test]
+fn outline_inspection_rejects_unsupported_destinations_without_defaulting_page() {
+    let err = inspect_pdf_outline(
+        &pdf_with_named_outline_destination(),
+        &OutlineInspectOptions::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, OxideError::UnsupportedPdfFeature { .. }));
+    assert!(err.to_string().contains("outline"));
+}
+
+#[test]
+fn attachments_add_list_extract_and_delete() {
+    let pdf = empty_page_pdf();
+    let edited = edit_pdf_attachment_artifacts(
+        &[Artifact::pdf(&pdf), Artifact::bytes(b"attachment bytes")],
+        &AttachmentEditOptions {
+            action: AttachmentEditAction::Add,
+            name: Some("note.txt".to_owned()),
+            description: Some("Review note".to_owned()),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+
+    let report = inspect_pdf_attachments(&edited.bytes, &AttachmentInspectOptions::default())
+        .unwrap()
+        .text;
+    let report: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(report["attachments"][0]["name"], "note.txt");
+    assert_eq!(report["attachments"][0]["description"], "Review note");
+    assert_eq!(report["attachments"][0]["size"], 16);
+
+    let extracted =
+        extract_pdf_attachment(&edited.bytes, "note.txt", &ResourceLimits::default()).unwrap();
+    assert_eq!(extracted.bytes, b"attachment bytes");
+
+    let deleted = edit_pdf_attachment_artifacts(
+        &[Artifact::pdf(&edited.bytes)],
+        &AttachmentEditOptions {
+            action: AttachmentEditAction::Delete,
+            name: Some("note.txt".to_owned()),
+            description: None,
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let report = inspect_pdf_attachments(&deleted.bytes, &AttachmentInspectOptions::default())
+        .unwrap()
+        .text;
+    let report: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert!(report["attachments"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn attachment_inspection_reports_malformed_names_tree() {
+    let err = inspect_pdf_attachments(
+        &pdf_with_malformed_names_tree(),
+        &AttachmentInspectOptions::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, OxideError::ParsePdf));
+}
+
+#[test]
+fn annotation_inspection_reports_malformed_annotation_array() {
+    let err = inspect_pdf_annotations(
+        &pdf_with_malformed_annotation_array(),
+        &AnnotationInspectOptions::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, OxideError::ParsePdf));
+}
+
+#[test]
+fn annotations_add_list_delete_and_interactive_removal_are_selective() {
+    let pdf = empty_page_pdf();
+    let annotated = edit_pdf_annotations(
+        &pdf,
+        &AnnotationEditOptions {
+            action: AnnotationEditAction::AddText,
+            page: Some(1),
+            id: Some("review-note".to_owned()),
+            text: Some("Review this page".to_owned()),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let report = inspect_pdf_annotations(&annotated.bytes, &AnnotationInspectOptions::default())
+        .unwrap()
+        .text;
+    let report: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(report["annotations"][0]["id"], "review-note");
+    assert_eq!(report["annotations"][0]["text"], "Review this page");
+
+    let removed = remove_pdf_interactive_elements(
+        &annotated.bytes,
+        &InteractiveRemovalOptions {
+            annotations: true,
+            forms: false,
+            actions: false,
+            javascript: false,
+            embedded_files: false,
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let report = inspect_pdf_annotations(&removed.bytes, &AnnotationInspectOptions::default())
+        .unwrap()
+        .text;
+    let report: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert!(report["annotations"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn interactive_removal_reports_malformed_names_tree() {
+    let err = remove_pdf_interactive_elements(
+        &pdf_with_malformed_names_tree(),
+        &InteractiveRemovalOptions {
+            annotations: false,
+            forms: false,
+            actions: false,
+            javascript: true,
+            embedded_files: false,
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, OxideError::ParsePdf));
+}
+
+#[test]
+fn form_inspection_reports_malformed_acroform() {
+    let err = inspect_pdf_forms(
+        &pdf_with_malformed_acroform(),
+        &FormInspectOptions::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, OxideError::ParsePdf));
+}
+
+#[test]
+fn forms_fill_unlock_and_remove_without_appearance_fallback() {
+    let pdf = pdf_with_text_form_field(true);
+    let filled = fill_pdf_form(
+        &pdf,
+        &FormFillOptions {
+            fields: vec![FormFieldValue {
+                name: "customer".to_owned(),
+                value: "Ada".to_owned(),
+            }],
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let report = inspect_pdf_forms(&filled.bytes, &FormInspectOptions::default())
+        .unwrap()
+        .text;
+    let report: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(report["fields"][0]["name"], "customer");
+    assert_eq!(report["fields"][0]["value"], "Ada");
+    assert_eq!(report["fields"][0]["readonly"], true);
+
+    let unlocked = unlock_pdf_form_readonly(&filled.bytes, &ResourceLimits::default()).unwrap();
+    let report = inspect_pdf_forms(&unlocked.bytes, &FormInspectOptions::default())
+        .unwrap()
+        .text;
+    let report: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(report["fields"][0]["readonly"], false);
+
+    let removed = remove_pdf_forms(&unlocked.bytes, &ResourceLimits::default()).unwrap();
+    let report = inspect_pdf_forms(&removed.bytes, &FormInspectOptions::default())
+        .unwrap()
+        .text;
+    let report: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert!(report["fields"].as_array().unwrap().is_empty());
+
+    let xfa_err = fill_pdf_form(
+        &pdf_with_xfa_form(),
+        &FormFillOptions {
+            fields: vec![FormFieldValue {
+                name: "customer".to_owned(),
+                value: "Ada".to_owned(),
+            }],
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(xfa_err, OxideError::UnsupportedPdfFeature { .. }));
+    assert!(xfa_err.to_string().contains("XFA"));
 }
 
 #[test]
@@ -1817,6 +2162,159 @@ fn empty_page_pdf() -> Vec<u8> {
     page.finish();
 
     pdf.finish()
+}
+
+fn metadata_entries<const N: usize>(entries: [(&str, &str); N]) -> Vec<MetadataEntry> {
+    entries
+        .into_iter()
+        .map(|(key, value)| MetadataEntry {
+            key: key.to_owned(),
+            value: value.to_owned(),
+        })
+        .collect()
+}
+
+fn pdf_with_text_form_field(readonly: bool) -> Vec<u8> {
+    let mut document = lopdf::Document::with_version("1.7");
+    let pages_id = document.new_object_id();
+    let page_id = document.new_object_id();
+    let field_id = document.new_object_id();
+    let acroform_id = document.new_object_id();
+    let catalog_id = document.new_object_id();
+    let flags = if readonly { 1 } else { 0 };
+
+    document.objects.insert(
+        field_id,
+        Object::Dictionary(lopdf::dictionary! {
+            "FT" => "Tx",
+            "T" => Object::string_literal("customer"),
+            "V" => Object::string_literal(""),
+            "Ff" => flags,
+            "Rect" => Object::Array(vec![10.into(), 10.into(), 120.into(), 30.into()]),
+            "P" => page_id,
+        }),
+    );
+    document.objects.insert(
+        page_id,
+        Object::Dictionary(lopdf::dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => Object::Array(vec![0.into(), 0.into(), 200.into(), 200.into()]),
+            "Annots" => Object::Array(vec![field_id.into()]),
+        }),
+    );
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(lopdf::dictionary! {
+            "Type" => "Pages",
+            "Kids" => Object::Array(vec![page_id.into()]),
+            "Count" => 1,
+        }),
+    );
+    document.objects.insert(
+        acroform_id,
+        Object::Dictionary(lopdf::dictionary! {
+            "Fields" => Object::Array(vec![field_id.into()]),
+        }),
+    );
+    document.objects.insert(
+        catalog_id,
+        Object::Dictionary(lopdf::dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+            "AcroForm" => acroform_id,
+        }),
+    );
+    document.trailer.set("Root", catalog_id);
+
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+fn pdf_with_named_outline_destination() -> Vec<u8> {
+    let mut document = lopdf::Document::load_mem(&empty_page_pdf()).unwrap();
+    let outline_id = document.new_object_id();
+    let item_id = document.new_object_id();
+    document.objects.insert(
+        item_id,
+        Object::Dictionary(lopdf::dictionary! {
+            "Title" => Object::string_literal("Named destination"),
+            "Parent" => outline_id,
+            "Dest" => Object::Name(b"named-destination".to_vec()),
+        }),
+    );
+    document.objects.insert(
+        outline_id,
+        Object::Dictionary(lopdf::dictionary! {
+            "Type" => "Outlines",
+            "First" => item_id,
+            "Last" => item_id,
+            "Count" => 1,
+        }),
+    );
+    document
+        .catalog_mut()
+        .unwrap()
+        .set("Outlines", Object::Reference(outline_id));
+
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+fn pdf_with_malformed_names_tree() -> Vec<u8> {
+    let mut document = lopdf::Document::load_mem(&empty_page_pdf()).unwrap();
+    document
+        .catalog_mut()
+        .unwrap()
+        .set("Names", Object::string_literal("malformed names tree"));
+
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+fn pdf_with_malformed_annotation_array() -> Vec<u8> {
+    let mut document = lopdf::Document::load_mem(&empty_page_pdf()).unwrap();
+    let page_id = *document.get_pages().get(&1).unwrap();
+    document
+        .get_object_mut(page_id)
+        .unwrap()
+        .as_dict_mut()
+        .unwrap()
+        .set("Annots", Object::string_literal("malformed annotations"));
+
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+fn pdf_with_malformed_acroform() -> Vec<u8> {
+    let mut document = lopdf::Document::load_mem(&empty_page_pdf()).unwrap();
+    document
+        .catalog_mut()
+        .unwrap()
+        .set("AcroForm", Object::string_literal("malformed acroform"));
+
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+fn pdf_with_xfa_form() -> Vec<u8> {
+    let mut document = lopdf::Document::load_mem(&pdf_with_text_form_field(false)).unwrap();
+    let catalog = document.catalog().unwrap();
+    let acroform_id = catalog.get(b"AcroForm").unwrap().as_reference().unwrap();
+    document
+        .get_object_mut(acroform_id)
+        .unwrap()
+        .as_dict_mut()
+        .unwrap()
+        .set("XFA", Object::string_literal("xfa packet"));
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
 }
 
 fn page_resources(document: &lopdf::Document, page_number: u32) -> Dictionary {
