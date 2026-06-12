@@ -422,7 +422,7 @@ impl OperatorRunner for PdfOperatorRunner {
         let artifact = match &task.op {
             OperatorSpec::PdfEdit(options) => run_pdf_edit(options, inputs, &self.limits),
             OperatorSpec::PdfInspect(options) => run_pdf_inspect(options, inputs, &self.limits),
-            OperatorSpec::PdfSecurity(options) => run_pdf_security(options),
+            OperatorSpec::PdfSecurity(options) => run_pdf_security(options, inputs, &self.limits),
             OperatorSpec::PdfCompare(options) => run_pdf_compare(options),
             OperatorSpec::PdfSign(options) => run_pdf_sign(options, inputs, &self.limits),
         }?;

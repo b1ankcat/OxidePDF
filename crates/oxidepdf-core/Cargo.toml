@@ -17,6 +17,7 @@ lopdf.workspace = true
 pdf-extract.workspace = true
 pdf-writer.workspace = true
 pem-rfc7468.workspace = true
+rand.workspace = true
 resvg.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -27,6 +28,7 @@ svg2pdf.workspace = true
 thiserror.workspace = true
 usvg.workspace = true
 x509-cert.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 serde_yaml.workspace = true

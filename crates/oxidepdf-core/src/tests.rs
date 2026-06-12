@@ -1182,6 +1182,69 @@ fn parses_compression_operator_schema() {
 }
 
 #[test]
+fn parses_security_operator_schema() {
+    let workflow: Workflow = serde_yaml::from_str(
+        r#"
+        version: 1
+        inputs:
+          - id: source
+            path: ./input.pdf
+        tasks:
+          - id: encrypt
+            op:
+              pdf_security:
+                encrypt:
+                  owner_password: owner-pass
+                  user_password: user-pass
+                  algorithm: aes256
+                  permissions:
+                    print: true
+                    modify: false
+                    copy: false
+                    annotate: false
+                    fill_forms: true
+                    accessibility: true
+                    assemble: false
+                    high_quality_print: true
+            inputs: [source]
+          - id: decrypt
+            op:
+              pdf_security:
+                decrypt:
+                  password: user-pass
+            inputs: [encrypt]
+          - id: permissions
+            op:
+              pdf_security:
+                permissions_get:
+                  password: owner-pass
+            inputs: [encrypt]
+        outputs:
+          - id: final
+            from: decrypt
+            path: ./output.pdf
+        "#,
+    )
+    .unwrap();
+
+    assert!(matches!(
+        workflow.tasks[0].op,
+        OperatorSpec::PdfSecurity(PdfSecurityOptions::Encrypt(SecurityEncryptOptions {
+            algorithm: EncryptionAlgorithm::Aes256,
+            ..
+        }))
+    ));
+    assert!(matches!(
+        workflow.tasks[1].op,
+        OperatorSpec::PdfSecurity(PdfSecurityOptions::Decrypt(_))
+    ));
+    assert!(matches!(
+        workflow.tasks[2].op,
+        OperatorSpec::PdfSecurity(PdfSecurityOptions::PermissionsGet(_))
+    ));
+}
+
+#[test]
 fn overlay_pdf_page_and_signature_appearance_are_visual_only() {
     let pdf = empty_page_pdf();
     let overlay = include_bytes!("../../../tests/test.pdf");
@@ -1520,6 +1583,170 @@ fn compress_pdf_rejects_unsupported_stream_filter() {
             feature: "stream filter 'DCTDecode'".to_owned()
         }
     );
+}
+
+#[test]
+fn pdf_security_encrypts_with_aes256_and_decrypts_with_correct_password() {
+    let pdf = include_bytes!("../../../tests/test.pdf");
+    let encrypted = encrypt_pdf(
+        pdf,
+        &SecurityEncryptOptions {
+            owner_password: "owner-pass".to_owned(),
+            user_password: "user-pass".to_owned(),
+            algorithm: EncryptionAlgorithm::Aes256,
+            permissions: PermissionPolicy::default(),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+
+    let encrypted_document = lopdf::Document::load_mem(&encrypted.bytes).unwrap();
+    assert!(encrypted_document.is_encrypted());
+    let encrypted_dict = encrypted_document.get_encrypted().unwrap();
+    assert_eq!(encrypted_dict.get(b"V").unwrap().as_i64().unwrap(), 5);
+    assert_eq!(encrypted_dict.get(b"R").unwrap().as_i64().unwrap(), 6);
+
+    let decrypted = decrypt_pdf(
+        &encrypted.bytes,
+        &SecurityDecryptOptions {
+            password: Some("user-pass".to_owned()),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let decrypted_document = lopdf::Document::load_mem(&decrypted.bytes).unwrap();
+    assert!(!decrypted_document.is_encrypted());
+    assert_eq!(decrypted_document.get_pages().len(), 3);
+}
+
+#[test]
+fn pdf_security_rejects_wrong_or_missing_password_without_decrypted_output() {
+    let encrypted = encrypt_pdf(
+        &empty_page_pdf(),
+        &SecurityEncryptOptions {
+            owner_password: "owner-pass".to_owned(),
+            user_password: "user-pass".to_owned(),
+            algorithm: EncryptionAlgorithm::Aes256,
+            permissions: PermissionPolicy::default(),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+
+    let wrong = decrypt_pdf(
+        &encrypted.bytes,
+        &SecurityDecryptOptions {
+            password: Some("wrong-pass".to_owned()),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap_err();
+    assert_eq!(wrong, OxideError::IncorrectPassword);
+
+    let missing = decrypt_pdf(
+        &encrypted.bytes,
+        &SecurityDecryptOptions { password: None },
+        &ResourceLimits::default(),
+    )
+    .unwrap_err();
+    assert_eq!(missing, OxideError::EncryptedPdf);
+}
+
+#[test]
+fn pdf_security_reports_and_sets_permission_policy() {
+    let restricted = PermissionPolicy {
+        print: true,
+        modify: false,
+        copy: false,
+        annotate: false,
+        fill_forms: true,
+        accessibility: true,
+        assemble: false,
+        high_quality_print: true,
+    };
+    let encrypted = encrypt_pdf(
+        &empty_page_pdf(),
+        &SecurityEncryptOptions {
+            owner_password: "owner-pass".to_owned(),
+            user_password: "user-pass".to_owned(),
+            algorithm: EncryptionAlgorithm::Aes256,
+            permissions: restricted.clone(),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+
+    let report_text = inspect_pdf_permissions(
+        &encrypted.bytes,
+        &SecurityPermissionGetOptions {
+            password: Some("owner-pass".to_owned()),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let report: PermissionReport = serde_json::from_str(&report_text.text).unwrap();
+    assert!(report.encrypted);
+    assert_eq!(report.revision, Some(6));
+    assert_eq!(report.permissions.copy, restricted.copy);
+    assert_eq!(report.permissions.modify, restricted.modify);
+    assert_eq!(report.permissions.fill_forms, restricted.fill_forms);
+
+    let updated = set_pdf_permissions(
+        &encrypted.bytes,
+        &SecurityPermissionSetOptions {
+            owner_password: "owner-pass".to_owned(),
+            user_password: "new-user-pass".to_owned(),
+            algorithm: EncryptionAlgorithm::Aes256,
+            permissions: PermissionPolicy {
+                copy: true,
+                modify: true,
+                ..restricted
+            },
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let updated_report: PermissionReport = serde_json::from_str(
+        &inspect_pdf_permissions(
+            &updated.bytes,
+            &SecurityPermissionGetOptions {
+                password: Some("new-user-pass".to_owned()),
+            },
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .text,
+    )
+    .unwrap();
+    assert!(updated_report.permissions.copy);
+    assert!(updated_report.permissions.modify);
+}
+
+#[test]
+fn pdf_security_rejects_rc4_and_unsupported_revisions() {
+    let rc4 = encrypt_pdf(
+        &empty_page_pdf(),
+        &SecurityEncryptOptions {
+            owner_password: "owner-pass".to_owned(),
+            user_password: "user-pass".to_owned(),
+            algorithm: EncryptionAlgorithm::Rc4,
+            permissions: PermissionPolicy::default(),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(rc4, OxideError::UnsupportedPdfFeature { .. }));
+
+    let unsupported = encrypted_pdf_with_revision(2);
+    let err = decrypt_pdf(
+        &unsupported,
+        &SecurityDecryptOptions {
+            password: Some("user-pass".to_owned()),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(err, OxideError::UnsupportedPdfFeature { .. }));
 }
 
 #[test]
@@ -2436,6 +2663,28 @@ fn write_invalid_trust_anchors(name: &str) -> PathBuf {
     )
     .unwrap();
     path
+}
+
+fn encrypted_pdf_with_revision(revision: i64) -> Vec<u8> {
+    let mut document = lopdf::Document::load_mem(&empty_page_pdf()).unwrap();
+    let encrypt_id = document.new_object_id();
+    document.objects.insert(
+        encrypt_id,
+        Object::Dictionary(lopdf::dictionary! {
+            "Filter" => "Standard",
+            "V" => 1,
+            "R" => revision,
+            "Length" => 40,
+            "P" => -4,
+            "O" => Object::string_literal(vec![0u8; 32]),
+            "U" => Object::string_literal(vec![0u8; 32]),
+        }),
+    );
+    document.trailer.set("Encrypt", encrypt_id);
+
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
 }
 
 fn pdf_with_signature_dictionary(byte_range: Vec<i64>, contents: Vec<u8>) -> Vec<u8> {

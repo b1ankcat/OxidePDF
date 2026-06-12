@@ -13,9 +13,11 @@ use oxidepdf_core::{
     NUpOptions, OperatorSpec, OutlineEditAction, OutlineEditOptions, OutlineInspectOptions,
     OutlineTree, OverlayKind, OverlayOptions, OxideError, PageNumberPosition, PageNumbersOptions,
     PageSelectionOptions, PdfCompareOptions, PdfEditOptions, PdfInspectOptions, PdfOperatorRunner,
-    PdfSecurityOptions, PdfSignOptions, RenderOptions, ReorderOptions, RotateOptions,
-    ScalePagesOptions, SignatureOptions, SinglePageOptions, SplitOptions, SvgToPdfOptions, TaskId,
-    TaskSpec, WatermarkKind, WatermarkOptions, Workflow, WorkflowMetadata, WorkflowVersion,
+    PdfSecurityOptions, PdfSignOptions, PermissionPolicy, RenderOptions, ReorderOptions,
+    RotateOptions, ScalePagesOptions, SecurityDecryptOptions, SecurityEncryptOptions,
+    SecurityPermissionGetOptions, SecurityPermissionSetOptions, SignatureOptions,
+    SinglePageOptions, SplitOptions, SvgToPdfOptions, TaskId, TaskSpec, WatermarkKind,
+    WatermarkOptions, Workflow, WorkflowMetadata, WorkflowVersion,
 };
 use std::fs;
 use std::io::{self, Read, Write};
@@ -46,9 +48,6 @@ enum Commands {
     #[command(name = "pdf-inspect")]
     #[command(subcommand)]
     PdfInspect(PdfInspectCommand),
-    /// Apply password, encryption, or permission operations.
-    #[command(name = "pdf-security")]
-    PdfSecurity(PdfSecurityArgs),
     /// Compare PDF files.
     #[command(name = "pdf-compare")]
     PdfCompare(PdfCompareArgs),
@@ -92,6 +91,13 @@ enum Commands {
     Color(ColorCommand),
     /// Compress and optimize a PDF without implicit quality loss.
     Compress(CompressArgs),
+    /// Encrypt a PDF with owner and user passwords.
+    Encrypt(SecurityEncryptArgs),
+    /// Decrypt a password-protected PDF.
+    Decrypt(SecurityDecryptArgs),
+    /// Inspect or change password permission policy.
+    #[command(subcommand)]
+    Permissions(PermissionsCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -219,6 +225,12 @@ enum ColorCommand {
     Contrast(ColorContrastArgs),
     Invert(ColorEditArgs),
     Replace(ColorReplaceArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum PermissionsCommand {
+    Get(PermissionsGetArgs),
+    Set(PermissionsSetArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -688,21 +700,124 @@ struct VerifySignaturesArgs {
 }
 
 #[derive(Debug, Parser)]
-struct PdfSecurityArgs {
-    /// Explicit security operation name.
-    #[arg(long)]
-    operation: String,
-
+struct SecurityEncryptArgs {
     /// Input PDF file, or `-` to read from stdin.
     input: PathBuf,
 
-    /// Output report file, or `-` to write to stdout.
+    /// Output encrypted PDF file, or `-` to write to stdout.
     #[arg(short, long)]
     output: PathBuf,
+
+    /// Owner password used to control future permission changes.
+    #[arg(long)]
+    owner_password: String,
+
+    /// User password required to open the document.
+    #[arg(long)]
+    user_password: String,
+
+    #[command(flatten)]
+    permissions: PermissionArgs,
 
     /// Overwrite output files when they already exist.
     #[arg(long)]
     force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct SecurityDecryptArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Output decrypted PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Owner or user password.
+    #[arg(long)]
+    password: String,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct PermissionsGetArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Output JSON report file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Owner or user password for encrypted PDFs.
+    #[arg(long)]
+    password: Option<String>,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct PermissionsSetArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Output encrypted PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Existing owner password for encrypted PDFs and owner password for the output PDF.
+    #[arg(long)]
+    owner_password: String,
+
+    /// User password required to open the output document.
+    #[arg(long)]
+    user_password: String,
+
+    #[command(flatten)]
+    permissions: PermissionArgs,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Clone, Parser)]
+struct PermissionArgs {
+    /// Disallow printing.
+    #[arg(long)]
+    no_print: bool,
+
+    /// Disallow document modifications.
+    #[arg(long)]
+    no_modify: bool,
+
+    /// Disallow copying text and graphics.
+    #[arg(long)]
+    no_copy: bool,
+
+    /// Disallow annotations.
+    #[arg(long)]
+    no_annotate: bool,
+
+    /// Disallow filling form fields.
+    #[arg(long)]
+    no_fill_forms: bool,
+
+    /// Disallow accessibility extraction.
+    #[arg(long)]
+    no_accessibility: bool,
+
+    /// Disallow page assembly.
+    #[arg(long)]
+    no_assemble: bool,
+
+    /// Disallow high quality printing.
+    #[arg(long)]
+    no_high_quality_print: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -1179,7 +1294,6 @@ fn cli_reads_stdin(cli: &Cli) -> bool {
         Some(Commands::Run(args)) => is_stdio(&args.workflow),
         Some(Commands::PdfEdit(command)) => pdf_edit_reads_stdin(command),
         Some(Commands::PdfInspect(command)) => pdf_inspect_reads_stdin(command),
-        Some(Commands::PdfSecurity(args)) => is_stdio(&args.input),
         Some(Commands::PdfCompare(args)) => is_stdio(&args.left) || is_stdio(&args.right),
         Some(Commands::PdfSign(command)) => pdf_sign_reads_stdin(command),
         Some(Commands::Metadata(command)) => metadata_reads_stdin(command),
@@ -1194,6 +1308,9 @@ fn cli_reads_stdin(cli: &Cli) -> bool {
         Some(Commands::Image(command)) => image_reads_stdin(command),
         Some(Commands::Color(command)) => color_reads_stdin(command),
         Some(Commands::Compress(args)) => is_stdio(&args.input),
+        Some(Commands::Encrypt(args)) => is_stdio(&args.input),
+        Some(Commands::Decrypt(args)) => is_stdio(&args.input),
+        Some(Commands::Permissions(command)) => permissions_reads_stdin(command),
         None => false,
     }
 }
@@ -1300,6 +1417,13 @@ fn color_reads_stdin(command: &ColorCommand) -> bool {
     }
 }
 
+fn permissions_reads_stdin(command: &PermissionsCommand) -> bool {
+    match command {
+        PermissionsCommand::Get(args) => is_stdio(&args.input),
+        PermissionsCommand::Set(args) => is_stdio(&args.input),
+    }
+}
+
 fn run_with_io_result<I, S>(args: I, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError>
 where
     I: IntoIterator<Item = S>,
@@ -1310,7 +1434,6 @@ where
         Some(Commands::Run(args)) => run_workflow(args, stdin, stdout),
         Some(Commands::PdfEdit(command)) => run_pdf_edit(command, stdin, stdout),
         Some(Commands::PdfInspect(command)) => run_pdf_inspect(command, stdin, stdout),
-        Some(Commands::PdfSecurity(args)) => run_pdf_security(args, stdin, stdout),
         Some(Commands::PdfCompare(args)) => run_pdf_compare(args, stdin, stdout),
         Some(Commands::PdfSign(command)) => run_pdf_sign(command, stdin, stdout),
         Some(Commands::Metadata(command)) => run_metadata(command, stdin, stdout),
@@ -1325,6 +1448,9 @@ where
         Some(Commands::Image(command)) => run_image(command, stdin, stdout),
         Some(Commands::Color(command)) => run_color(command, stdin, stdout),
         Some(Commands::Compress(args)) => run_compress(args, stdin, stdout),
+        Some(Commands::Encrypt(args)) => run_encrypt(args, stdin, stdout),
+        Some(Commands::Decrypt(args)) => run_decrypt(args, stdin, stdout),
+        Some(Commands::Permissions(command)) => run_permissions(command, stdin, stdout),
         None => Ok(()),
     }
 }
@@ -1791,21 +1917,92 @@ fn run_verify_signatures(
     execute_and_write_workflow(workflow, stdin, args.force, stdout)
 }
 
-fn run_pdf_security(
-    args: PdfSecurityArgs,
+fn run_encrypt(
+    args: SecurityEncryptArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
 ) -> Result<(), CliError> {
     let workflow = one_input_workflow(
         args.input,
         args.output,
-        "pdf_security",
-        OperatorSpec::PdfSecurity(PdfSecurityOptions {
-            operation: args.operation,
-        }),
+        "encrypt",
+        OperatorSpec::PdfSecurity(PdfSecurityOptions::Encrypt(SecurityEncryptOptions {
+            owner_password: args.owner_password,
+            user_password: args.user_password,
+            algorithm: Default::default(),
+            permissions: permission_policy(&args.permissions),
+        })),
     );
 
     execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_decrypt(
+    args: SecurityDecryptArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "decrypt",
+        OperatorSpec::PdfSecurity(PdfSecurityOptions::Decrypt(SecurityDecryptOptions {
+            password: Some(args.password),
+        })),
+    );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_permissions(
+    command: PermissionsCommand,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    match command {
+        PermissionsCommand::Get(args) => {
+            let workflow = one_input_workflow(
+                args.input,
+                args.output,
+                "permissions_get",
+                OperatorSpec::PdfSecurity(PdfSecurityOptions::PermissionsGet(
+                    SecurityPermissionGetOptions {
+                        password: args.password,
+                    },
+                )),
+            );
+            execute_and_write_workflow(workflow, stdin, args.force, stdout)
+        }
+        PermissionsCommand::Set(args) => {
+            let workflow = one_input_workflow(
+                args.input,
+                args.output,
+                "permissions_set",
+                OperatorSpec::PdfSecurity(PdfSecurityOptions::PermissionsSet(
+                    SecurityPermissionSetOptions {
+                        owner_password: args.owner_password,
+                        user_password: args.user_password,
+                        algorithm: Default::default(),
+                        permissions: permission_policy(&args.permissions),
+                    },
+                )),
+            );
+            execute_and_write_workflow(workflow, stdin, args.force, stdout)
+        }
+    }
+}
+
+fn permission_policy(args: &PermissionArgs) -> PermissionPolicy {
+    PermissionPolicy {
+        print: !args.no_print,
+        modify: !args.no_modify,
+        copy: !args.no_copy,
+        annotate: !args.no_annotate,
+        fill_forms: !args.no_fill_forms,
+        accessibility: !args.no_accessibility,
+        assemble: !args.no_assemble,
+        high_quality_print: !args.no_high_quality_print,
+    }
 }
 
 fn run_pdf_compare(

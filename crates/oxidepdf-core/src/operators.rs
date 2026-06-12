@@ -1,20 +1,21 @@
 use crate::workflow::ResourceLimits;
 use crate::{
     add_pdf_page_numbers_with_limits, booklet_pdf_pages_with_limits, compress_pdf,
-    crop_pdf_pages_with_limits, delete_blank_pdf_pages_with_limits, delete_pdf_pages_with_limits,
-    edit_pdf_annotations, edit_pdf_attachment_artifacts, edit_pdf_colors,
-    edit_pdf_images_artifacts, edit_pdf_metadata, edit_pdf_outline, extract_pdf_attachment,
-    extract_pdf_image, extract_pdf_pages_with_limits, extract_text_from_pdf, fill_pdf_form,
-    image_artifacts_to_pdf, inspect_pdf_annotations, inspect_pdf_attachments, inspect_pdf_forms,
-    inspect_pdf_images, inspect_pdf_metadata, inspect_pdf_outline, merge_pdf_artifacts_with_limits,
+    crop_pdf_pages_with_limits, decrypt_pdf, delete_blank_pdf_pages_with_limits,
+    delete_pdf_pages_with_limits, edit_pdf_annotations, edit_pdf_attachment_artifacts,
+    edit_pdf_colors, edit_pdf_images_artifacts, edit_pdf_metadata, edit_pdf_outline, encrypt_pdf,
+    extract_pdf_attachment, extract_pdf_image, extract_pdf_pages_with_limits,
+    extract_text_from_pdf, fill_pdf_form, image_artifacts_to_pdf, inspect_pdf_annotations,
+    inspect_pdf_attachments, inspect_pdf_forms, inspect_pdf_images, inspect_pdf_metadata,
+    inspect_pdf_outline, inspect_pdf_permissions, merge_pdf_artifacts_with_limits,
     nup_pdf_pages_with_limits, overlay_pdf_artifacts, pdf_bytes, pdf_to_single_page_with_limits,
     remove_pdf_forms, remove_pdf_interactive_elements, render_pdf_page, reorder_pdf_with_limits,
-    rotate_pdf_with_limits, scale_pdf_pages_with_limits, split_pdf_with_limits, svg_to_pdf,
-    unlock_pdf_form_readonly, verify_pdf_signatures, watermark_pdf_artifacts,
-    AnnotationEditOptions, AnnotationInspectOptions, Artifact, AttachmentEditOptions,
-    AttachmentExtractOptions, AttachmentInspectOptions, BookletOptions, ColorEditOptions,
-    CompressionOptions, CropPagesOptions, DeleteBlankPagesOptions, ExtractTextOptions,
-    FormFillOptions, FormInspectOptions, ImageEditOptions, ImageExtractOptions,
+    rotate_pdf_with_limits, scale_pdf_pages_with_limits, set_pdf_permissions,
+    split_pdf_with_limits, svg_to_pdf, unlock_pdf_form_readonly, verify_pdf_signatures,
+    watermark_pdf_artifacts, AnnotationEditOptions, AnnotationInspectOptions, Artifact,
+    AttachmentEditOptions, AttachmentExtractOptions, AttachmentInspectOptions, BookletOptions,
+    ColorEditOptions, CompressionOptions, CropPagesOptions, DeleteBlankPagesOptions,
+    ExtractTextOptions, FormFillOptions, FormInspectOptions, ImageEditOptions, ImageExtractOptions,
     ImageInspectOptions, ImageToPdfOptions, InteractiveRemovalOptions, MergeOptions,
     MetadataEditOptions, MetadataInspectOptions, NUpOptions, OutlineEditOptions,
     OutlineInspectOptions, OverlayOptions, OxideError, PageNumbersOptions, PageSelectionOptions,
@@ -723,10 +724,26 @@ pub(crate) fn run_pdf_inspect(
     }
 }
 
-pub(crate) fn run_pdf_security(options: &PdfSecurityOptions) -> Result<Artifact, OxideError> {
-    Err(OxideError::UnsupportedPdfFeature {
-        feature: format!("pdf_security operation '{}'", options.operation),
-    })
+pub(crate) fn run_pdf_security(
+    options: &PdfSecurityOptions,
+    inputs: &[Artifact],
+    limits: &ResourceLimits,
+) -> Result<Artifact, OxideError> {
+    let input = single_pdf_input(inputs)?;
+    match options {
+        PdfSecurityOptions::Encrypt(options) => {
+            encrypt_pdf(input, options, limits).map(Artifact::Pdf)
+        }
+        PdfSecurityOptions::Decrypt(options) => {
+            decrypt_pdf(input, options, limits).map(Artifact::Pdf)
+        }
+        PdfSecurityOptions::PermissionsGet(options) => {
+            inspect_pdf_permissions(input, options, limits).map(Artifact::Text)
+        }
+        PdfSecurityOptions::PermissionsSet(options) => {
+            set_pdf_permissions(input, options, limits).map(Artifact::Pdf)
+        }
+    }
 }
 
 pub(crate) fn run_pdf_compare(options: &PdfCompareOptions) -> Result<Artifact, OxideError> {

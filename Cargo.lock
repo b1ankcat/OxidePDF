@@ -1157,6 +1157,7 @@ dependencies = [
  "pdf-extract",
  "pdf-writer 0.15.0",
  "pem-rfc7468 1.0.0",
+ "rand 0.9.4",
  "read-fonts 0.28.0",
  "resvg",
  "serde",
@@ -1167,6 +1168,7 @@ dependencies = [
  "thiserror",
  "usvg",
  "x509-cert",
+ "zeroize",
 ]
 
 [[package]]

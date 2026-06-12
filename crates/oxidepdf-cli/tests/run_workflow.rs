@@ -269,6 +269,160 @@ fn compress_command_accepts_explicit_lossy_options() {
 }
 
 #[test]
+fn encrypt_and_decrypt_commands_round_trip_pdf() {
+    let dir = temp_dir("encrypt_and_decrypt_commands_round_trip_pdf");
+    let encrypted = dir.join("encrypted.pdf");
+    let decrypted = dir.join("decrypted.pdf");
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args([
+            "encrypt",
+            fixture_pdf().to_str().unwrap(),
+            "-o",
+            encrypted.to_str().unwrap(),
+            "--owner-password",
+            "owner-pass",
+            "--user-password",
+            "user-pass",
+            "--no-copy",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq(""))
+        .stderr(predicate::eq(""));
+
+    let encrypted_document = lopdf::Document::load(&encrypted).unwrap();
+    assert!(encrypted_document.is_encrypted());
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args([
+            "decrypt",
+            encrypted.to_str().unwrap(),
+            "-o",
+            decrypted.to_str().unwrap(),
+            "--password",
+            "user-pass",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq(""))
+        .stderr(predicate::eq(""));
+
+    assert_eq!(pdf_page_count(&decrypted), 3);
+}
+
+#[test]
+fn decrypt_command_rejects_wrong_password_without_output_or_secret_leak() {
+    let dir = temp_dir("decrypt_command_rejects_wrong_password_without_output_or_secret_leak");
+    let encrypted = dir.join("encrypted.pdf");
+    let output = dir.join("decrypted.pdf");
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args([
+            "encrypt",
+            fixture_pdf().to_str().unwrap(),
+            "-o",
+            encrypted.to_str().unwrap(),
+            "--owner-password",
+            "owner-pass",
+            "--user-password",
+            "user-pass",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args([
+            "decrypt",
+            encrypted.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--password",
+            "wrong-pass",
+        ])
+        .assert()
+        .code(4)
+        .stdout(predicate::eq(""))
+        .stderr(
+            predicate::str::contains("incorrect_password")
+                .and(predicate::str::contains("wrong-pass").not()),
+        );
+
+    assert!(!output.exists());
+}
+
+#[test]
+fn permissions_get_and_set_commands_write_expected_policy() {
+    let dir = temp_dir("permissions_get_and_set_commands_write_expected_policy");
+    let encrypted = dir.join("encrypted.pdf");
+    let report = dir.join("permissions.json");
+    let updated = dir.join("updated.pdf");
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args([
+            "encrypt",
+            fixture_pdf().to_str().unwrap(),
+            "-o",
+            encrypted.to_str().unwrap(),
+            "--owner-password",
+            "owner-pass",
+            "--user-password",
+            "user-pass",
+            "--no-copy",
+            "--no-modify",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args([
+            "permissions",
+            "get",
+            encrypted.to_str().unwrap(),
+            "-o",
+            report.to_str().unwrap(),
+            "--password",
+            "user-pass",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq(""))
+        .stderr(predicate::eq(""));
+
+    let report_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+    assert_eq!(report_json["encrypted"], true);
+    assert_eq!(report_json["permissions"]["copy"], false);
+    assert_eq!(report_json["permissions"]["modify"], false);
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args([
+            "permissions",
+            "set",
+            encrypted.to_str().unwrap(),
+            "-o",
+            updated.to_str().unwrap(),
+            "--owner-password",
+            "owner-pass",
+            "--user-password",
+            "new-user-pass",
+            "--no-print",
+        ])
+        .assert()
+        .success();
+
+    let updated_document = lopdf::Document::load(&updated).unwrap();
+    assert!(updated_document.is_encrypted());
+}
+
+#[test]
 fn render_command_writes_png() {
     let dir = temp_dir("render_command_writes_png");
     let output = dir.join("page.png");

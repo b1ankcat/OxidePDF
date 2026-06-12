@@ -81,7 +81,11 @@ pub use page_ops::{
     NUpOptions, PageNumberPosition, PageNumbersOptions, PageSelectionOptions, ReorderOptions,
     RotateOptions, ScalePagesOptions, SinglePageOptions, SplitOptions,
 };
-pub use security::PdfSecurityOptions;
+pub use security::{
+    decrypt_pdf, encrypt_pdf, inspect_pdf_permissions, set_pdf_permissions, EncryptionAlgorithm,
+    PdfSecurityOptions, PermissionPolicy, PermissionReport, SecurityDecryptOptions,
+    SecurityEncryptOptions, SecurityPermissionGetOptions, SecurityPermissionSetOptions,
+};
 pub use signatures::{
     inspect_pdf_signature_markers_for_research, verify_pdf_signatures, ByteRangeResearch,
     ByteRangeVerification, ContentsVerification, SignatureCheckState, SignatureCheckStatus,
