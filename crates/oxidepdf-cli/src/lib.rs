@@ -4,16 +4,17 @@ use clap::{CommandFactory, Parser, Subcommand};
 use oxidepdf_core::{
     execute_workflow, AnnotationEditAction, AnnotationEditOptions, AnnotationInspectOptions,
     Artifact, ArtifactRef, ArtifactStore, AttachmentEditAction, AttachmentEditOptions,
-    AttachmentExtractOptions, AttachmentInspectOptions, BookletOptions, CropPagesOptions,
-    DeleteBlankPagesOptions, ExtractTextOptions, FormFieldValue, FormFillOptions,
-    FormInspectOptions, ImageToPdfOptions, InteractiveRemovalOptions, MergeOptions,
-    MetadataEditAction, MetadataEditOptions, MetadataEntry, MetadataInspectOptions, NUpOptions,
-    OperatorSpec, OutlineEditAction, OutlineEditOptions, OutlineInspectOptions, OutlineTree,
-    OxideError, PageNumberPosition, PageNumbersOptions, PageSelectionOptions, PdfCompareOptions,
-    PdfEditOptions, PdfInspectOptions, PdfOperatorRunner, PdfSecurityOptions, PdfSignOptions,
-    RenderOptions, ReorderOptions, RotateOptions, ScalePagesOptions, SignatureOptions,
-    SinglePageOptions, SplitOptions, SvgToPdfOptions, TaskId, TaskSpec, WatermarkKind,
-    WatermarkOptions, Workflow, WorkflowMetadata, WorkflowVersion,
+    AttachmentExtractOptions, AttachmentInspectOptions, BookletOptions, ColorEditAction,
+    ColorEditOptions, CropPagesOptions, DeleteBlankPagesOptions, ExtractTextOptions,
+    FormFieldValue, FormFillOptions, FormInspectOptions, ImageEditAction, ImageEditOptions,
+    ImageExtractOptions, ImageInspectOptions, ImageToPdfOptions, InteractiveRemovalOptions,
+    MergeOptions, MetadataEditAction, MetadataEditOptions, MetadataEntry, MetadataInspectOptions,
+    NUpOptions, OperatorSpec, OutlineEditAction, OutlineEditOptions, OutlineInspectOptions,
+    OutlineTree, OverlayKind, OverlayOptions, OxideError, PageNumberPosition, PageNumbersOptions,
+    PageSelectionOptions, PdfCompareOptions, PdfEditOptions, PdfInspectOptions, PdfOperatorRunner,
+    PdfSecurityOptions, PdfSignOptions, RenderOptions, ReorderOptions, RotateOptions,
+    ScalePagesOptions, SignatureOptions, SinglePageOptions, SplitOptions, SvgToPdfOptions, TaskId,
+    TaskSpec, WatermarkKind, WatermarkOptions, Workflow, WorkflowMetadata, WorkflowVersion,
 };
 use std::fs;
 use std::io::{self, Read, Write};
@@ -74,6 +75,20 @@ enum Commands {
     /// Remove selected interactive document elements.
     #[command(subcommand)]
     Interactive(InteractiveCommand),
+    /// Add a text stamp to a PDF.
+    Stamp(StampArgs),
+    /// Add visual signature appearance only.
+    #[command(name = "signature-appearance")]
+    SignatureAppearance(SignatureAppearanceArgs),
+    /// Overlay one PDF page onto another PDF.
+    #[command(name = "overlay-pdf")]
+    OverlayPdf(OverlayPdfArgs),
+    /// Inspect or edit image XObject resources.
+    #[command(subcommand)]
+    Image(ImageCommand),
+    /// Edit simple page colors.
+    #[command(subcommand)]
+    Color(ColorCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -183,6 +198,22 @@ enum FormCommand {
 #[derive(Debug, Subcommand)]
 enum InteractiveCommand {
     Remove(InteractiveRemoveArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum ImageCommand {
+    List(InspectOutputArgs),
+    Add(ImageAddArgs),
+    Replace(ImageReplaceArgs),
+    Delete(ImageDeleteArgs),
+    Extract(ImageExtractArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum ColorCommand {
+    Contrast(ColorContrastArgs),
+    Invert(ColorEditArgs),
+    Replace(ColorReplaceArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -854,6 +885,163 @@ struct InteractiveRemoveArgs {
     force: bool,
 }
 
+#[derive(Debug, Parser)]
+struct StampArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+    #[arg(long)]
+    text: String,
+    #[arg(long)]
+    font: Option<String>,
+    #[arg(long)]
+    font_path: Option<PathBuf>,
+    #[arg(long)]
+    font_size: Option<f32>,
+    #[arg(long)]
+    pages: Option<String>,
+    #[arg(long)]
+    opacity: Option<f32>,
+    #[arg(long)]
+    rotation: Option<f32>,
+    #[arg(long)]
+    position: Option<String>,
+    #[arg(short, long)]
+    output: PathBuf,
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct SignatureAppearanceArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+    #[arg(long)]
+    text: String,
+    #[arg(long)]
+    font: Option<String>,
+    #[arg(long)]
+    font_path: Option<PathBuf>,
+    #[arg(long)]
+    font_size: Option<f32>,
+    #[arg(long)]
+    pages: Option<String>,
+    #[arg(long)]
+    position: Option<String>,
+    #[arg(short, long)]
+    output: PathBuf,
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct OverlayPdfArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+    /// Overlay PDF file.
+    overlay: PathBuf,
+    #[arg(long)]
+    source_page: Option<u32>,
+    #[arg(long)]
+    pages: Option<String>,
+    #[arg(long)]
+    opacity: Option<f32>,
+    #[arg(long)]
+    scale: Option<f32>,
+    #[arg(long)]
+    position: Option<String>,
+    #[arg(short, long)]
+    output: PathBuf,
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct ImageAddArgs {
+    input: PathBuf,
+    image: PathBuf,
+    #[arg(long)]
+    name: String,
+    #[arg(long)]
+    page: u32,
+    #[arg(short, long)]
+    output: PathBuf,
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct ImageReplaceArgs {
+    input: PathBuf,
+    image: PathBuf,
+    #[arg(long)]
+    name: String,
+    #[arg(short, long)]
+    output: PathBuf,
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct ImageDeleteArgs {
+    input: PathBuf,
+    #[arg(long)]
+    name: String,
+    #[arg(short, long)]
+    output: PathBuf,
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct ImageExtractArgs {
+    input: PathBuf,
+    #[arg(long)]
+    name: String,
+    #[arg(short, long)]
+    output: PathBuf,
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct ColorEditArgs {
+    input: PathBuf,
+    #[arg(long)]
+    pages: Option<String>,
+    #[arg(short, long)]
+    output: PathBuf,
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct ColorContrastArgs {
+    input: PathBuf,
+    #[arg(long)]
+    factor: f32,
+    #[arg(long)]
+    pages: Option<String>,
+    #[arg(short, long)]
+    output: PathBuf,
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct ColorReplaceArgs {
+    input: PathBuf,
+    #[arg(long)]
+    from: String,
+    #[arg(long)]
+    to: String,
+    #[arg(long)]
+    pages: Option<String>,
+    #[arg(short, long)]
+    output: PathBuf,
+    #[arg(long)]
+    force: bool,
+}
+
 /// Parses CLI arguments and runs the requested command.
 pub fn run() -> i32 {
     let args = std::env::args_os().collect::<Vec<_>>();
@@ -929,6 +1117,11 @@ fn cli_reads_stdin(cli: &Cli) -> bool {
         Some(Commands::Annot(command)) => annot_reads_stdin(command),
         Some(Commands::Form(command)) => form_reads_stdin(command),
         Some(Commands::Interactive(command)) => interactive_reads_stdin(command),
+        Some(Commands::Stamp(args)) => is_stdio(&args.input),
+        Some(Commands::SignatureAppearance(args)) => is_stdio(&args.input),
+        Some(Commands::OverlayPdf(args)) => is_stdio(&args.input) || is_stdio(&args.overlay),
+        Some(Commands::Image(command)) => image_reads_stdin(command),
+        Some(Commands::Color(command)) => color_reads_stdin(command),
         None => false,
     }
 }
@@ -1016,6 +1209,24 @@ fn interactive_reads_stdin(command: &InteractiveCommand) -> bool {
     }
 }
 
+fn image_reads_stdin(command: &ImageCommand) -> bool {
+    match command {
+        ImageCommand::List(args) => is_stdio(&args.input),
+        ImageCommand::Add(args) => is_stdio(&args.input) || is_stdio(&args.image),
+        ImageCommand::Replace(args) => is_stdio(&args.input) || is_stdio(&args.image),
+        ImageCommand::Delete(args) => is_stdio(&args.input),
+        ImageCommand::Extract(args) => is_stdio(&args.input),
+    }
+}
+
+fn color_reads_stdin(command: &ColorCommand) -> bool {
+    match command {
+        ColorCommand::Contrast(args) => is_stdio(&args.input),
+        ColorCommand::Invert(args) => is_stdio(&args.input),
+        ColorCommand::Replace(args) => is_stdio(&args.input),
+    }
+}
+
 fn run_with_io_result<I, S>(args: I, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError>
 where
     I: IntoIterator<Item = S>,
@@ -1035,6 +1246,11 @@ where
         Some(Commands::Annot(command)) => run_annot(command, stdin, stdout),
         Some(Commands::Form(command)) => run_form(command, stdin, stdout),
         Some(Commands::Interactive(command)) => run_interactive(command, stdin, stdout),
+        Some(Commands::Stamp(args)) => run_stamp(args, stdin, stdout),
+        Some(Commands::SignatureAppearance(args)) => run_signature_appearance(args, stdin, stdout),
+        Some(Commands::OverlayPdf(args)) => run_overlay_pdf(args, stdin, stdout),
+        Some(Commands::Image(command)) => run_image(command, stdin, stdout),
+        Some(Commands::Color(command)) => run_color(command, stdin, stdout),
         None => Ok(()),
     }
 }
@@ -1848,6 +2064,250 @@ fn run_interactive(
     }
 }
 
+fn run_stamp(args: StampArgs, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError> {
+    execute_and_write_workflow(
+        one_input_workflow(
+            args.input,
+            args.output,
+            "stamp",
+            OperatorSpec::PdfEdit(PdfEditOptions::Overlay(OverlayOptions {
+                kind: OverlayKind::Stamp,
+                text: Some(args.text),
+                font: Some(args.font.unwrap_or_else(|| "Helvetica".to_owned())),
+                font_path: args.font_path,
+                font_size: args.font_size,
+                opacity: args.opacity,
+                rotation: args.rotation,
+                position: args.position,
+                pages: args.pages,
+                scale: None,
+                rasterize: false,
+                source_page: None,
+            })),
+        ),
+        stdin,
+        args.force,
+        stdout,
+    )
+}
+
+fn run_signature_appearance(
+    args: SignatureAppearanceArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    execute_and_write_workflow(
+        one_input_workflow(
+            args.input,
+            args.output,
+            "signature_appearance",
+            OperatorSpec::PdfEdit(PdfEditOptions::Overlay(OverlayOptions {
+                kind: OverlayKind::SignatureAppearance,
+                text: Some(args.text),
+                font: Some(args.font.unwrap_or_else(|| "Helvetica".to_owned())),
+                font_path: args.font_path,
+                font_size: args.font_size,
+                opacity: Some(1.0),
+                rotation: None,
+                position: args.position,
+                pages: args.pages,
+                scale: None,
+                rasterize: false,
+                source_page: None,
+            })),
+        ),
+        stdin,
+        args.force,
+        stdout,
+    )
+}
+
+fn run_overlay_pdf(
+    args: OverlayPdfArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    reject_shared_stdin_inputs(&args.input, &args.overlay)?;
+    execute_and_write_workflow(
+        two_input_workflow(
+            args.input,
+            args.overlay,
+            args.output,
+            "overlay_pdf",
+            OperatorSpec::PdfEdit(PdfEditOptions::Overlay(OverlayOptions {
+                kind: OverlayKind::PdfPage,
+                text: None,
+                font: None,
+                font_path: None,
+                font_size: None,
+                opacity: args.opacity,
+                rotation: None,
+                position: args.position,
+                pages: args.pages,
+                scale: args.scale,
+                rasterize: false,
+                source_page: args.source_page,
+            })),
+        ),
+        stdin,
+        args.force,
+        stdout,
+    )
+}
+
+fn run_image(command: ImageCommand, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError> {
+    match command {
+        ImageCommand::List(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "image_list",
+                OperatorSpec::PdfInspect(PdfInspectOptions::Images(ImageInspectOptions::default())),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+        ImageCommand::Add(args) => {
+            reject_shared_stdin_inputs(&args.input, &args.image)?;
+            execute_and_write_workflow(
+                two_input_workflow(
+                    args.input,
+                    args.image,
+                    args.output,
+                    "image_add",
+                    OperatorSpec::PdfEdit(PdfEditOptions::ImageEdit(ImageEditOptions {
+                        action: ImageEditAction::Add,
+                        name: Some(args.name),
+                        page: Some(args.page),
+                    })),
+                ),
+                stdin,
+                args.force,
+                stdout,
+            )
+        }
+        ImageCommand::Replace(args) => {
+            reject_shared_stdin_inputs(&args.input, &args.image)?;
+            execute_and_write_workflow(
+                two_input_workflow(
+                    args.input,
+                    args.image,
+                    args.output,
+                    "image_replace",
+                    OperatorSpec::PdfEdit(PdfEditOptions::ImageEdit(ImageEditOptions {
+                        action: ImageEditAction::Replace,
+                        name: Some(args.name),
+                        page: None,
+                    })),
+                ),
+                stdin,
+                args.force,
+                stdout,
+            )
+        }
+        ImageCommand::Delete(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "image_delete",
+                OperatorSpec::PdfEdit(PdfEditOptions::ImageEdit(ImageEditOptions {
+                    action: ImageEditAction::Delete,
+                    name: Some(args.name),
+                    page: None,
+                })),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+        ImageCommand::Extract(args) => execute_and_write_workflow(
+            one_input_workflow(
+                args.input,
+                args.output,
+                "image_extract",
+                OperatorSpec::PdfInspect(PdfInspectOptions::ImageExtract(ImageExtractOptions {
+                    name: args.name,
+                })),
+            ),
+            stdin,
+            args.force,
+            stdout,
+        ),
+    }
+}
+
+fn run_color(command: ColorCommand, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError> {
+    match command {
+        ColorCommand::Contrast(args) => run_color_edit(
+            args.input,
+            args.output,
+            args.force,
+            ColorEditOptions {
+                action: ColorEditAction::Contrast,
+                pages: args.pages,
+                from: None,
+                to: None,
+                factor: Some(args.factor),
+                rasterize_pages: false,
+            },
+            stdin,
+            stdout,
+        ),
+        ColorCommand::Invert(args) => run_color_edit(
+            args.input,
+            args.output,
+            args.force,
+            ColorEditOptions {
+                action: ColorEditAction::Invert,
+                pages: args.pages,
+                from: None,
+                to: None,
+                factor: None,
+                rasterize_pages: false,
+            },
+            stdin,
+            stdout,
+        ),
+        ColorCommand::Replace(args) => run_color_edit(
+            args.input,
+            args.output,
+            args.force,
+            ColorEditOptions {
+                action: ColorEditAction::Replace,
+                pages: args.pages,
+                from: Some(parse_rgb(&args.from)?),
+                to: Some(parse_rgb(&args.to)?),
+                factor: None,
+                rasterize_pages: false,
+            },
+            stdin,
+            stdout,
+        ),
+    }
+}
+
+fn run_color_edit(
+    input: PathBuf,
+    output: PathBuf,
+    force: bool,
+    options: ColorEditOptions,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    execute_and_write_workflow(
+        one_input_workflow(
+            input,
+            output,
+            "color",
+            OperatorSpec::PdfEdit(PdfEditOptions::Color(options)),
+        ),
+        stdin,
+        force,
+        stdout,
+    )
+}
+
 fn parse_watermark_kind(value: &str) -> Result<WatermarkKind, CliError> {
     match value {
         "text" => Ok(WatermarkKind::Text),
@@ -1857,6 +2317,28 @@ fn parse_watermark_kind(value: &str) -> Result<WatermarkKind, CliError> {
             "unsupported watermark kind '{other}'"
         ))),
     }
+}
+
+fn parse_rgb(value: &str) -> Result<[f32; 3], CliError> {
+    let parts = value.split(',').collect::<Vec<_>>();
+    if parts.len() != 3 {
+        return Err(CliError::Workflow(
+            "RGB color must use r,g,b components".to_owned(),
+        ));
+    }
+    let mut rgb = [0.0; 3];
+    for (index, part) in parts.iter().enumerate() {
+        let component = part
+            .parse::<f32>()
+            .map_err(|_| CliError::Workflow("RGB color components must be numbers".to_owned()))?;
+        if !(0.0..=1.0).contains(&component) {
+            return Err(CliError::Workflow(
+                "RGB color components must be between 0.0 and 1.0".to_owned(),
+            ));
+        }
+        rgb[index] = component;
+    }
+    Ok(rgb)
 }
 
 fn execute_and_write_workflow(
@@ -3664,6 +4146,152 @@ mod tests {
     }
 
     #[test]
+    fn stamp_overlay_image_and_color_commands_write_expected_outputs() {
+        let dir = temp_dir("stamp_overlay_image_and_color_commands_write_expected_outputs");
+        let input = dir.join("input.pdf");
+        let overlay = dir.join("overlay.pdf");
+        let stamped = dir.join("stamped.pdf");
+        let overlaid = dir.join("overlaid.pdf");
+        let image_report = dir.join("images.json");
+        let extracted = dir.join("image.rgb");
+        let image_added = dir.join("image-added.pdf");
+        let image_deleted = dir.join("image-deleted.pdf");
+        let colored = dir.join("colored.pdf");
+        fs::write(&input, empty_page_pdf()).unwrap();
+        fs::write(&overlay, fixture_pdf_bytes()).unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "stamp",
+                input.to_str().unwrap(),
+                "--text",
+                "APPROVED",
+                "--font",
+                "Helvetica",
+                "-o",
+                stamped.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+        assert!(page_has_content_operator(&stamped, 1, "Tj"));
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "overlay-pdf",
+                stamped.to_str().unwrap(),
+                overlay.to_str().unwrap(),
+                "--source-page",
+                "1",
+                "-o",
+                overlaid.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+        assert!(page_has_content_operator(&overlaid, 1, "Do"));
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "image",
+                "list",
+                overlaid.to_str().unwrap(),
+                "-o",
+                image_report.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+        let report: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&image_report).unwrap()).unwrap();
+        assert!(report["images"].as_array().unwrap().is_empty());
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "image",
+                "add",
+                overlaid.to_str().unwrap(),
+                fixture_jpg().to_str().unwrap(),
+                "--name",
+                "Logo",
+                "--page",
+                "1",
+                "-o",
+                image_added.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "image",
+                "extract",
+                image_added.to_str().unwrap(),
+                "--name",
+                "Logo",
+                "-o",
+                extracted.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+        assert!(!fs::read(&extracted).unwrap().is_empty());
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "image",
+                "delete",
+                image_added.to_str().unwrap(),
+                "--name",
+                "Logo",
+                "-o",
+                image_deleted.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+
+        let color_input = dir.join("color.pdf");
+        fs::write(&color_input, pdf_with_rgb_fill_content()).unwrap();
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "color",
+                "invert",
+                color_input.to_str().unwrap(),
+                "-o",
+                colored.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(code, 0);
+        assert_eq!(pdf_rgb_operator(&colored, 1, "rg"), Some([0.0, 1.0, 1.0]));
+    }
+
+    #[test]
     fn workflow_img2pdf_writes_parseable_pdf() {
         let dir = temp_dir("workflow_img2pdf_writes_parseable_pdf");
         let workflow = dir.join("workflow.yaml");
@@ -4091,6 +4719,10 @@ mod tests {
         fs::read(fixture_jpg()).unwrap()
     }
 
+    fn fixture_pdf_bytes() -> Vec<u8> {
+        fs::read(fixture_pdf()).unwrap()
+    }
+
     fn pdf_page_count(path: &std::path::Path) -> usize {
         lopdf::Document::load(path).unwrap().get_pages().len()
     }
@@ -4141,6 +4773,28 @@ mod tests {
         let document = lopdf::Document::load(path).unwrap();
         let page_id = document.get_pages().get(&page_number).copied().unwrap();
         String::from_utf8_lossy(&document.get_page_content(page_id).unwrap()).contains(expected)
+    }
+
+    fn pdf_rgb_operator(
+        path: &std::path::Path,
+        page_number: u32,
+        operator: &str,
+    ) -> Option<[f32; 3]> {
+        let document = lopdf::Document::load(path).unwrap();
+        let page_id = document.get_pages().get(&page_number).copied().unwrap();
+        let content = document.get_page_content(page_id).ok()?;
+        let content = lopdf::content::Content::decode(&content).ok()?;
+        content.operations.iter().find_map(|operation| {
+            if operation.operator == operator && operation.operands.len() == 3 {
+                Some([
+                    pdf_object_to_f32(&operation.operands[0]),
+                    pdf_object_to_f32(&operation.operands[1]),
+                    pdf_object_to_f32(&operation.operands[2]),
+                ])
+            } else {
+                None
+            }
+        })
     }
 
     fn pdf_with_blank_and_marked_page() -> Vec<u8> {
@@ -4282,6 +4936,66 @@ mod tests {
                 "Type" => "Catalog",
                 "Pages" => pages_id,
                 "AcroForm" => acroform_id,
+            }),
+        );
+        document.trailer.set("Root", catalog_id);
+
+        let mut bytes = Vec::new();
+        document.save_to(&mut bytes).unwrap();
+        bytes
+    }
+
+    fn pdf_with_rgb_fill_content() -> Vec<u8> {
+        let mut document = lopdf::Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let page_id = document.new_object_id();
+        let content_id = document.new_object_id();
+        let catalog_id = document.new_object_id();
+        let content = lopdf::content::Content {
+            operations: vec![
+                lopdf::content::Operation::new(
+                    "rg",
+                    vec![
+                        lopdf::Object::Real(1.0),
+                        lopdf::Object::Real(0.0),
+                        lopdf::Object::Real(0.0),
+                    ],
+                ),
+                lopdf::content::Operation::new(
+                    "re",
+                    vec![0.into(), 0.into(), 100.into(), 100.into()],
+                ),
+                lopdf::content::Operation::new("f", Vec::new()),
+            ],
+        }
+        .encode()
+        .unwrap();
+        document.objects.insert(
+            content_id,
+            lopdf::Object::Stream(lopdf::Stream::new(lopdf::Dictionary::new(), content)),
+        );
+        document.objects.insert(
+            page_id,
+            lopdf::Object::Dictionary(lopdf::dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "MediaBox" => lopdf::Object::Array(vec![0.into(), 0.into(), 100.into(), 100.into()]),
+                "Contents" => content_id,
+            }),
+        );
+        document.objects.insert(
+            pages_id,
+            lopdf::Object::Dictionary(lopdf::dictionary! {
+                "Type" => "Pages",
+                "Kids" => lopdf::Object::Array(vec![page_id.into()]),
+                "Count" => 1,
+            }),
+        );
+        document.objects.insert(
+            catalog_id,
+            lopdf::Object::Dictionary(lopdf::dictionary! {
+                "Type" => "Catalog",
+                "Pages" => pages_id,
             }),
         );
         document.trailer.set("Root", catalog_id);

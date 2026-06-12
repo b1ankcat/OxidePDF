@@ -2,9 +2,9 @@ use crate::page_ops::parse_page_range;
 use crate::{
     add_resource_dict_entry, enforce_input_bytes, enforce_max_pages, enforce_max_pixels,
     enforce_output_bytes, ensure_pdf_magic, load_pdf, map_pdf_extract_error,
-    merge_resource_dictionary, page_size, pdf_bytes, remap_imported_references, resource_limit,
-    save_pdf, Artifact, ImageArtifact, OxideError, PdfArtifact, ResourceLimits, TextArtifact,
-    TextExtractionDiagnostic, TextExtractionDiagnosticCode,
+    merge_resource_dictionary, object_to_f32, page_size, pdf_bytes, remap_imported_references,
+    resource_limit, save_pdf, Artifact, BytesArtifact, ImageArtifact, OxideError, PdfArtifact,
+    ResourceLimits, TextArtifact, TextExtractionDiagnostic, TextExtractionDiagnosticCode,
 };
 use lopdf::{dictionary, Dictionary, Object, Stream};
 use pdf_writer::Finish;
@@ -78,6 +78,109 @@ pub enum WatermarkKind {
     Image,
     /// SVG watermark.
     Svg,
+}
+
+/// Unified overlay content kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlayKind {
+    /// Existing watermark semantics.
+    Watermark,
+    /// Stamp text or image appearance.
+    Stamp,
+    /// Visual signature appearance only; does not create a digital signature.
+    SignatureAppearance,
+    /// Overlay a page from a second PDF.
+    PdfPage,
+    /// Text overlay.
+    Text,
+    /// Image overlay.
+    Image,
+    /// SVG overlay.
+    Svg,
+}
+
+/// Options for the unified overlay engine.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OverlayOptions {
+    /// Overlay kind.
+    pub kind: OverlayKind,
+    /// Text for text, stamp, signature appearance, or watermark overlays.
+    pub text: Option<String>,
+    /// Font family name discovered via fontdb.
+    pub font: Option<String>,
+    /// Explicit font file for text overlays.
+    pub font_path: Option<PathBuf>,
+    /// Font size in PDF points.
+    pub font_size: Option<f32>,
+    /// Opacity from 0.0 to 1.0.
+    pub opacity: Option<f32>,
+    /// Rotation in degrees.
+    pub rotation: Option<f32>,
+    /// Position such as `center`.
+    pub position: Option<String>,
+    /// Page range, for example `1,3-5`. Defaults to all pages.
+    pub pages: Option<String>,
+    /// Scale for image, SVG, and PDF page overlays.
+    pub scale: Option<f32>,
+    /// Rasterize SVG before overlaying. Defaults to vector output when false.
+    #[serde(default)]
+    pub rasterize: bool,
+    /// One-based source page for PDF page overlays.
+    pub source_page: Option<u32>,
+}
+
+/// Image resource inspection options.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ImageInspectOptions {}
+
+/// Image extraction options.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageExtractOptions {
+    pub name: String,
+}
+
+/// Image resource edit options.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageEditOptions {
+    pub action: ImageEditAction,
+    pub name: Option<String>,
+    pub page: Option<u32>,
+}
+
+/// Image resource edit action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageEditAction {
+    Add,
+    Replace,
+    Delete,
+}
+
+/// Color content stream edit options.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ColorEditOptions {
+    pub action: ColorEditAction,
+    pub pages: Option<String>,
+    pub from: Option<[f32; 3]>,
+    pub to: Option<[f32; 3]>,
+    pub factor: Option<f32>,
+    #[serde(default)]
+    pub rasterize_pages: bool,
+}
+
+/// Color content stream edit action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColorEditAction {
+    Contrast,
+    Invert,
+    Replace,
 }
 
 /// Options for rendering.
@@ -265,7 +368,38 @@ pub fn watermark_pdf_artifacts(
     options: &WatermarkOptions,
     limits: &ResourceLimits,
 ) -> Result<PdfArtifact, OxideError> {
-    let (pdf_input, watermark_input) = watermark_inputs(inputs, options.kind)?;
+    let kind = match options.kind {
+        WatermarkKind::Text => OverlayKind::Watermark,
+        WatermarkKind::Image => OverlayKind::Image,
+        WatermarkKind::Svg => OverlayKind::Svg,
+    };
+    overlay_pdf_artifacts(
+        inputs,
+        &OverlayOptions {
+            kind,
+            text: options.text.clone(),
+            font: options.font.clone(),
+            font_path: options.font_path.clone(),
+            font_size: options.font_size,
+            opacity: options.opacity,
+            rotation: options.rotation,
+            position: options.position.clone(),
+            pages: options.pages.clone(),
+            scale: options.scale,
+            rasterize: options.rasterize,
+            source_page: None,
+        },
+        limits,
+    )
+}
+
+/// Adds text, image, SVG, stamp, signature appearance, or PDF page overlays.
+pub fn overlay_pdf_artifacts(
+    inputs: &[Artifact],
+    options: &OverlayOptions,
+    limits: &ResourceLimits,
+) -> Result<PdfArtifact, OxideError> {
+    let (pdf_input, overlay_input) = overlay_inputs(inputs, options.kind)?;
     enforce_input_bytes(pdf_input.len(), limits)?;
     let mut document = load_pdf(pdf_input)?;
     let page_count = document.get_pages().len() as u32;
@@ -277,29 +411,32 @@ pub fn watermark_pdf_artifacts(
     let settings = WatermarkSettings::from_options(options)?;
 
     match options.kind {
-        WatermarkKind::Text => {
+        OverlayKind::Watermark
+        | OverlayKind::Text
+        | OverlayKind::Stamp
+        | OverlayKind::SignatureAppearance => {
             let text = options
                 .text
                 .as_deref()
                 .filter(|text| !text.is_empty())
                 .ok_or_else(|| OxideError::InvalidInput {
-                    reason: "text watermark requires non-empty text".to_owned(),
+                    reason: "text overlay requires non-empty text".to_owned(),
                 })?;
             let font = resolve_watermark_font(options)?;
             append_text_watermark(&mut document, &pages, text, &font, settings)?;
         }
-        WatermarkKind::Image => {
+        OverlayKind::Image => {
             let image = decode_limited_image(
-                watermark_input.ok_or_else(|| OxideError::InvalidInput {
-                    reason: "image watermark requires an image input".to_owned(),
+                overlay_input.ok_or_else(|| OxideError::InvalidInput {
+                    reason: "image overlay requires an image input".to_owned(),
                 })?,
                 limits,
             )?;
             append_image_watermark(&mut document, &pages, &image, settings)?;
         }
-        WatermarkKind::Svg => {
-            let svg = watermark_input.ok_or_else(|| OxideError::InvalidInput {
-                reason: "SVG watermark requires an SVG input".to_owned(),
+        OverlayKind::Svg => {
+            let svg = overlay_input.ok_or_else(|| OxideError::InvalidInput {
+                reason: "SVG overlay requires an SVG input".to_owned(),
             })?;
             enforce_input_bytes(svg.len(), limits)?;
             let tree = parse_svg(svg)?;
@@ -312,6 +449,13 @@ pub fn watermark_pdf_artifacts(
                 append_svg_watermark(&mut document, &pages, &tree, settings)?;
             }
         }
+        OverlayKind::PdfPage => {
+            let source = overlay_input.ok_or_else(|| OxideError::InvalidInput {
+                reason: "PDF page overlay requires a second PDF input".to_owned(),
+            })?;
+            enforce_input_bytes(source.len(), limits)?;
+            append_pdf_page_overlay(&mut document, &pages, source, options.source_page, settings)?;
+        }
     }
 
     let bytes = save_pdf(document)?;
@@ -319,33 +463,203 @@ pub fn watermark_pdf_artifacts(
     Ok(PdfArtifact { bytes })
 }
 
-fn watermark_inputs(
+/// Inspects image XObject resources.
+pub fn inspect_pdf_images(
+    input: &[u8],
+    _options: &ImageInspectOptions,
+) -> Result<TextArtifact, OxideError> {
+    let document = load_pdf(input)?;
+    let mut images = Vec::new();
+    for (page, page_id) in document.get_pages() {
+        for (name, id, dict) in page_image_xobjects(&document, page_id)? {
+            let width = required_image_dimension(&dict, b"Width")?;
+            let height = required_image_dimension(&dict, b"Height")?;
+            images.push(ImageResourceReport {
+                page,
+                name: String::from_utf8_lossy(&name).into_owned(),
+                object_id: format!("{} {}", id.0, id.1),
+                width,
+                height,
+            });
+        }
+    }
+    images.sort_by(|left, right| {
+        left.page
+            .cmp(&right.page)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    let text =
+        serde_json::to_string_pretty(&ImageReport { images }).map_err(|_| OxideError::Internal)?;
+    Ok(TextArtifact {
+        text,
+        diagnostics: Vec::new(),
+    })
+}
+
+/// Adds, replaces, or deletes image XObject resources.
+pub fn edit_pdf_images_artifacts(
     inputs: &[Artifact],
-    kind: WatermarkKind,
-) -> Result<(&[u8], Option<&[u8]>), OxideError> {
-    match kind {
-        WatermarkKind::Text => {
+    options: &ImageEditOptions,
+    limits: &ResourceLimits,
+) -> Result<PdfArtifact, OxideError> {
+    let pdf = inputs.first().ok_or_else(|| OxideError::InvalidInput {
+        reason: "image edit requires a PDF input".to_owned(),
+    })?;
+    let pdf = pdf_bytes(pdf)?;
+    enforce_input_bytes(pdf.len(), limits)?;
+    let mut document = load_pdf(pdf)?;
+    enforce_max_pages(document.get_pages().len(), limits)?;
+
+    match options.action {
+        ImageEditAction::Add => {
+            if inputs.len() != 2 {
+                return Err(OxideError::InvalidInput {
+                    reason: "image add requires PDF input and image input".to_owned(),
+                });
+            }
+            let image = decode_limited_image(image_bytes(&inputs[1])?, limits)?;
+            let page = options.page.ok_or_else(|| OxideError::InvalidInput {
+                reason: "image add requires page".to_owned(),
+            })?;
+            let name = required_image_name(options.name.as_deref(), "image add")?;
+            add_image_to_page(&mut document, page, name, &image)?;
+        }
+        ImageEditAction::Replace => {
+            if inputs.len() != 2 {
+                return Err(OxideError::InvalidInput {
+                    reason: "image replace requires PDF input and image input".to_owned(),
+                });
+            }
+            let image = decode_limited_image(image_bytes(&inputs[1])?, limits)?;
+            let name = required_image_name(options.name.as_deref(), "image replace")?;
+            replace_image_resource(&mut document, name, &image)?;
+        }
+        ImageEditAction::Delete => {
             if inputs.len() != 1 {
                 return Err(OxideError::InvalidInput {
-                    reason: "text watermark requires exactly one PDF input".to_owned(),
+                    reason: "image delete requires exactly one PDF input".to_owned(),
+                });
+            }
+            let name = required_image_name(options.name.as_deref(), "image delete")?;
+            delete_image_resource(&mut document, name)?;
+        }
+    }
+
+    let bytes = save_pdf(document)?;
+    enforce_output_bytes(bytes.len(), limits)?;
+    Ok(PdfArtifact { bytes })
+}
+
+/// Extracts the decoded RGB payload for a named image XObject.
+pub fn extract_pdf_image(
+    input: &[u8],
+    options: &ImageExtractOptions,
+    limits: &ResourceLimits,
+) -> Result<BytesArtifact, OxideError> {
+    enforce_input_bytes(input.len(), limits)?;
+    let document = load_pdf(input)?;
+    let name = options.name.as_bytes();
+    for (_, page_id) in document.get_pages() {
+        for (resource_name, stream_id, _) in page_image_xobjects(&document, page_id)? {
+            if resource_name == name {
+                let stream = document
+                    .get_object(stream_id)
+                    .and_then(Object::as_stream)
+                    .map_err(|_| OxideError::ParsePdf)?;
+                let bytes = stream
+                    .get_plain_content()
+                    .map_err(|_| OxideError::ParsePdf)?;
+                enforce_output_bytes(bytes.len(), limits)?;
+                return Ok(BytesArtifact { bytes });
+            }
+        }
+    }
+    Err(OxideError::InvalidInput {
+        reason: format!("image '{}' not found", options.name),
+    })
+}
+
+/// Edits simple RGB color operators in page content streams.
+pub fn edit_pdf_colors(
+    input: &[u8],
+    options: &ColorEditOptions,
+    limits: &ResourceLimits,
+) -> Result<PdfArtifact, OxideError> {
+    if options.rasterize_pages {
+        return Err(OxideError::UnsupportedPdfFeature {
+            feature: "color rasterize_pages is not supported by the vector content path".to_owned(),
+        });
+    }
+    enforce_input_bytes(input.len(), limits)?;
+    let mut document = load_pdf(input)?;
+    let page_count = document.get_pages().len() as u32;
+    enforce_max_pages(page_count as usize, limits)?;
+    let pages = match options.pages.as_deref() {
+        Some(pages) => parse_page_range(pages, page_count)?,
+        None => (1..=page_count).collect(),
+    };
+    validate_color_options(options)?;
+    let page_map = document.get_pages();
+    for page in pages {
+        let page_id = *page_map
+            .get(&page)
+            .ok_or_else(|| OxideError::InvalidInput {
+                reason: format!("page {page} is out of range"),
+            })?;
+        rewrite_page_colors(&mut document, page_id, options)?;
+    }
+    let bytes = save_pdf(document)?;
+    enforce_output_bytes(bytes.len(), limits)?;
+    Ok(PdfArtifact { bytes })
+}
+
+#[derive(Debug, Serialize)]
+struct ImageReport {
+    images: Vec<ImageResourceReport>,
+}
+
+#[derive(Debug, Serialize)]
+struct ImageResourceReport {
+    page: u32,
+    name: String,
+    object_id: String,
+    width: i64,
+    height: i64,
+}
+
+fn overlay_inputs(
+    inputs: &[Artifact],
+    kind: OverlayKind,
+) -> Result<(&[u8], Option<&[u8]>), OxideError> {
+    match kind {
+        OverlayKind::Watermark
+        | OverlayKind::Text
+        | OverlayKind::Stamp
+        | OverlayKind::SignatureAppearance => {
+            if inputs.len() != 1 {
+                return Err(OxideError::InvalidInput {
+                    reason: "text overlay requires exactly one PDF input".to_owned(),
                 });
             }
             Ok((pdf_bytes(&inputs[0])?, None))
         }
-        WatermarkKind::Image | WatermarkKind::Svg => {
+        OverlayKind::Image | OverlayKind::Svg | OverlayKind::PdfPage => {
             if inputs.len() != 2 {
                 return Err(OxideError::InvalidInput {
-                    reason: "image and SVG watermarks require PDF input and watermark input"
-                        .to_owned(),
+                    reason: "overlay requires PDF input and overlay input".to_owned(),
                 });
             }
             let pdf = pdf_bytes(&inputs[0])?;
-            let watermark = match kind {
-                WatermarkKind::Image => image_bytes(&inputs[1])?,
-                WatermarkKind::Svg => svg_bytes(&inputs[1])?,
-                WatermarkKind::Text => unreachable!(),
+            let overlay = match kind {
+                OverlayKind::Image => image_bytes(&inputs[1])?,
+                OverlayKind::Svg => svg_bytes(&inputs[1])?,
+                OverlayKind::PdfPage => pdf_bytes(&inputs[1])?,
+                OverlayKind::Watermark
+                | OverlayKind::Text
+                | OverlayKind::Stamp
+                | OverlayKind::SignatureAppearance => unreachable!(),
             };
-            Ok((pdf, Some(watermark)))
+            Ok((pdf, Some(overlay)))
         }
     }
 }
@@ -554,7 +868,7 @@ struct WatermarkSettings {
 }
 
 impl WatermarkSettings {
-    fn from_options(options: &WatermarkOptions) -> Result<Self, OxideError> {
+    fn from_options(options: &OverlayOptions) -> Result<Self, OxideError> {
         let opacity = options.opacity.unwrap_or(0.25);
         if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
             return Err(OxideError::InvalidInput {
@@ -628,7 +942,24 @@ struct FontMetrics {
     descent: i16,
 }
 
-fn resolve_watermark_font(options: &WatermarkOptions) -> Result<ResolvedFont, OxideError> {
+fn resolve_watermark_font(options: &OverlayOptions) -> Result<ResolvedFont, OxideError> {
+    if options.font_path.is_none() {
+        if let Some(family) = options
+            .font
+            .as_deref()
+            .filter(|family| is_standard_pdf_font(family))
+        {
+            return Ok(ResolvedFont {
+                resource_name: b"OxWmF1".to_vec(),
+                base_font: family.as_bytes().to_vec(),
+                metrics: FontMetrics {
+                    units_per_em: 1000,
+                    ascent: 718,
+                    descent: -207,
+                },
+            });
+        }
+    }
     let (font_bytes, family_name) = if let Some(path) = &options.font_path {
         let bytes = std::fs::read(path).map_err(|_| OxideError::FontResolution)?;
         let mut db = fontdb::Database::new();
@@ -656,6 +987,26 @@ fn resolve_watermark_font(options: &WatermarkOptions) -> Result<ResolvedFont, Ox
         base_font: family_name,
         metrics,
     })
+}
+
+fn is_standard_pdf_font(family: &str) -> bool {
+    matches!(
+        family,
+        "Courier"
+            | "Courier-Bold"
+            | "Courier-Oblique"
+            | "Courier-BoldOblique"
+            | "Helvetica"
+            | "Helvetica-Bold"
+            | "Helvetica-Oblique"
+            | "Helvetica-BoldOblique"
+            | "Times-Roman"
+            | "Times-Bold"
+            | "Times-Italic"
+            | "Times-BoldItalic"
+            | "Symbol"
+            | "ZapfDingbats"
+    )
 }
 
 fn read_font_metrics(bytes: &[u8]) -> Result<FontMetrics, OxideError> {
@@ -780,6 +1131,39 @@ fn append_svg_watermark(
     )
 }
 
+fn append_pdf_page_overlay(
+    target: &mut lopdf::Document,
+    pages: &[u32],
+    source: &[u8],
+    source_page: Option<u32>,
+    settings: WatermarkSettings,
+) -> Result<(), OxideError> {
+    let source = load_pdf(source)?;
+    let source_page = source_page.unwrap_or(1);
+    let source_page_id =
+        *source
+            .get_pages()
+            .get(&source_page)
+            .ok_or_else(|| OxideError::InvalidInput {
+                reason: format!("source page {source_page} is out of range"),
+            })?;
+    let (width, height) = page_size(&source, source_page_id)?;
+    let content = source
+        .get_page_content(source_page_id)
+        .map_err(|_| OxideError::ParsePdf)?;
+    let resources = imported_page_resources(&source, target, source_page_id)?;
+    let form_id = target.add_object(form_xobject(width, height, resources, content));
+    append_xobject_watermark(
+        target,
+        pages,
+        form_id,
+        width,
+        height,
+        b"OxPdfOverlay".to_vec(),
+        settings,
+    )
+}
+
 fn svg_form_xobject(
     target: &mut lopdf::Document,
     tree: &svg2pdf::usvg::Tree,
@@ -823,6 +1207,129 @@ fn svg_form_xobject(
     };
     dict.set("Resources", resources);
     Ok(target.add_object(Stream::new(dict, content)))
+}
+
+fn form_xobject(width: f32, height: f32, resources: Dictionary, content: Vec<u8>) -> Stream {
+    let mut dict = dictionary! {
+        "Type" => "XObject",
+        "Subtype" => "Form",
+        "BBox" => Object::Array(vec![
+            Object::Real(0.0),
+            Object::Real(0.0),
+            Object::Real(width),
+            Object::Real(height),
+        ]),
+        "Matrix" => Object::Array(vec![
+            Object::Real(1.0),
+            Object::Real(0.0),
+            Object::Real(0.0),
+            Object::Real(1.0),
+            Object::Real(0.0),
+            Object::Real(0.0),
+        ]),
+    };
+    dict.set("Resources", resources);
+    Stream::new(dict, content)
+}
+
+fn page_image_xobjects(
+    document: &lopdf::Document,
+    page_id: lopdf::ObjectId,
+) -> Result<Vec<(Vec<u8>, lopdf::ObjectId, Dictionary)>, OxideError> {
+    let (direct_resources, inherited_resource_ids) = document
+        .get_page_resources(page_id)
+        .map_err(|_| OxideError::ParsePdf)?;
+    let mut resources = Dictionary::new();
+    for resource_id in inherited_resource_ids.iter().rev() {
+        let inherited = document
+            .get_dictionary(*resource_id)
+            .map_err(|_| OxideError::ParsePdf)?;
+        merge_resource_dictionary(&mut resources, inherited);
+    }
+    if let Some(direct) = direct_resources {
+        merge_resource_dictionary(&mut resources, direct);
+    }
+    let Some(xobjects) = optional_xobject_dict(&resources)? else {
+        return Ok(Vec::new());
+    };
+    let mut images = Vec::new();
+    for (name, object) in xobjects.iter() {
+        let id = object.as_reference().map_err(|_| OxideError::ParsePdf)?;
+        let stream = document
+            .get_object(id)
+            .and_then(Object::as_stream)
+            .map_err(|_| OxideError::ParsePdf)?;
+        if stream
+            .dict
+            .get(b"Subtype")
+            .and_then(Object::as_name)
+            .is_ok_and(|subtype| subtype == b"Image")
+        {
+            images.push((name.clone(), id, stream.dict.clone()));
+        }
+    }
+    Ok(images)
+}
+
+fn page_xobject_reference(
+    document: &lopdf::Document,
+    page_id: lopdf::ObjectId,
+    name: &[u8],
+) -> Result<Option<lopdf::ObjectId>, OxideError> {
+    let (direct_resources, inherited_resource_ids) = document
+        .get_page_resources(page_id)
+        .map_err(|_| OxideError::ParsePdf)?;
+    let mut resources = Dictionary::new();
+    for resource_id in inherited_resource_ids.iter().rev() {
+        let inherited = document
+            .get_dictionary(*resource_id)
+            .map_err(|_| OxideError::ParsePdf)?;
+        merge_resource_dictionary(&mut resources, inherited);
+    }
+    if let Some(direct) = direct_resources {
+        merge_resource_dictionary(&mut resources, direct);
+    }
+    let Some(xobjects) = optional_xobject_dict(&resources)? else {
+        return Ok(None);
+    };
+    if !xobjects.has(name) {
+        return Ok(None);
+    }
+    let id = xobjects
+        .get(name)
+        .and_then(Object::as_reference)
+        .map_err(|_| OxideError::ParsePdf)?;
+    Ok(Some(id))
+}
+
+fn optional_xobject_dict(resources: &Dictionary) -> Result<Option<&Dictionary>, OxideError> {
+    if !resources.has(b"XObject") {
+        return Ok(None);
+    }
+    resources
+        .get(b"XObject")
+        .and_then(Object::as_dict)
+        .map(Some)
+        .map_err(|_| OxideError::ParsePdf)
+}
+
+fn optional_xobject_dict_mut(
+    resources: &mut Dictionary,
+) -> Result<Option<&mut Dictionary>, OxideError> {
+    if !resources.has(b"XObject") {
+        return Ok(None);
+    }
+    resources
+        .get_mut(b"XObject")
+        .and_then(Object::as_dict_mut)
+        .map(Some)
+        .map_err(|_| OxideError::ParsePdf)
+}
+
+fn required_image_dimension(dict: &Dictionary, key: &[u8]) -> Result<i64, OxideError> {
+    dict.get(key)
+        .and_then(Object::as_i64)
+        .map_err(|_| OxideError::ParsePdf)
 }
 
 fn imported_page_resources(
@@ -898,6 +1405,216 @@ fn append_xobject_watermark(
             .map_err(|_| OxideError::WritePdf)?;
     }
 
+    Ok(())
+}
+
+fn add_image_to_page(
+    document: &mut lopdf::Document,
+    page: u32,
+    name: &str,
+    image: &DecodedImage,
+) -> Result<(), OxideError> {
+    let page_id = *document
+        .get_pages()
+        .get(&page)
+        .ok_or_else(|| OxideError::InvalidInput {
+            reason: format!("page {page} is out of range"),
+        })?;
+    let image_id = document.add_object(image_xobject(image));
+    add_resource_dict_entry(
+        document,
+        page_id,
+        b"XObject",
+        name.as_bytes().to_vec(),
+        Object::Reference(image_id),
+    )?;
+    let (page_width, page_height) = page_size(document, page_id)?;
+    let scale = (page_width / image.width as f32)
+        .min(page_height / image.height as f32)
+        .min(1.0);
+    let width = image.width as f32 * scale;
+    let height = image.height as f32 * scale;
+    let content = xobject_watermark_content(
+        name.as_bytes(),
+        WatermarkSettings {
+            opacity: 1.0,
+            rotation_degrees: 0.0,
+            position: WatermarkPosition::Center,
+            scale: 1.0,
+            font_size: 1.0,
+        },
+        (page_width - width) / 2.0,
+        (page_height - height) / 2.0,
+        width,
+        height,
+    )?;
+    document
+        .add_page_contents(page_id, content)
+        .map_err(|_| OxideError::WritePdf)
+}
+
+fn replace_image_resource(
+    document: &mut lopdf::Document,
+    name: &str,
+    image: &DecodedImage,
+) -> Result<(), OxideError> {
+    let mut replaced = false;
+    for (_, page_id) in document.get_pages() {
+        let Some(id) = page_xobject_reference(document, page_id, name.as_bytes())? else {
+            continue;
+        };
+        let stream = document
+            .get_object_mut(id)
+            .and_then(Object::as_stream_mut)
+            .map_err(|_| OxideError::ParsePdf)?;
+        *stream = image_xobject(image);
+        replaced = true;
+    }
+    if !replaced {
+        return Err(OxideError::InvalidInput {
+            reason: format!("image '{name}' not found"),
+        });
+    }
+    Ok(())
+}
+
+fn delete_image_resource(document: &mut lopdf::Document, name: &str) -> Result<(), OxideError> {
+    let mut removed = false;
+    for page_id in document.get_pages().into_values() {
+        let resources = document
+            .get_or_create_resources(page_id)
+            .and_then(Object::as_dict_mut)
+            .map_err(|_| OxideError::ParsePdf)?;
+        if let Some(xobjects) = optional_xobject_dict_mut(resources)? {
+            removed |= xobjects.remove(name.as_bytes()).is_some();
+        }
+    }
+    if !removed {
+        return Err(OxideError::InvalidInput {
+            reason: format!("image '{name}' not found"),
+        });
+    }
+    Ok(())
+}
+
+fn required_image_name<'a>(name: Option<&'a str>, label: &str) -> Result<&'a str, OxideError> {
+    name.filter(|value| !value.is_empty())
+        .ok_or_else(|| OxideError::InvalidInput {
+            reason: format!("{label} requires non-empty image name"),
+        })
+}
+
+fn validate_color_options(options: &ColorEditOptions) -> Result<(), OxideError> {
+    match options.action {
+        ColorEditAction::Contrast => {
+            let factor = options.factor.unwrap_or(1.0);
+            if !factor.is_finite() || factor <= 0.0 {
+                return Err(OxideError::InvalidInput {
+                    reason: "contrast factor must be greater than zero".to_owned(),
+                });
+            }
+        }
+        ColorEditAction::Invert => {}
+        ColorEditAction::Replace => {
+            validate_rgb(options.from, "replace from")?;
+            validate_rgb(options.to, "replace to")?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_rgb(value: Option<[f32; 3]>, label: &str) -> Result<(), OxideError> {
+    let rgb = value.ok_or_else(|| OxideError::InvalidInput {
+        reason: format!("color {label} must be provided"),
+    })?;
+    if rgb
+        .iter()
+        .any(|component| !component.is_finite() || !(0.0..=1.0).contains(component))
+    {
+        return Err(OxideError::InvalidInput {
+            reason: format!("color {label} components must be between 0.0 and 1.0"),
+        });
+    }
+    Ok(())
+}
+
+fn rewrite_page_colors(
+    document: &mut lopdf::Document,
+    page_id: lopdf::ObjectId,
+    options: &ColorEditOptions,
+) -> Result<(), OxideError> {
+    let content = document
+        .get_page_content(page_id)
+        .map_err(|_| OxideError::ParsePdf)?;
+    let mut content =
+        lopdf::content::Content::decode(&content).map_err(|_| OxideError::ParsePdf)?;
+    for operation in &mut content.operations {
+        match operation.operator.as_str() {
+            "rg" | "RG" => rewrite_rgb_operation(operation, options)?,
+            "g" | "G" | "k" | "K" | "cs" | "CS" | "sc" | "SC" | "scn" | "SCN" | "sh" => {
+                return Err(OxideError::UnsupportedPdfFeature {
+                    feature: format!(
+                        "color operation '{}' is not supported by vector color editing",
+                        operation.operator
+                    ),
+                });
+            }
+            _ => {}
+        }
+    }
+    let bytes = content.encode().map_err(|_| OxideError::WritePdf)?;
+    replace_page_content(document, page_id, bytes)
+}
+
+fn rewrite_rgb_operation(
+    operation: &mut lopdf::content::Operation,
+    options: &ColorEditOptions,
+) -> Result<(), OxideError> {
+    if operation.operands.len() != 3 {
+        return Err(OxideError::ParsePdf);
+    }
+    let current = [
+        object_to_f32(&operation.operands[0])?,
+        object_to_f32(&operation.operands[1])?,
+        object_to_f32(&operation.operands[2])?,
+    ];
+    let updated = match options.action {
+        ColorEditAction::Invert => [1.0 - current[0], 1.0 - current[1], 1.0 - current[2]],
+        ColorEditAction::Replace => {
+            let from = options.from.unwrap();
+            let to = options.to.unwrap();
+            if rgb_matches(current, from) {
+                to
+            } else {
+                current
+            }
+        }
+        ColorEditAction::Contrast => {
+            let factor = options.factor.unwrap_or(1.0);
+            current.map(|component| ((component - 0.5) * factor + 0.5).clamp(0.0, 1.0))
+        }
+    };
+    operation.operands = updated.into_iter().map(Object::Real).collect();
+    Ok(())
+}
+
+fn rgb_matches(left: [f32; 3], right: [f32; 3]) -> bool {
+    left.iter()
+        .zip(right.iter())
+        .all(|(left, right)| (left - right).abs() <= 0.0001)
+}
+
+fn replace_page_content(
+    document: &mut lopdf::Document,
+    page_id: lopdf::ObjectId,
+    content: Vec<u8>,
+) -> Result<(), OxideError> {
+    let content_id = document.add_object(Stream::new(Dictionary::new(), content));
+    let page = document
+        .get_object_mut(page_id)
+        .and_then(Object::as_dict_mut)
+        .map_err(|_| OxideError::ParsePdf)?;
+    page.set("Contents", content_id);
     Ok(())
 }
 

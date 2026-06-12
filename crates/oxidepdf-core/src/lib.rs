@@ -58,9 +58,11 @@ pub(crate) use pdf_io::{
 
 pub use compare::PdfCompareOptions;
 pub use overlay::{
-    extract_text_from_pdf, image_artifacts_to_pdf, render_pdf_page, svg_to_pdf,
-    watermark_pdf_artifacts, ExtractTextOptions, ImageToPdfOptions, RenderOptions, SvgToPdfOptions,
-    WatermarkKind, WatermarkOptions,
+    edit_pdf_colors, edit_pdf_images_artifacts, extract_pdf_image, extract_text_from_pdf,
+    image_artifacts_to_pdf, inspect_pdf_images, overlay_pdf_artifacts, render_pdf_page, svg_to_pdf,
+    watermark_pdf_artifacts, ColorEditAction, ColorEditOptions, ExtractTextOptions,
+    ImageEditAction, ImageEditOptions, ImageExtractOptions, ImageInspectOptions, ImageToPdfOptions,
+    OverlayKind, OverlayOptions, RenderOptions, SvgToPdfOptions, WatermarkKind, WatermarkOptions,
 };
 pub use page_ops::{
     add_pdf_page_numbers, add_pdf_page_numbers_with_limits, booklet_pdf_pages,
