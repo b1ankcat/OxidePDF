@@ -152,7 +152,7 @@ fn reorder_command_writes_parseable_pdf() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "pdf-edit",
+            "edit",
             "reorder-pages",
             fixture_pdf().to_str().unwrap(),
             "--pages",
@@ -176,7 +176,7 @@ fn img2pdf_command_writes_parseable_pdf() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "pdf-edit",
+            "edit",
             "img2pdf",
             fixture_jpg().to_str().unwrap(),
             "-o",
@@ -206,7 +206,7 @@ fn svg2pdf_command_writes_parseable_pdf() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "pdf-edit",
+            "edit",
             "svg2pdf",
             input.to_str().unwrap(),
             "-o",
@@ -228,7 +228,7 @@ fn compress_command_writes_parseable_pdf() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "pdf-edit",
+            "edit",
             "compress",
             fixture_pdf().to_str().unwrap(),
             "-o",
@@ -252,7 +252,7 @@ fn compress_command_accepts_explicit_lossy_options() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "pdf-edit",
+            "edit",
             "compress",
             input.to_str().unwrap(),
             "-o",
@@ -432,7 +432,7 @@ fn render_command_writes_png() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "pdf-inspect",
+            "inspect",
             "render",
             fixture_pdf().to_str().unwrap(),
             "--page",
@@ -458,7 +458,7 @@ fn extract_text_command_writes_plain_text() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "pdf-inspect",
+            "inspect",
             "extract-text",
             fixture_pdf().to_str().unwrap(),
             "-o",
@@ -573,7 +573,7 @@ fn watermark_text_command_writes_parseable_pdf() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "pdf-edit",
+            "edit",
             "watermark",
             fixture_pdf().to_str().unwrap(),
             "--kind",
@@ -653,7 +653,7 @@ fn render_command_rejects_out_of_range_page() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "pdf-inspect",
+            "inspect",
             "render",
             fixture_pdf().to_str().unwrap(),
             "--page",

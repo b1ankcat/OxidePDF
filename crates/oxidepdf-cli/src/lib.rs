@@ -43,13 +43,13 @@ enum Commands {
     /// Run a workflow document.
     Run(RunArgs),
     /// Edit or create PDF files.
-    #[command(name = "pdf-edit")]
+    #[command(name = "edit")]
     #[command(subcommand)]
-    PdfEdit(PdfEditCommand),
+    Edit(PdfEditCommand),
     /// Inspect or render PDF files.
-    #[command(name = "pdf-inspect")]
+    #[command(name = "inspect")]
     #[command(subcommand)]
-    PdfInspect(PdfInspectCommand),
+    Inspect(PdfInspectCommand),
     /// Compare PDF files.
     Compare(CompareArgs),
     /// List or verify PDF digital signatures.
@@ -1406,8 +1406,8 @@ where
 fn cli_reads_stdin(cli: &Cli) -> bool {
     match &cli.command {
         Some(Commands::Run(args)) => is_stdio(&args.workflow),
-        Some(Commands::PdfEdit(command)) => pdf_edit_reads_stdin(command),
-        Some(Commands::PdfInspect(command)) => pdf_inspect_reads_stdin(command),
+        Some(Commands::Edit(command)) => pdf_edit_reads_stdin(command),
+        Some(Commands::Inspect(command)) => pdf_inspect_reads_stdin(command),
         Some(Commands::Compare(args)) => is_stdio(&args.left) || is_stdio(&args.right),
         Some(Commands::Sign(command)) => sign_reads_stdin(command),
         Some(Commands::Timestamp(command)) => timestamp_reads_stdin(command),
@@ -1555,8 +1555,8 @@ where
     let cli = Cli::try_parse_from(args).map_err(CliError::Arguments)?;
     match cli.command {
         Some(Commands::Run(args)) => run_workflow(args, stdin, stdout),
-        Some(Commands::PdfEdit(command)) => run_pdf_edit(command, stdin, stdout),
-        Some(Commands::PdfInspect(command)) => run_pdf_inspect(command, stdin, stdout),
+        Some(Commands::Edit(command)) => run_pdf_edit(command, stdin, stdout),
+        Some(Commands::Inspect(command)) => run_pdf_inspect(command, stdin, stdout),
         Some(Commands::Compare(args)) => run_compare(args, stdin, stdout),
         Some(Commands::Sign(command)) => run_sign(command, stdin, stdout),
         Some(Commands::Timestamp(command)) => run_timestamp(command, stdin, stdout),
@@ -3184,6 +3184,8 @@ mod tests {
 
         assert!(help.contains("OxidePDF"));
         assert!(help.contains("pure Rust PDF toolkit"));
+        assert!(help.contains("edit"));
+        assert!(help.contains("inspect"));
         assert!(help.contains("sign"));
     }
 
@@ -3239,6 +3241,8 @@ mod tests {
             "pdf-compare",
             "pdf-sign",
             "compress",
+            "pdf-edit",
+            "pdf-inspect",
         ] {
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
@@ -3265,7 +3269,7 @@ mod tests {
     fn render_file_input_does_not_require_stdin() {
         let stdin = stdin_for_args([
             "oxidepdf",
-            "pdf-inspect",
+            "inspect",
             "render",
             "input.pdf",
             "--page",
@@ -3282,7 +3286,7 @@ mod tests {
     fn render_stdio_input_requires_stdin() {
         let cli = Cli::try_parse_from([
             "oxidepdf",
-            "pdf-inspect",
+            "inspect",
             "render",
             "-",
             "--page",
@@ -3299,7 +3303,7 @@ mod tests {
     fn extract_text_stdio_input_requires_stdin() {
         let cli = Cli::try_parse_from([
             "oxidepdf",
-            "pdf-inspect",
+            "inspect",
             "extract-text",
             "-",
             "-o",
@@ -3621,7 +3625,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-edit",
+                "edit",
                 "merge",
                 input.to_str().unwrap(),
                 input.to_str().unwrap(),
@@ -3649,7 +3653,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-edit",
+                "edit",
                 "keep-pages",
                 fixture_pdf().to_str().unwrap(),
                 "--pages",
@@ -3678,7 +3682,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-edit",
+                "edit",
                 "rotate-pages",
                 fixture_pdf().to_str().unwrap(),
                 "--pages",
@@ -3709,7 +3713,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-edit",
+                "edit",
                 "delete-pages",
                 fixture_pdf().to_str().unwrap(),
                 "--pages",
@@ -3738,7 +3742,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-edit",
+                "edit",
                 "extract-pages",
                 fixture_pdf().to_str().unwrap(),
                 "--pages",
@@ -3767,7 +3771,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-edit",
+                "edit",
                 "crop-pages",
                 fixture_pdf().to_str().unwrap(),
                 "--pages",
@@ -3807,7 +3811,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-edit",
+                "edit",
                 "scale-pages",
                 fixture_pdf().to_str().unwrap(),
                 "--pages",
@@ -3841,7 +3845,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-edit",
+                "edit",
                 "delete-blank-pages",
                 input.to_str().unwrap(),
                 "-o",
@@ -3868,7 +3872,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-edit",
+                "edit",
                 "single-page",
                 fixture_pdf().to_str().unwrap(),
                 "-o",
@@ -3896,7 +3900,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-edit",
+                "edit",
                 "nup",
                 fixture_pdf().to_str().unwrap(),
                 "--columns",
@@ -3928,7 +3932,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-edit",
+                "edit",
                 "booklet",
                 fixture_pdf().to_str().unwrap(),
                 "-o",
@@ -3956,7 +3960,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-edit",
+                "edit",
                 "page-numbers",
                 fixture_pdf().to_str().unwrap(),
                 "--pages",
@@ -3993,7 +3997,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-edit",
+                "edit",
                 "img2pdf",
                 fixture_jpg().to_str().unwrap(),
                 "-o",
@@ -4022,7 +4026,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-edit",
+                "edit",
                 "svg2pdf",
                 input.to_str().unwrap(),
                 "-o",
@@ -4049,7 +4053,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-inspect",
+                "inspect",
                 "extract-text",
                 fixture_pdf().to_str().unwrap(),
                 "-o",
@@ -4078,7 +4082,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-inspect",
+                "inspect",
                 "extract-text",
                 input.to_str().unwrap(),
                 "-o",
@@ -4107,7 +4111,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-edit",
+                "edit",
                 "watermark",
                 fixture_pdf().to_str().unwrap(),
                 "--kind",
@@ -4143,7 +4147,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-edit",
+                "edit",
                 "watermark",
                 fixture_pdf().to_str().unwrap(),
                 "--kind",
@@ -4178,7 +4182,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-edit",
+                "edit",
                 "watermark",
                 fixture_pdf().to_str().unwrap(),
                 "--kind",
@@ -4213,7 +4217,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "pdf-edit",
+                "edit",
                 "watermark",
                 fixture_pdf().to_str().unwrap(),
                 "--kind",
