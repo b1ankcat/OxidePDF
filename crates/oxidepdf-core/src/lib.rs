@@ -1,6 +1,24 @@
 #![forbid(unsafe_code)]
 #![doc = "Core contracts and shared logic for OxidePDF."]
 
+mod annotations;
+mod compare;
+mod errors;
+mod forms;
+mod metadata;
+mod overlay;
+mod page_ops;
+mod pdf_io;
+mod security;
+mod signatures;
+mod workflow;
+
+pub use errors::OxideError;
+pub use workflow::{
+    ArtifactRef, InputSpec, OperatorSpec, OutputSpec, ResourceLimits, TaskId, TaskSpec, Workflow,
+    WorkflowMetadata, WorkflowVersion, WORKFLOW_SCHEMA_VERSION,
+};
+
 use lopdf::{dictionary, Dictionary, Object, Stream};
 use pdf_writer::Finish;
 use read_fonts::TableProvider;
@@ -8,263 +26,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use thiserror::Error;
 use x509_cert::{der::Decode, Certificate};
 
 const A4_WIDTH: f32 = 595.0;
 const A4_HEIGHT: f32 = 842.0;
-
-/// Current workflow schema version.
-///
-/// Stage 1 only establishes the crate boundary. Stage 2 will add the full
-/// serialized workflow contract around this version.
-pub const WORKFLOW_SCHEMA_VERSION: u16 = 1;
-
-/// Supported workflow schema versions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "u16", into = "u16")]
-pub enum WorkflowVersion {
-    /// Initial public workflow schema.
-    V1,
-}
-
-impl TryFrom<u16> for WorkflowVersion {
-    type Error = OxideError;
-
-    fn try_from(value: u16) -> Result<Self, Self::Error> {
-        match value {
-            WORKFLOW_SCHEMA_VERSION => Ok(Self::V1),
-            version => Err(OxideError::InvalidWorkflow {
-                reason: format!("unsupported workflow version {version}"),
-            }),
-        }
-    }
-}
-
-impl From<WorkflowVersion> for u16 {
-    fn from(value: WorkflowVersion) -> Self {
-        match value {
-            WorkflowVersion::V1 => WORKFLOW_SCHEMA_VERSION,
-        }
-    }
-}
-
-/// Complete workflow submitted by CLI, Web, or WASM clients.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Workflow {
-    /// Schema version for this workflow document.
-    pub version: WorkflowVersion,
-    /// External inputs available to tasks.
-    pub inputs: Vec<InputSpec>,
-    /// Ordered or dependency-connected work items.
-    pub tasks: Vec<TaskSpec>,
-    /// Final artifacts to materialize.
-    pub outputs: Vec<OutputSpec>,
-    /// Resource limits applied while validating and executing the workflow.
-    #[serde(default)]
-    pub limits: ResourceLimits,
-    /// Caller-provided metadata for diagnostics and later UI display.
-    #[serde(default)]
-    pub metadata: WorkflowMetadata,
-}
-
-/// External workflow input.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InputSpec {
-    /// Stable input identifier.
-    pub id: ArtifactRef,
-    /// File path or `-` for stdin.
-    pub path: PathBuf,
-}
-
-/// Final workflow output.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OutputSpec {
-    /// Stable output identifier.
-    pub id: ArtifactRef,
-    /// Artifact to write.
-    pub from: ArtifactRef,
-    /// File path or `-` for stdout.
-    pub path: PathBuf,
-}
-
-/// A single workflow task.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TaskSpec {
-    /// Stable task identifier.
-    pub id: TaskId,
-    /// Operator and its options.
-    pub op: OperatorSpec,
-    /// Input artifact references consumed by this task.
-    pub inputs: Vec<ArtifactRef>,
-}
-
-/// Task identifier.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct TaskId(String);
-
-impl TaskId {
-    /// Creates a task identifier.
-    pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
-    }
-
-    /// Returns the underlying identifier.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-/// Input, task, or output artifact reference.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ArtifactRef(String);
-
-impl ArtifactRef {
-    /// Creates an artifact reference.
-    pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
-    }
-
-    /// Returns the underlying reference.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-/// Resource limits applied to workflow execution.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ResourceLimits {
-    /// Maximum size of any single input, in bytes.
-    pub max_input_bytes: Option<u64>,
-    /// Maximum total size of all inputs, in bytes.
-    pub max_total_input_bytes: Option<u64>,
-    /// Maximum number of PDF pages.
-    pub max_pages: Option<u32>,
-    /// Maximum total image pixels.
-    pub max_pixels: Option<u64>,
-    /// Maximum output size, in bytes.
-    pub max_output_bytes: Option<u64>,
-    /// Maximum workflow runtime, in milliseconds.
-    pub timeout_ms: Option<u64>,
-}
-
-impl Default for ResourceLimits {
-    fn default() -> Self {
-        Self {
-            max_input_bytes: Some(512 * 1024 * 1024),
-            max_total_input_bytes: Some(512 * 1024 * 1024),
-            max_pages: Some(5_000),
-            max_pixels: Some(160_000_000),
-            max_output_bytes: None,
-            timeout_ms: None,
-        }
-    }
-}
-
-/// Workflow metadata.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct WorkflowMetadata {
-    /// Optional human-readable title.
-    pub title: Option<String>,
-}
-
-/// Supported workflow operators.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "OperatorSpecDef", into = "OperatorSpecDef")]
-pub enum OperatorSpec {
-    /// Edit or create PDF artifacts.
-    PdfEdit(PdfEditOptions),
-    /// Inspect or render PDF artifacts.
-    PdfInspect(PdfInspectOptions),
-    /// Apply password, encryption, or permission operations.
-    PdfSecurity(PdfSecurityOptions),
-    /// Compare two PDF artifacts.
-    PdfCompare(PdfCompareOptions),
-    /// Sign or verify PDF signature material.
-    PdfSign(PdfSignOptions),
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct OperatorSpecDef {
-    pdf_edit: Option<PdfEditOptions>,
-    pdf_inspect: Option<PdfInspectOptions>,
-    pdf_security: Option<PdfSecurityOptions>,
-    pdf_compare: Option<PdfCompareOptions>,
-    pdf_sign: Option<PdfSignOptions>,
-}
-
-impl TryFrom<OperatorSpecDef> for OperatorSpec {
-    type Error = OxideError;
-
-    fn try_from(value: OperatorSpecDef) -> Result<Self, Self::Error> {
-        let operator_count = [
-            value.pdf_edit.is_some(),
-            value.pdf_inspect.is_some(),
-            value.pdf_security.is_some(),
-            value.pdf_compare.is_some(),
-            value.pdf_sign.is_some(),
-        ]
-        .into_iter()
-        .filter(|present| *present)
-        .count();
-
-        if operator_count != 1 {
-            return Err(OxideError::InvalidWorkflow {
-                reason: "operator spec must contain exactly one operator".to_owned(),
-            });
-        }
-
-        if let Some(options) = value.pdf_edit {
-            return Ok(Self::PdfEdit(options));
-        }
-        if let Some(options) = value.pdf_inspect {
-            return Ok(Self::PdfInspect(options));
-        }
-        if let Some(options) = value.pdf_security {
-            return Ok(Self::PdfSecurity(options));
-        }
-        if let Some(options) = value.pdf_compare {
-            return Ok(Self::PdfCompare(options));
-        }
-        if let Some(options) = value.pdf_sign {
-            return Ok(Self::PdfSign(options));
-        }
-
-        unreachable!("operator count was already checked");
-    }
-}
-
-impl From<OperatorSpec> for OperatorSpecDef {
-    fn from(value: OperatorSpec) -> Self {
-        match value {
-            OperatorSpec::PdfEdit(options) => Self {
-                pdf_edit: Some(options),
-                ..Self::default()
-            },
-            OperatorSpec::PdfInspect(options) => Self {
-                pdf_inspect: Some(options),
-                ..Self::default()
-            },
-            OperatorSpec::PdfSecurity(options) => Self {
-                pdf_security: Some(options),
-                ..Self::default()
-            },
-            OperatorSpec::PdfCompare(options) => Self {
-                pdf_compare: Some(options),
-                ..Self::default()
-            },
-            OperatorSpec::PdfSign(options) => Self {
-                pdf_sign: Some(options),
-                ..Self::default()
-            },
-        }
-    }
-}
 
 /// PDF edit and creation operations.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -929,91 +694,6 @@ pub struct SignatureDiagnostic {
     pub code: String,
     /// Non-sensitive diagnostic message.
     pub message: String,
-}
-
-/// Structured core error.
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
-pub enum OxideError {
-    /// Workflow is invalid.
-    #[error("invalid workflow: {reason}")]
-    InvalidWorkflow {
-        /// Non-sensitive reason.
-        reason: String,
-    },
-    /// Input is invalid.
-    #[error("invalid input: {reason}")]
-    InvalidInput {
-        /// Non-sensitive reason.
-        reason: String,
-    },
-    /// PDF feature is not supported.
-    #[error("unsupported PDF feature: {feature}")]
-    UnsupportedPdfFeature {
-        /// Non-sensitive feature name.
-        feature: String,
-    },
-    /// PDF is encrypted and no usable password was provided.
-    #[error("encrypted PDF")]
-    EncryptedPdf,
-    /// Provided password is incorrect.
-    #[error("incorrect password")]
-    IncorrectPassword,
-    /// PDF parsing failed.
-    #[error("PDF parse error")]
-    ParsePdf,
-    /// PDF writing failed.
-    #[error("PDF write error")]
-    WritePdf,
-    /// PDF rendering failed.
-    #[error("PDF render error")]
-    RenderPdf,
-    /// Text extraction failed.
-    #[error("text extraction error")]
-    ExtractText,
-    /// Font resolution failed.
-    #[error("font resolution error")]
-    FontResolution,
-    /// SVG parsing failed.
-    #[error("SVG parse error")]
-    SvgParse,
-    /// Image decoding failed.
-    #[error("image decode error")]
-    ImageDecode,
-    /// A resource limit was exceeded.
-    #[error("resource limit exceeded: {limit}")]
-    ResourceLimitExceeded {
-        /// Non-sensitive limit name.
-        limit: String,
-    },
-    /// I/O failed.
-    #[error("I/O error")]
-    Io,
-    /// Internal invariant failed.
-    #[error("internal error")]
-    Internal,
-}
-
-impl OxideError {
-    /// Stable machine-readable error code for CLI and Web mappings.
-    pub const fn code(&self) -> &'static str {
-        match self {
-            Self::InvalidWorkflow { .. } => "invalid_workflow",
-            Self::InvalidInput { .. } => "invalid_input",
-            Self::UnsupportedPdfFeature { .. } => "unsupported_pdf_feature",
-            Self::EncryptedPdf => "encrypted_pdf",
-            Self::IncorrectPassword => "incorrect_password",
-            Self::ParsePdf => "parse_pdf",
-            Self::WritePdf => "write_pdf",
-            Self::RenderPdf => "render_pdf",
-            Self::ExtractText => "extract_text",
-            Self::FontResolution => "font_resolution",
-            Self::SvgParse => "svg_parse",
-            Self::ImageDecode => "image_decode",
-            Self::ResourceLimitExceeded { .. } => "resource_limit_exceeded",
-            Self::Io => "io",
-            Self::Internal => "internal",
-        }
-    }
 }
 
 /// Artifact produced or consumed by workflow tasks.
@@ -2169,7 +1849,7 @@ pub fn execute_workflow(
             .collect::<Result<Vec<_>, _>>()?;
         let artifact = runner.run(task, &inputs)?;
         enforce_timeout(started_at, timeout)?;
-        store.insert(ArtifactRef(task.id.as_str().to_owned()), artifact);
+        store.insert(ArtifactRef::new(task.id.as_str()), artifact);
     }
 
     Ok(ExecutionResult { plan, store })
@@ -2210,7 +1890,7 @@ fn collect_ids(workflow: &Workflow) -> Result<BTreeSet<ArtifactRef>, OxideError>
         insert_unique_id(&mut ids, &input.id)?;
     }
     for task in &workflow.tasks {
-        insert_unique_id(&mut ids, &ArtifactRef(task.id.as_str().to_owned()))?;
+        insert_unique_id(&mut ids, &ArtifactRef::new(task.id.as_str()))?;
     }
     for output in &workflow.outputs {
         insert_unique_id(&mut ids, &output.id)?;
@@ -2290,7 +1970,7 @@ fn topological_sort(workflow: &Workflow) -> Result<Vec<TaskId>, OxideError> {
 
     for task in &workflow.tasks {
         for input in &task.inputs {
-            let dependency = TaskId(input.as_str().to_owned());
+            let dependency = TaskId::new(input.as_str());
             if task_ids.contains(&dependency) {
                 *incoming_count.get_mut(&task.id).ok_or_else(|| {
                     invalid_workflow(format!("task '{}' is missing", task.id.as_str()))
