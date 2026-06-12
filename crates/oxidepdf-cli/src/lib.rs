@@ -260,6 +260,10 @@ struct VerifySignaturesArgs {
     /// Input PDF file, or `-` to read from stdin.
     input: PathBuf,
 
+    /// PEM file containing explicit trust anchors.
+    #[arg(long)]
+    trust_anchors: PathBuf,
+
     /// Output report file, or `-` to write to stdout.
     #[arg(short, long)]
     output: PathBuf,
@@ -593,7 +597,10 @@ fn run_verify_signatures(
         args.input,
         args.output,
         "verify_signatures",
-        OperatorSpec::Signature(SignatureOptions::default()),
+        OperatorSpec::Signature(SignatureOptions {
+            mode: Default::default(),
+            trust_anchors: Some(args.trust_anchors),
+        }),
     );
 
     execute_and_write_workflow(workflow, stdin, args.force, stdout)
@@ -841,6 +848,7 @@ fn sanitized_io_error(error: &io::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lopdf::dictionary;
     use std::fs;
 
     #[test]
@@ -1550,8 +1558,46 @@ mod tests {
     }
 
     #[test]
-    fn verify_signatures_command_returns_clear_unsupported_error() {
-        let dir = temp_dir("verify_signatures_command_returns_clear_unsupported_error");
+    fn verify_signatures_command_writes_json_report() {
+        let dir = temp_dir("verify_signatures_command_writes_json_report");
+        let input = write_signature_pdf(&dir);
+        let output = dir.join("signature-report.json");
+        let trust_anchors = write_test_trust_anchors(&dir);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "verify-signatures",
+                input.to_str().unwrap(),
+                "--trust-anchors",
+                trust_anchors.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        let report: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(output).unwrap()).unwrap();
+        assert_eq!(report["verdict"], "unsupported");
+        assert_eq!(report["trust_anchor_count"], 1);
+        assert_eq!(report["signatures"][0]["field_name"], "Approval");
+        assert_eq!(
+            report["signatures"][0]["revocation_status"]["status"],
+            "indeterminate"
+        );
+    }
+
+    #[test]
+    fn verify_signatures_command_requires_trust_anchors() {
+        let dir = temp_dir("verify_signatures_command_requires_trust_anchors");
         let output = dir.join("signature-report.json");
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -1570,11 +1616,10 @@ mod tests {
         );
         let stderr = String::from_utf8(stderr).unwrap();
 
-        assert_eq!(code, 3);
+        assert_eq!(code, 2);
         assert_eq!(stdout, b"");
         assert!(!output.exists());
-        assert!(stderr.contains("unsupported_pdf_feature"));
-        assert!(stderr.contains("PDF signatures and certificate validation"));
+        assert!(stderr.contains("--trust-anchors"));
     }
 
     #[test]
@@ -1668,8 +1713,60 @@ mod tests {
     }
 
     #[test]
-    fn workflow_signature_operator_returns_unsupported_error() {
-        let dir = temp_dir("workflow_signature_operator_returns_unsupported_error");
+    fn workflow_signature_operator_writes_json_report() {
+        let dir = temp_dir("workflow_signature_operator_writes_json_report");
+        let input = write_signature_pdf(&dir);
+        let workflow = dir.join("workflow.yaml");
+        let output = dir.join("signature-report.json");
+        let trust_anchors = write_test_trust_anchors(&dir);
+        fs::write(
+            &workflow,
+            format!(
+                r#"
+                version: 1
+                inputs:
+                  - id: source
+                    path: {}
+                tasks:
+                  - id: verify
+                    op:
+                      signature:
+                        mode: verify
+                        trust_anchors: {}
+                    inputs: [source]
+                outputs:
+                  - id: final
+                    from: verify
+                    path: {}
+                "#,
+                yaml_path(&input),
+                yaml_path(&trust_anchors),
+                yaml_path(&output)
+            ),
+        )
+        .unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            ["oxidepdf", "run", "--workflow", workflow.to_str().unwrap()],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        let report: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(output).unwrap()).unwrap();
+        assert_eq!(report["verdict"], "unsupported");
+        assert_eq!(report["trust_anchor_count"], 1);
+    }
+
+    #[test]
+    fn workflow_signature_operator_without_trust_anchors_fails_with_invalid_input() {
+        let dir = temp_dir("workflow_signature_operator_without_trust_anchors_fails");
         let workflow = dir.join("workflow.yaml");
         let output = dir.join("signature-report.json");
         fs::write(
@@ -1710,8 +1807,8 @@ mod tests {
         assert_eq!(code, 3);
         assert_eq!(stdout, b"");
         assert!(!output.exists());
-        assert!(stderr.contains("unsupported_pdf_feature"));
-        assert!(stderr.contains("PDF signatures and certificate validation"));
+        assert!(stderr.contains("invalid_input"));
+        assert!(stderr.contains("signature verification requires explicit trust anchors"));
     }
 
     #[test]
@@ -1843,6 +1940,90 @@ mod tests {
             .join("../../tests/fixtures/signature-placeholder.pdf")
             .canonicalize()
             .unwrap()
+    }
+
+    fn write_test_trust_anchors(dir: &Path) -> std::path::PathBuf {
+        let path = dir.join("anchors.pem");
+        fs::write(
+            &path,
+            include_bytes!("../../../tests/fixtures/test-trust-anchor.txt"),
+        )
+        .unwrap();
+        path
+    }
+
+    fn write_signature_pdf(dir: &Path) -> std::path::PathBuf {
+        let path = dir.join("signed.pdf");
+        let mut document = lopdf::Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let page_id = document.new_object_id();
+        let sig_field_id = document.new_object_id();
+        let sig_value_id = document.new_object_id();
+        let acroform_id = document.new_object_id();
+        let catalog_id = document.new_object_id();
+
+        let sig_value = lopdf::dictionary! {
+            "Type" => "Sig",
+            "Filter" => "Adobe.PPKLite",
+            "SubFilter" => "adbe.pkcs7.detached",
+            "ByteRange" => lopdf::Object::Array(vec![0.into(), 64.into(), 192.into(), 64.into()]),
+            "Contents" => lopdf::Object::String(vec![0x30, 0x82], lopdf::StringFormat::Hexadecimal),
+        };
+        document
+            .objects
+            .insert(sig_value_id, lopdf::Object::Dictionary(sig_value));
+
+        let sig_field = lopdf::dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Widget",
+            "FT" => "Sig",
+            "T" => lopdf::Object::string_literal("Approval"),
+            "V" => sig_value_id,
+            "Rect" => lopdf::Object::Array(vec![0.into(), 0.into(), 0.into(), 0.into()]),
+            "P" => page_id,
+        };
+        document
+            .objects
+            .insert(sig_field_id, lopdf::Object::Dictionary(sig_field));
+
+        let page = lopdf::dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => lopdf::Object::Array(vec![0.into(), 0.into(), 200.into(), 200.into()]),
+            "Annots" => lopdf::Object::Array(vec![sig_field_id.into()]),
+        };
+        document
+            .objects
+            .insert(page_id, lopdf::Object::Dictionary(page));
+
+        let pages = lopdf::dictionary! {
+            "Type" => "Pages",
+            "Kids" => lopdf::Object::Array(vec![page_id.into()]),
+            "Count" => 1,
+        };
+        document
+            .objects
+            .insert(pages_id, lopdf::Object::Dictionary(pages));
+
+        let acroform = lopdf::dictionary! {
+            "Fields" => lopdf::Object::Array(vec![sig_field_id.into()]),
+        };
+        document
+            .objects
+            .insert(acroform_id, lopdf::Object::Dictionary(acroform));
+
+        let catalog = lopdf::dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+            "AcroForm" => acroform_id,
+        };
+        document
+            .objects
+            .insert(catalog_id, lopdf::Object::Dictionary(catalog));
+        document.trailer.set("Root", catalog_id);
+
+        document.save(&path).unwrap();
+        path
     }
 
     fn simple_svg() -> &'static [u8] {

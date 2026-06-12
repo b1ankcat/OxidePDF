@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use thiserror::Error;
+use x509_cert::{der::Decode, Certificate};
 
 const A4_WIDTH: f32 = 595.0;
 const A4_HEIGHT: f32 = 842.0;
@@ -426,9 +427,10 @@ pub struct RenderOptions {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SignatureOptions {
-    /// Requested signature operation. The current product boundary supports
-    /// schema recognition only and returns a clear unsupported error.
+    /// Requested signature operation.
     pub mode: SignatureMode,
+    /// PEM file containing explicit trust anchors for chain validation.
+    pub trust_anchors: Option<PathBuf>,
 }
 
 /// Requested signature operation.
@@ -438,6 +440,116 @@ pub enum SignatureMode {
     /// Verify PDF signatures and embedded certificate material.
     #[default]
     Verify,
+}
+
+/// Top-level signature verification report emitted as JSON.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignatureVerificationReport {
+    /// Overall verification verdict.
+    pub verdict: SignatureVerdict,
+    /// Number of trust anchors accepted from the explicit PEM input.
+    pub trust_anchor_count: usize,
+    /// Per-signature reports.
+    pub signatures: Vec<SignatureEntryReport>,
+    /// Top-level diagnostics.
+    pub diagnostics: Vec<SignatureDiagnostic>,
+}
+
+/// Stable signature verification verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignatureVerdict {
+    /// All required checks completed and the signature chains to a trust anchor.
+    Trusted,
+    /// At least one completed check proved the signature invalid.
+    Invalid,
+    /// Verification completed but trust could not be established offline.
+    Indeterminate,
+    /// The input uses a signature feature not supported by this build.
+    Unsupported,
+}
+
+/// Per-signature report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignatureEntryReport {
+    /// Optional field name from the PDF form tree.
+    pub field_name: Option<String>,
+    /// Signature dictionary SubFilter value.
+    pub subfilter: Option<String>,
+    /// ByteRange structural status.
+    pub byte_range: ByteRangeVerification,
+    /// Contents coverage status.
+    pub contents: ContentsVerification,
+    /// CMS parse/validation status.
+    pub cms_status: SignatureCheckStatus,
+    /// Signed content digest status.
+    pub digest_status: SignatureCheckStatus,
+    /// Signer signature mathematics status.
+    pub signature_status: SignatureCheckStatus,
+    /// Certificate chain status.
+    pub certificate_chain_status: SignatureCheckStatus,
+    /// Offline revocation status.
+    pub revocation_status: SignatureCheckStatus,
+    /// Timestamp token validation status.
+    pub timestamp_status: SignatureCheckStatus,
+    /// Per-signature diagnostics.
+    pub diagnostics: Vec<SignatureDiagnostic>,
+}
+
+/// ByteRange check result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ByteRangeVerification {
+    /// Parsed ByteRange values.
+    pub values: Option<[u64; 4]>,
+    /// Whether the ranges are in input bounds.
+    pub in_bounds: bool,
+    /// Whether the ranges are ordered and non-overlapping.
+    pub ordered_non_overlapping: bool,
+    /// Length of the unsigned gap between signed ranges.
+    pub gap_len: Option<u64>,
+    /// Total covered bytes.
+    pub covered_len: Option<u64>,
+}
+
+/// Contents coverage check result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContentsVerification {
+    /// Number of bytes in the signature Contents value.
+    pub byte_len: Option<usize>,
+    /// Whether the ByteRange gap can contain the Contents placeholder.
+    pub covered_by_gap: bool,
+}
+
+/// Status for an individual signature check.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignatureCheckStatus {
+    /// Stable status code.
+    pub status: SignatureCheckState,
+    /// Non-sensitive detail.
+    pub detail: String,
+}
+
+/// Stable signature check state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignatureCheckState {
+    /// Check completed successfully.
+    Passed,
+    /// Check completed and failed.
+    Failed,
+    /// Check could not establish a definite result.
+    Indeterminate,
+    /// Check is not implemented in this build.
+    Unsupported,
+}
+
+/// Non-sensitive signature diagnostic.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignatureDiagnostic {
+    /// Stable diagnostic code.
+    pub code: String,
+    /// Non-sensitive diagnostic message.
+    pub message: String,
 }
 
 /// Structured core error.
@@ -720,9 +832,10 @@ impl OperatorRunner for PdfOperatorRunner {
             OperatorSpec::Watermark(options) => {
                 watermark_pdf_artifacts(inputs, options, &self.limits).map(Artifact::Pdf)
             }
-            OperatorSpec::Signature(_) => Err(OxideError::UnsupportedPdfFeature {
-                feature: "PDF signatures and certificate validation".to_owned(),
-            }),
+            OperatorSpec::Signature(options) => {
+                let input = single_pdf_input(inputs)?;
+                verify_pdf_signatures(input, options, &self.limits).map(Artifact::Text)
+            }
         }?;
         enforce_artifact_output_bytes(&artifact, &self.limits)?;
         Ok(artifact)
@@ -865,6 +978,51 @@ pub fn inspect_pdf_signature_markers_for_research(
         byte_ranges: parse_byte_ranges_for_research(input),
         subfilters: parse_name_values_after_token(input, b"/SubFilter"),
     })
+}
+
+/// Verifies PDF signature structure and emits a JSON report.
+pub fn verify_pdf_signatures(
+    input: &[u8],
+    options: &SignatureOptions,
+    limits: &ResourceLimits,
+) -> Result<TextArtifact, OxideError> {
+    enforce_input_bytes(input.len(), limits)?;
+    let trust_anchor_count = trust_anchor_count(options.trust_anchors.as_deref())?;
+    let document = load_pdf(input)?;
+    enforce_max_pages(document.get_pages().len(), limits)?;
+    let mut diagnostics = Vec::new();
+    let signatures = discover_pdf_signature_dictionaries(&document)?
+        .into_iter()
+        .map(|dictionary| signature_entry_report(input, dictionary))
+        .collect::<Vec<_>>();
+
+    if signatures.is_empty() {
+        diagnostics.push(signature_diagnostic(
+            "no_signatures",
+            "PDF contains no signature dictionaries",
+        ));
+    }
+
+    let verdict = overall_signature_verdict(&signatures, &diagnostics);
+    let report = SignatureVerificationReport {
+        verdict,
+        trust_anchor_count,
+        signatures,
+        diagnostics,
+    };
+    let text = serde_json::to_string_pretty(&report).map_err(|_| OxideError::Internal)?;
+    enforce_output_bytes(text.len(), limits)?;
+
+    Ok(TextArtifact {
+        text,
+        diagnostics: Vec::new(),
+    })
+}
+
+#[derive(Debug, Clone)]
+struct DiscoveredSignatureDictionary<'a> {
+    field_name: Option<String>,
+    dictionary: &'a Dictionary,
 }
 
 /// Non-production report returned by the signature research scanner.
@@ -1441,6 +1599,377 @@ fn svg_bytes(artifact: &Artifact) -> Result<&[u8], OxideError> {
             reason: "expected SVG input artifact".to_owned(),
         }),
     }
+}
+
+fn trust_anchor_count(path: Option<&std::path::Path>) -> Result<usize, OxideError> {
+    let path = path.ok_or_else(|| OxideError::InvalidInput {
+        reason: "signature verification requires explicit trust anchors".to_owned(),
+    })?;
+    let pem = std::fs::read(path).map_err(|_| OxideError::Io)?;
+    let pem = std::str::from_utf8(&pem).map_err(|_| OxideError::InvalidInput {
+        reason: "trust anchors file contains no valid PEM certificates".to_owned(),
+    })?;
+    let count = parsed_trust_anchor_count(pem)?;
+    if count == 0 {
+        return Err(OxideError::InvalidInput {
+            reason: "trust anchors file contains no valid PEM certificates".to_owned(),
+        });
+    }
+
+    Ok(count)
+}
+
+fn parsed_trust_anchor_count(pem: &str) -> Result<usize, OxideError> {
+    const BEGIN: &str = "-----BEGIN CERTIFICATE-----";
+    const END: &str = "-----END CERTIFICATE-----";
+
+    let mut rest = pem;
+    let mut count = 0usize;
+    while let Some(begin) = rest.find(BEGIN) {
+        rest = &rest[begin..];
+        let Some(end) = rest.find(END) else {
+            return Err(OxideError::InvalidInput {
+                reason: "trust anchors file contains no valid PEM certificates".to_owned(),
+            });
+        };
+        let block_end = end + END.len();
+        let block = &rest[..block_end];
+        let (label, der) =
+            pem_rfc7468::decode_vec(block.as_bytes()).map_err(|_| OxideError::InvalidInput {
+                reason: "trust anchors file contains no valid PEM certificates".to_owned(),
+            })?;
+        if label != "CERTIFICATE" {
+            return Err(OxideError::InvalidInput {
+                reason: "trust anchors file contains no valid PEM certificates".to_owned(),
+            });
+        }
+        Certificate::from_der(&der).map_err(|_| OxideError::InvalidInput {
+            reason: "trust anchors file contains no valid PEM certificates".to_owned(),
+        })?;
+        count += 1;
+        rest = &rest[block_end..];
+    }
+
+    Ok(count)
+}
+
+fn discover_pdf_signature_dictionaries(
+    document: &lopdf::Document,
+) -> Result<Vec<DiscoveredSignatureDictionary<'_>>, OxideError> {
+    let mut signatures = Vec::new();
+    if let Ok(catalog) = document.catalog() {
+        if let Ok(acroform) = catalog
+            .get(b"AcroForm")
+            .and_then(|object| deref_dictionary(document, object))
+        {
+            if let Ok(fields) = acroform.get(b"Fields").and_then(lopdf::Object::as_array) {
+                for field in fields {
+                    collect_signature_fields(document, field, None, &mut signatures)?;
+                }
+            }
+        }
+    }
+    for (_, page_id) in document.get_pages() {
+        let Ok(page) = document
+            .get_object(page_id)
+            .and_then(lopdf::Object::as_dict)
+        else {
+            continue;
+        };
+        let Ok(annots) = page.get(b"Annots").and_then(lopdf::Object::as_array) else {
+            continue;
+        };
+        for annot in annots {
+            collect_signature_fields(document, annot, None, &mut signatures)?;
+        }
+    }
+    signatures.dedup_by_key(|signature| std::ptr::from_ref(signature.dictionary) as usize);
+
+    Ok(signatures)
+}
+
+fn collect_signature_fields<'a>(
+    document: &'a lopdf::Document,
+    object: &'a lopdf::Object,
+    inherited_name: Option<String>,
+    signatures: &mut Vec<DiscoveredSignatureDictionary<'a>>,
+) -> Result<(), OxideError> {
+    let dictionary = deref_dictionary(document, object).map_err(|_| OxideError::ParsePdf)?;
+    let field_name = dictionary
+        .get(b"T")
+        .ok()
+        .and_then(pdf_string)
+        .or(inherited_name);
+    if dictionary.get(b"FT").and_then(lopdf::Object::as_name).ok() == Some(b"Sig") {
+        if let Ok(value) = dictionary.get(b"V") {
+            if let Ok(signature_dictionary) = deref_dictionary(document, value) {
+                signatures.push(DiscoveredSignatureDictionary {
+                    field_name: field_name.clone(),
+                    dictionary: signature_dictionary,
+                });
+            }
+        } else if dictionary.get(b"ByteRange").is_ok() {
+            signatures.push(DiscoveredSignatureDictionary {
+                field_name: field_name.clone(),
+                dictionary,
+            });
+        }
+    } else if dictionary.get(b"ByteRange").is_ok() && dictionary.get(b"Contents").is_ok() {
+        signatures.push(DiscoveredSignatureDictionary {
+            field_name: field_name.clone(),
+            dictionary,
+        });
+    }
+    if let Ok(kids) = dictionary.get(b"Kids").and_then(lopdf::Object::as_array) {
+        for kid in kids {
+            collect_signature_fields(document, kid, field_name.clone(), signatures)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn deref_dictionary<'a>(
+    document: &'a lopdf::Document,
+    object: &'a lopdf::Object,
+) -> lopdf::Result<&'a Dictionary> {
+    match object {
+        lopdf::Object::Reference(id) => document.get_object(*id).and_then(lopdf::Object::as_dict),
+        lopdf::Object::Dictionary(dictionary) => Ok(dictionary),
+        _ => object.as_dict(),
+    }
+}
+
+fn signature_entry_report(
+    input: &[u8],
+    discovered: DiscoveredSignatureDictionary<'_>,
+) -> SignatureEntryReport {
+    let mut diagnostics = Vec::new();
+    let subfilter = discovered
+        .dictionary
+        .get(b"SubFilter")
+        .ok()
+        .and_then(pdf_name);
+    if !matches!(
+        subfilter.as_deref(),
+        Some("adbe.pkcs7.detached") | Some("ETSI.CAdES.detached")
+    ) {
+        diagnostics.push(signature_diagnostic(
+            "unsupported_subfilter",
+            "signature SubFilter is not supported",
+        ));
+    }
+
+    let byte_range = byte_range_verification(input, discovered.dictionary, &mut diagnostics);
+    let contents = contents_verification(discovered.dictionary, &byte_range, &mut diagnostics);
+
+    SignatureEntryReport {
+        field_name: discovered.field_name,
+        subfilter,
+        byte_range,
+        contents,
+        cms_status: signature_check(
+            SignatureCheckState::Unsupported,
+            "CMS SignedData parsing is not implemented in this verification slice",
+        ),
+        digest_status: signature_check(
+            SignatureCheckState::Indeterminate,
+            "signed byte digest is not checked until CMS messageDigest parsing is available",
+        ),
+        signature_status: signature_check(
+            SignatureCheckState::Unsupported,
+            "signer signature mathematics is not implemented in this verification slice",
+        ),
+        certificate_chain_status: signature_check(
+            SignatureCheckState::Indeterminate,
+            "certificate chain cannot be trusted until signer certificate extraction is available",
+        ),
+        revocation_status: signature_check(
+            SignatureCheckState::Indeterminate,
+            "offline revocation status is not confirmed; no network lookup is performed",
+        ),
+        timestamp_status: signature_check(
+            SignatureCheckState::Unsupported,
+            "timestamp token validation is not implemented in this verification slice",
+        ),
+        diagnostics,
+    }
+}
+
+fn byte_range_verification(
+    input: &[u8],
+    dictionary: &Dictionary,
+    diagnostics: &mut Vec<SignatureDiagnostic>,
+) -> ByteRangeVerification {
+    let Some(values) = dictionary
+        .get(b"ByteRange")
+        .ok()
+        .and_then(byte_range_values)
+    else {
+        diagnostics.push(signature_diagnostic(
+            "missing_byte_range",
+            "signature dictionary is missing ByteRange",
+        ));
+        return ByteRangeVerification {
+            values: None,
+            in_bounds: false,
+            ordered_non_overlapping: false,
+            gap_len: None,
+            covered_len: None,
+        };
+    };
+    let research = byte_range_research(
+        values[0],
+        values[1],
+        values[2],
+        values[3],
+        input.len() as u64,
+    );
+    if !research.in_bounds {
+        diagnostics.push(signature_diagnostic(
+            "byte_range_out_of_bounds",
+            "ByteRange references bytes outside the input",
+        ));
+    }
+    if !research.ordered_non_overlapping {
+        diagnostics.push(signature_diagnostic(
+            "byte_range_not_ordered",
+            "ByteRange entries are not ordered and non-overlapping",
+        ));
+    }
+
+    ByteRangeVerification {
+        values: Some(values),
+        in_bounds: research.in_bounds,
+        ordered_non_overlapping: research.ordered_non_overlapping,
+        gap_len: research.gap_len,
+        covered_len: research.covered_len,
+    }
+}
+
+fn contents_verification(
+    dictionary: &Dictionary,
+    byte_range: &ByteRangeVerification,
+    diagnostics: &mut Vec<SignatureDiagnostic>,
+) -> ContentsVerification {
+    let Some(byte_len) = dictionary
+        .get(b"Contents")
+        .ok()
+        .and_then(pdf_string_bytes_len)
+    else {
+        diagnostics.push(signature_diagnostic(
+            "missing_contents",
+            "signature dictionary is missing Contents",
+        ));
+        return ContentsVerification {
+            byte_len: None,
+            covered_by_gap: false,
+        };
+    };
+    let covered_by_gap = byte_range
+        .gap_len
+        .is_some_and(|gap_len| gap_len >= byte_len as u64);
+    if !covered_by_gap {
+        diagnostics.push(signature_diagnostic(
+            "contents_not_covered_by_gap",
+            "signature Contents is larger than the unsigned ByteRange gap",
+        ));
+    }
+
+    ContentsVerification {
+        byte_len: Some(byte_len),
+        covered_by_gap,
+    }
+}
+
+fn byte_range_values(object: &lopdf::Object) -> Option<[u64; 4]> {
+    let array = object.as_array().ok()?;
+    if array.len() != 4 {
+        return None;
+    }
+    let mut values = [0u64; 4];
+    for (index, object) in array.iter().enumerate() {
+        let value = object.as_i64().ok()?;
+        values[index] = u64::try_from(value).ok()?;
+    }
+
+    Some(values)
+}
+
+fn pdf_name(object: &lopdf::Object) -> Option<String> {
+    object
+        .as_name()
+        .ok()
+        .map(|name| String::from_utf8_lossy(name).into_owned())
+}
+
+fn pdf_string(object: &lopdf::Object) -> Option<String> {
+    object
+        .as_str()
+        .ok()
+        .map(|value| String::from_utf8_lossy(value).into_owned())
+}
+
+fn pdf_string_bytes_len(object: &lopdf::Object) -> Option<usize> {
+    object.as_str().ok().map(<[u8]>::len)
+}
+
+fn signature_check(status: SignatureCheckState, detail: impl Into<String>) -> SignatureCheckStatus {
+    SignatureCheckStatus {
+        status,
+        detail: detail.into(),
+    }
+}
+
+fn signature_diagnostic(
+    code: impl Into<String>,
+    message: impl Into<String>,
+) -> SignatureDiagnostic {
+    SignatureDiagnostic {
+        code: code.into(),
+        message: message.into(),
+    }
+}
+
+fn overall_signature_verdict(
+    signatures: &[SignatureEntryReport],
+    diagnostics: &[SignatureDiagnostic],
+) -> SignatureVerdict {
+    if signatures.is_empty()
+        || diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "no_signatures")
+    {
+        return SignatureVerdict::Indeterminate;
+    }
+    if signatures.iter().any(|signature| {
+        signature
+            .diagnostics
+            .iter()
+            .any(is_invalid_signature_diagnostic)
+    }) {
+        return SignatureVerdict::Invalid;
+    }
+    if signatures.iter().any(|signature| {
+        signature.cms_status.status == SignatureCheckState::Unsupported
+            || signature.signature_status.status == SignatureCheckState::Unsupported
+            || signature.timestamp_status.status == SignatureCheckState::Unsupported
+    }) {
+        return SignatureVerdict::Unsupported;
+    }
+
+    SignatureVerdict::Indeterminate
+}
+
+fn is_invalid_signature_diagnostic(diagnostic: &SignatureDiagnostic) -> bool {
+    matches!(
+        diagnostic.code.as_str(),
+        "missing_byte_range"
+            | "byte_range_out_of_bounds"
+            | "byte_range_not_ordered"
+            | "missing_contents"
+            | "contents_not_covered_by_gap"
+    )
 }
 
 fn load_pdf(input: &[u8]) -> Result<lopdf::Document, OxideError> {
@@ -2789,6 +3318,7 @@ mod tests {
                 op:
                   signature:
                     mode: verify
+                    trust_anchors: ./anchors.pem
                 inputs: [source]
             outputs:
               - id: final
@@ -2801,9 +3331,19 @@ mod tests {
         assert!(matches!(
             workflow.tasks[0].op,
             OperatorSpec::Signature(SignatureOptions {
-                mode: SignatureMode::Verify
+                mode: SignatureMode::Verify,
+                trust_anchors: Some(_),
             })
         ));
+        match &workflow.tasks[0].op {
+            OperatorSpec::Signature(options) => {
+                assert_eq!(
+                    options.trust_anchors.as_deref(),
+                    Some(std::path::Path::new("./anchors.pem"))
+                );
+            }
+            _ => unreachable!("asserted signature operator above"),
+        }
     }
 
     #[test]
@@ -3229,28 +3769,164 @@ mod tests {
     }
 
     #[test]
-    fn pdf_operator_runner_returns_unsupported_for_signature_validation() {
-        let pdf = include_bytes!("../../../tests/fixtures/signature-placeholder.pdf");
+    fn pdf_operator_runner_emits_signature_verification_report() {
+        let pdf = pdf_with_signature_dictionary(vec![0, 64, 192, 64], vec![0x30, 0x82]);
+        let trust_anchors = write_test_trust_anchors("signature_report");
         let mut runner = PdfOperatorRunner::default();
 
-        let err = runner
+        let artifact = runner
             .run(
                 &TaskSpec {
                     id: TaskId::new("verify"),
-                    op: OperatorSpec::Signature(SignatureOptions::default()),
+                    op: OperatorSpec::Signature(SignatureOptions {
+                        mode: SignatureMode::Verify,
+                        trust_anchors: Some(trust_anchors),
+                    }),
                     inputs: vec![artifact_ref("source")],
                 },
-                &[Artifact::pdf(pdf)],
+                &[Artifact::pdf(&pdf)],
             )
-            .unwrap_err();
+            .unwrap();
+
+        let Artifact::Text(report_text) = artifact else {
+            panic!("signature verification should emit a text JSON report");
+        };
+        let report: SignatureVerificationReport = serde_json::from_str(&report_text.text).unwrap();
+        assert_eq!(report.trust_anchor_count, 1);
+        assert_eq!(report.verdict, SignatureVerdict::Unsupported);
+        assert_eq!(report.signatures.len(), 1);
+        assert_eq!(report.signatures[0].field_name.as_deref(), Some("Approval"));
+        assert_eq!(
+            report.signatures[0].subfilter.as_deref(),
+            Some("adbe.pkcs7.detached")
+        );
+        assert_eq!(
+            report.signatures[0].byte_range.values,
+            Some([0, 64, 192, 64])
+        );
+        assert!(report.signatures[0].byte_range.in_bounds);
+        assert!(report.signatures[0].byte_range.ordered_non_overlapping);
+        assert_eq!(report.signatures[0].byte_range.gap_len, Some(128));
+        assert_eq!(
+            report.signatures[0].cms_status.status,
+            SignatureCheckState::Unsupported
+        );
+        assert_eq!(
+            report.signatures[0].revocation_status.status,
+            SignatureCheckState::Indeterminate
+        );
+    }
+
+    #[test]
+    fn verify_pdf_signatures_requires_explicit_trust_anchors() {
+        let pdf = include_bytes!("../../../tests/fixtures/signature-placeholder.pdf");
+
+        let err = verify_pdf_signatures(
+            pdf,
+            &SignatureOptions::default(),
+            &ResourceLimits::default(),
+        )
+        .unwrap_err();
 
         assert_eq!(
             err,
-            OxideError::UnsupportedPdfFeature {
-                feature: "PDF signatures and certificate validation".to_owned()
+            OxideError::InvalidInput {
+                reason: "signature verification requires explicit trust anchors".to_owned()
             }
         );
-        assert_eq!(err.code(), "unsupported_pdf_feature");
+    }
+
+    #[test]
+    fn verify_pdf_signatures_rejects_empty_trust_anchor_file() {
+        let pdf = include_bytes!("../../../tests/fixtures/signature-placeholder.pdf");
+        let trust_anchors = write_empty_trust_anchors("empty_signature_anchors");
+
+        let err = verify_pdf_signatures(
+            pdf,
+            &SignatureOptions {
+                mode: SignatureMode::Verify,
+                trust_anchors: Some(trust_anchors),
+            },
+            &ResourceLimits::default(),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            OxideError::InvalidInput {
+                reason: "trust anchors file contains no valid PEM certificates".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn verify_pdf_signatures_rejects_invalid_trust_anchor_certificate() {
+        let pdf = include_bytes!("../../../tests/fixtures/signature-placeholder.pdf");
+        let trust_anchors = write_invalid_trust_anchors("invalid_signature_anchors");
+
+        let err = verify_pdf_signatures(
+            pdf,
+            &SignatureOptions {
+                mode: SignatureMode::Verify,
+                trust_anchors: Some(trust_anchors),
+            },
+            &ResourceLimits::default(),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            OxideError::InvalidInput {
+                reason: "trust anchors file contains no valid PEM certificates".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn verify_pdf_signatures_reports_unsigned_pdf_as_indeterminate() {
+        let pdf = include_bytes!("../../../tests/test.pdf");
+        let trust_anchors = write_test_trust_anchors("unsigned_pdf_report");
+
+        let report = verify_pdf_signatures(
+            pdf,
+            &SignatureOptions {
+                mode: SignatureMode::Verify,
+                trust_anchors: Some(trust_anchors),
+            },
+            &ResourceLimits::default(),
+        )
+        .unwrap();
+        let report: SignatureVerificationReport = serde_json::from_str(&report.text).unwrap();
+
+        assert_eq!(report.verdict, SignatureVerdict::Indeterminate);
+        assert_eq!(report.trust_anchor_count, 1);
+        assert!(report.signatures.is_empty());
+        assert_eq!(report.diagnostics.len(), 1);
+        assert_eq!(report.diagnostics[0].code, "no_signatures");
+    }
+
+    #[test]
+    fn verify_pdf_signatures_reports_malformed_byte_range_as_invalid() {
+        let pdf = pdf_with_signature_dictionary(vec![0, 64, 32, 64], vec![0x30, 0x82]);
+        let trust_anchors = write_test_trust_anchors("malformed_byte_range_report");
+
+        let report = verify_pdf_signatures(
+            &pdf,
+            &SignatureOptions {
+                mode: SignatureMode::Verify,
+                trust_anchors: Some(trust_anchors),
+            },
+            &ResourceLimits::default(),
+        )
+        .unwrap();
+        let report: SignatureVerificationReport = serde_json::from_str(&report.text).unwrap();
+
+        assert_eq!(report.verdict, SignatureVerdict::Invalid);
+        assert_eq!(report.signatures.len(), 1);
+        assert!(report.signatures[0]
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "byte_range_not_ordered"));
     }
 
     #[test]
@@ -3849,6 +4525,119 @@ mod tests {
 
     fn artifact_ref(value: &str) -> ArtifactRef {
         serde_json::from_str(&format!("{value:?}")).unwrap()
+    }
+
+    fn write_test_trust_anchors(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "oxidepdf_core_{name}_{}_anchors.pem",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            include_bytes!("../../../tests/fixtures/test-trust-anchor.txt"),
+        )
+        .unwrap();
+        path
+    }
+
+    fn write_empty_trust_anchors(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "oxidepdf_core_{name}_{}_anchors.pem",
+            std::process::id()
+        ));
+        std::fs::write(&path, "not a certificate bundle\n").unwrap();
+        path
+    }
+
+    fn write_invalid_trust_anchors(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "oxidepdf_core_{name}_{}_anchors.pem",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+        path
+    }
+
+    fn pdf_with_signature_dictionary(byte_range: Vec<i64>, contents: Vec<u8>) -> Vec<u8> {
+        let mut document = lopdf::Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let page_id = document.new_object_id();
+        let sig_field_id = document.new_object_id();
+        let sig_value_id = document.new_object_id();
+        let acroform_id = document.new_object_id();
+        let catalog_id = document.new_object_id();
+
+        let byte_range = byte_range
+            .into_iter()
+            .map(lopdf::Object::Integer)
+            .collect::<Vec<_>>();
+        let sig_value = lopdf::dictionary! {
+            "Type" => "Sig",
+            "Filter" => "Adobe.PPKLite",
+            "SubFilter" => "adbe.pkcs7.detached",
+            "ByteRange" => lopdf::Object::Array(byte_range),
+            "Contents" => lopdf::Object::String(contents, lopdf::StringFormat::Hexadecimal),
+        };
+        document
+            .objects
+            .insert(sig_value_id, lopdf::Object::Dictionary(sig_value));
+
+        let sig_field = lopdf::dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Widget",
+            "FT" => "Sig",
+            "T" => lopdf::Object::string_literal("Approval"),
+            "V" => sig_value_id,
+            "Rect" => lopdf::Object::Array(vec![0.into(), 0.into(), 0.into(), 0.into()]),
+            "P" => page_id,
+        };
+        document
+            .objects
+            .insert(sig_field_id, lopdf::Object::Dictionary(sig_field));
+
+        let page = lopdf::dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => lopdf::Object::Array(vec![0.into(), 0.into(), 200.into(), 200.into()]),
+            "Annots" => lopdf::Object::Array(vec![sig_field_id.into()]),
+        };
+        document
+            .objects
+            .insert(page_id, lopdf::Object::Dictionary(page));
+
+        let pages = lopdf::dictionary! {
+            "Type" => "Pages",
+            "Kids" => lopdf::Object::Array(vec![page_id.into()]),
+            "Count" => 1,
+        };
+        document
+            .objects
+            .insert(pages_id, lopdf::Object::Dictionary(pages));
+
+        let acroform = lopdf::dictionary! {
+            "Fields" => lopdf::Object::Array(vec![sig_field_id.into()]),
+        };
+        document
+            .objects
+            .insert(acroform_id, lopdf::Object::Dictionary(acroform));
+
+        let catalog = lopdf::dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+            "AcroForm" => acroform_id,
+        };
+        document
+            .objects
+            .insert(catalog_id, lopdf::Object::Dictionary(catalog));
+        document.trailer.set("Root", catalog_id);
+
+        let mut bytes = Vec::new();
+        document.save_to(&mut bytes).unwrap();
+        bytes
     }
 
     fn assert_page_numbers(document: &lopdf::Document, expected: &[u32]) {
