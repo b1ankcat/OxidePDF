@@ -1,0 +1,44 @@
+# Project planning notes kept outside version control for now.
+/plan.md
+/stage.md
+
+# Rust build output.
+/target/
+**/*.rs.bk
+
+# Local Cargo overrides and generated reports.
+/.cargo/config.toml
+/tarpaulin-report.html
+/coverage/
+/lcov.info
+
+# Environment and secrets.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Logs and temporary files.
+*.log
+*.tmp
+*.temp
+*.bak
+*.orig
+
+# Editor and OS metadata.
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Generated local artifacts.
+/dist/
+/build/
+/out/
