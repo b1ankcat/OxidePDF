@@ -302,6 +302,84 @@ fn workflow_extract_text_writes_plain_text() {
 }
 
 #[test]
+fn watermark_text_command_writes_parseable_pdf() {
+    let dir = temp_dir("watermark_text_command_writes_parseable_pdf");
+    let output = dir.join("watermarked.pdf");
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args([
+            "watermark",
+            fixture_pdf().to_str().unwrap(),
+            "--kind",
+            "text",
+            "--text",
+            "DRAFT",
+            "--font",
+            "DejaVu Sans",
+            "--pages",
+            "1",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq(""))
+        .stderr(predicate::eq(""));
+
+    assert_eq!(pdf_page_count(&output), 3);
+    assert!(page_has_content_operator(&output, 1, "Tj"));
+}
+
+#[test]
+fn workflow_watermark_image_writes_parseable_pdf() {
+    let dir = temp_dir("workflow_watermark_image_writes_parseable_pdf");
+    let output = dir.join("watermarked.pdf");
+    let workflow = dir.join("workflow.yaml");
+    fs::write(
+        &workflow,
+        format!(
+            r#"
+            version: 1
+            inputs:
+              - id: source
+                path: {}
+              - id: mark
+                path: {}
+            tasks:
+              - id: watermark
+                op:
+                  watermark:
+                    kind: image
+                    opacity: 0.3
+                    pages: "2"
+                    position: center
+                inputs: [source, mark]
+            outputs:
+              - id: final
+                from: watermark
+                path: {}
+            "#,
+            fixture_pdf().display(),
+            fixture_jpg().display(),
+            output.display()
+        ),
+    )
+    .unwrap();
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args(["run", "--workflow", workflow.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::eq(""))
+        .stderr(predicate::eq(""));
+
+    assert_eq!(pdf_page_count(&output), 3);
+    assert!(page_has_content_operator(&output, 2, "Do"));
+}
+
+#[test]
 fn render_command_rejects_out_of_range_page() {
     let dir = temp_dir("render_command_rejects_out_of_range_page");
     let output = dir.join("page.png");
@@ -360,4 +438,17 @@ fn pdf_page_rotation(path: &std::path::Path, page_number: u32) -> i64 {
     page.get(b"Rotate")
         .and_then(lopdf::Object::as_i64)
         .unwrap_or(0)
+}
+
+fn page_has_content_operator(path: &std::path::Path, page_number: u32, operator: &str) -> bool {
+    let document = lopdf::Document::load(path).unwrap();
+    let page_id = document.get_pages().get(&page_number).copied().unwrap();
+    document
+        .get_page_contents(page_id)
+        .into_iter()
+        .filter_map(|content_id| document.get_object(content_id).ok())
+        .filter_map(|object| object.as_stream().ok())
+        .filter_map(|stream| lopdf::content::Content::decode(&stream.content).ok())
+        .flat_map(|content| content.operations)
+        .any(|operation| operation.operator == operator)
 }

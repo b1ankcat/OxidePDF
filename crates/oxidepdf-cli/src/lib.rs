@@ -4,8 +4,8 @@ use clap::{CommandFactory, Parser, Subcommand};
 use oxidepdf_core::{
     execute_workflow, Artifact, ArtifactRef, ArtifactStore, ExtractTextOptions, ImageToPdfOptions,
     MergeOptions, OperatorSpec, OxideError, PdfOperatorRunner, RenderOptions, ReorderOptions,
-    RotateOptions, SplitOptions, SvgToPdfOptions, TaskId, TaskSpec, Workflow, WorkflowMetadata,
-    WorkflowVersion,
+    RotateOptions, SplitOptions, SvgToPdfOptions, TaskId, TaskSpec, WatermarkKind,
+    WatermarkOptions, Workflow, WorkflowMetadata, WorkflowVersion,
 };
 use std::fs;
 use std::io::{self, Read, Write};
@@ -47,6 +47,8 @@ enum Commands {
     /// Extract plain text from a PDF.
     #[command(name = "extract-text")]
     ExtractText(ExtractTextArgs),
+    /// Add a text, image, or SVG watermark to a PDF.
+    Watermark(WatermarkArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -188,6 +190,68 @@ struct ExtractTextArgs {
     force: bool,
 }
 
+#[derive(Debug, Parser)]
+struct WatermarkArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Watermark kind: `text`, `image`, or `svg`.
+    #[arg(long)]
+    kind: String,
+
+    /// Text content for text watermarks.
+    #[arg(long)]
+    text: Option<String>,
+
+    /// Font family for text watermarks.
+    #[arg(long)]
+    font: Option<String>,
+
+    /// Explicit font file for text watermarks.
+    #[arg(long)]
+    font_path: Option<PathBuf>,
+
+    /// Font size in points for text watermarks.
+    #[arg(long)]
+    font_size: Option<f32>,
+
+    /// Image or SVG watermark file.
+    #[arg(long)]
+    watermark: Option<PathBuf>,
+
+    /// Page range, for example `1,3-5`.
+    #[arg(long)]
+    pages: Option<String>,
+
+    /// Opacity from 0.0 to 1.0.
+    #[arg(long)]
+    opacity: Option<f32>,
+
+    /// Rotation in degrees.
+    #[arg(long)]
+    rotation: Option<f32>,
+
+    /// Position: `center`, `top_left`, `top_right`, `bottom_left`, or `bottom_right`.
+    #[arg(long)]
+    position: Option<String>,
+
+    /// Scale for image and SVG watermarks.
+    #[arg(long)]
+    scale: Option<f32>,
+
+    /// Rasterize SVG before watermarking.
+    #[arg(long)]
+    rasterize: bool,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
 /// Parses CLI arguments and runs the requested command.
 pub fn run() -> i32 {
     let args = std::env::args_os().collect::<Vec<_>>();
@@ -259,6 +323,9 @@ fn cli_reads_stdin(cli: &Cli) -> bool {
         Some(Commands::Svg2pdf(args)) => is_stdio(&args.input),
         Some(Commands::Render(args)) => is_stdio(&args.input),
         Some(Commands::ExtractText(args)) => is_stdio(&args.input),
+        Some(Commands::Watermark(args)) => {
+            is_stdio(&args.input) || args.watermark.as_ref().is_some_and(|path| is_stdio(path))
+        }
         None => false,
     }
 }
@@ -281,6 +348,7 @@ where
         Some(Commands::Svg2pdf(args)) => run_svg2pdf(args, stdin, stdout),
         Some(Commands::Render(args)) => run_render(args, stdin, stdout),
         Some(Commands::ExtractText(args)) => run_extract_text(args, stdin, stdout),
+        Some(Commands::Watermark(args)) => run_watermark(args, stdin, stdout),
         None => Ok(()),
     }
 }
@@ -441,6 +509,71 @@ fn run_extract_text(
     );
 
     execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_watermark(
+    args: WatermarkArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    let kind = parse_watermark_kind(&args.kind)?;
+    let mut input_specs = vec![oxidepdf_core::InputSpec {
+        id: ArtifactRef::new("input"),
+        path: args.input,
+    }];
+    let mut task_inputs = vec![ArtifactRef::new("input")];
+    if matches!(kind, WatermarkKind::Image | WatermarkKind::Svg) {
+        let watermark = args.watermark.ok_or_else(|| {
+            CliError::Workflow("image and SVG watermarks require --watermark".to_owned())
+        })?;
+        input_specs.push(oxidepdf_core::InputSpec {
+            id: ArtifactRef::new("watermark_input"),
+            path: watermark,
+        });
+        task_inputs.push(ArtifactRef::new("watermark_input"));
+    }
+
+    let workflow = Workflow {
+        version: WorkflowVersion::V1,
+        inputs: input_specs,
+        tasks: vec![TaskSpec {
+            id: TaskId::new("watermark"),
+            op: OperatorSpec::Watermark(WatermarkOptions {
+                kind,
+                text: args.text,
+                font: args.font,
+                font_path: args.font_path,
+                font_size: args.font_size,
+                opacity: args.opacity,
+                rotation: args.rotation,
+                position: args.position,
+                pages: args.pages,
+                scale: args.scale,
+                rasterize: args.rasterize,
+            }),
+            inputs: task_inputs,
+        }],
+        outputs: vec![oxidepdf_core::OutputSpec {
+            id: ArtifactRef::new("output"),
+            from: ArtifactRef::new("watermark"),
+            path: args.output,
+        }],
+        limits: Default::default(),
+        metadata: WorkflowMetadata::default(),
+    };
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn parse_watermark_kind(value: &str) -> Result<WatermarkKind, CliError> {
+    match value {
+        "text" => Ok(WatermarkKind::Text),
+        "image" => Ok(WatermarkKind::Image),
+        "svg" => Ok(WatermarkKind::Svg),
+        other => Err(CliError::Workflow(format!(
+            "unsupported watermark kind '{other}'"
+        ))),
+    }
 }
 
 fn execute_and_write_workflow(
@@ -1011,6 +1144,141 @@ mod tests {
     }
 
     #[test]
+    fn watermark_text_command_writes_parseable_pdf() {
+        let dir = temp_dir("watermark_text_command_writes_parseable_pdf");
+        let output = dir.join("watermarked.pdf");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "watermark",
+                fixture_pdf().to_str().unwrap(),
+                "--kind",
+                "text",
+                "--text",
+                "DRAFT",
+                "--font",
+                "DejaVu Sans",
+                "--pages",
+                "1",
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert_eq!(pdf_page_count(&output), 3);
+        assert!(page_has_content_operator(&output, 1, "Tj"));
+    }
+
+    #[test]
+    fn watermark_text_command_returns_font_resolution_for_missing_font() {
+        let dir = temp_dir("watermark_text_command_returns_font_resolution_for_missing_font");
+        let output = dir.join("watermarked.pdf");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "watermark",
+                fixture_pdf().to_str().unwrap(),
+                "--kind",
+                "text",
+                "--text",
+                "DRAFT",
+                "--font",
+                "Definitely Missing Font Family",
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 70);
+        assert_eq!(stdout, b"");
+        assert!(!output.exists());
+        assert!(String::from_utf8(stderr)
+            .unwrap()
+            .contains("font_resolution"));
+    }
+
+    #[test]
+    fn watermark_image_command_writes_parseable_pdf() {
+        let dir = temp_dir("watermark_image_command_writes_parseable_pdf");
+        let output = dir.join("watermarked.pdf");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "watermark",
+                fixture_pdf().to_str().unwrap(),
+                "--kind",
+                "image",
+                "--watermark",
+                fixture_jpg().to_str().unwrap(),
+                "--pages",
+                "2",
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert!(page_has_content_operator(&output, 2, "Do"));
+    }
+
+    #[test]
+    fn watermark_svg_command_writes_parseable_pdf() {
+        let dir = temp_dir("watermark_svg_command_writes_parseable_pdf");
+        let input = dir.join("watermark.svg");
+        let output = dir.join("watermarked.pdf");
+        fs::write(&input, simple_svg()).unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "watermark",
+                fixture_pdf().to_str().unwrap(),
+                "--kind",
+                "svg",
+                "--watermark",
+                input.to_str().unwrap(),
+                "--pages",
+                "3",
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert!(page_has_content_operator(&output, 3, "Do"));
+    }
+
+    #[test]
     fn workflow_img2pdf_writes_parseable_pdf() {
         let dir = temp_dir("workflow_img2pdf_writes_parseable_pdf");
         let workflow = dir.join("workflow.yaml");
@@ -1255,5 +1523,18 @@ mod tests {
         page.get(b"Rotate")
             .and_then(lopdf::Object::as_i64)
             .unwrap_or(0)
+    }
+
+    fn page_has_content_operator(path: &std::path::Path, page_number: u32, operator: &str) -> bool {
+        let document = lopdf::Document::load(path).unwrap();
+        let page_id = document.get_pages().get(&page_number).copied().unwrap();
+        document
+            .get_page_contents(page_id)
+            .into_iter()
+            .filter_map(|content_id| document.get_object(content_id).ok())
+            .filter_map(|object| object.as_stream().ok())
+            .filter_map(|stream| lopdf::content::Content::decode(&stream.content).ok())
+            .flat_map(|content| content.operations)
+            .any(|operation| operation.operator == operator)
     }
 }

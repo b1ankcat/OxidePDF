@@ -12,11 +12,15 @@ default = []
 [dependencies]
 hayro.workspace = true
 image.workspace = true
+imageproc.workspace = true
 lopdf.workspace = true
 pdf-extract.workspace = true
 pdf-writer.workspace = true
 resvg.workspace = true
 serde.workspace = true
+fontdb.workspace = true
+skrifa.workspace = true
+read-fonts.workspace = true
 svg2pdf.workspace = true
 thiserror.workspace = true
 usvg.workspace = true

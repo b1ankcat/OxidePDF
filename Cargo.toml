@@ -21,9 +21,13 @@ thiserror = "2.0.17"
 lopdf = { version = "0.38.0", default-features = false }
 pdf-extract = "0.10.0"
 image = { version = "0.25.6", default-features = false, features = ["jpeg", "png", "webp"] }
+imageproc = { version = "0.25.1", default-features = false }
 pdf-writer = "0.15.0"
 svg2pdf = { version = "0.13.0", default-features = false }
 usvg = { version = "0.45.1", default-features = false }
 resvg = { version = "0.45.1", default-features = false }
+fontdb = { version = "0.23.0", default-features = false, features = ["fs", "std"] }
+skrifa = { version = "0.30.0", default-features = false, features = ["std"] }
+read-fonts = { version = "0.28.0", default-features = false }
 assert_cmd = "2.1.1"
 predicates = "3.1.3"
