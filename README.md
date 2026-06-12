@@ -10,6 +10,7 @@ OxidePDF is a pure Rust PDF toolkit with a modular CLI and workflow engine. It f
 - 🔐 **Security and signatures**: encrypt, decrypt, inspect/set permissions, add/list/verify/delete signature fields, add visual signature appearances, and attach explicit timestamp material.
 - 📦 **Static Linux releases**: musl builds via `cargo zigbuild`.
 - 🧭 **Bash completion**: generated at build time and available from the CLI.
+- ⚙️ **Workflow orchestration**: YAML/JSON pipeline documents with DAG-based task scheduling, resource limits, and programmatic API.
 - 🐳 **Container-friendly**: static binary copied into a `scratch` runtime image.
 
 ## Quick Start 🚀
@@ -134,25 +135,130 @@ docker build -t oxidepdf:local .
 docker run --rm oxidepdf:local --help
 ```
 
-## GitHub Releases
+## Advanced Workflow Orchestration
 
-The release workflow builds `x86_64-unknown-linux-musl` on push or manual dispatch, packages the binary and bash completion file into a zip archive, and publishes it to a date-style GitHub Release such as `20260101`.
+OxidePDF includes a YAML/JSON-based workflow engine for multi-step document automation. Instead of chaining CLI invocations together with shell scripts, you can declare an entire pipeline as a single workflow document — inputs, tasks, dependencies, and outputs — and let OxidePDF validate, plan, and execute it in one shot.
 
-Manual release:
+### Concepts
 
-```text
-Actions -> Release -> Run workflow
+- **Workflow document**: a YAML or JSON file that declares inputs, tasks, outputs, and optional resource limits.
+- **Tasks**: units of work, each referencing an operator (edit, inspect, sign, security, compare) and its input artifacts.
+- **Artifacts**: named references to PDFs, images, text, or raw bytes that flow between tasks.
+- **DAG execution**: tasks are topologically sorted by their artifact dependencies and run serially. Cycles are detected and rejected.
+- **Resource limits**: enforce bounds on input bytes, total input bytes, page count, pixel count, output bytes, and execution time.
+
+### Running a Workflow
+
+```sh
+oxidepdf run --workflow pipeline.yaml
+# or from stdin:
+cat pipeline.yaml | oxidepdf run --workflow -
 ```
 
-## Project Layout
+The `--force` flag allows overwriting existing output files.
 
-```text
-crates/oxidepdf-core  Core PDF operators and workflow engine
-crates/oxidepdf-cli   CLI, help text, completion generation, integration tests
-docs/release.md       Release and packaging guide
-scripts/release.sh    Local release packaging script
-Dockerfile            Static binary runtime image
+### Document Structure
+
+```yaml
+version: 1
+inputs:
+  - id: source
+    path: input.pdf
+outputs:
+  - id: result
+    from: compressed
+    path: output.pdf
+limits:
+  max_input_bytes: 104857600     # 100 MB per input
+  max_total_input_bytes: 209715200
+  max_pages: 5000
+  max_pixels: 200000000
+  max_output_bytes: 524288000
+  timeout_ms: 300000             # 5 min
+tasks:
+  - id: compressed
+    op:
+      pdf_edit:
+        compression:
+          compress_images: true
+          compress_streams: true
+          lossless: true
+    inputs: [source]
 ```
+
+### Multi-Step Pipeline Example
+
+This workflow merges two PDFs, rotates every page, and renders the result to PNG — all in one pass:
+
+```yaml
+version: 1
+inputs:
+  - id: cover
+    path: cover.pdf
+  - id: body
+    path: body.pdf
+outputs:
+  - id: preview
+    from: rendered
+    path: page1.png
+tasks:
+  - id: merged
+    op:
+      pdf_edit:
+        merge:
+          inputs: [cover, body]
+    inputs: [cover, body]
+  - id: rotated
+    op:
+      pdf_edit:
+        rotate:
+          rotation: 90
+          page_selector: all
+    inputs: [merged]
+  - id: rendered
+    op:
+      pdf_inspect:
+        render:
+          page: 1
+          dpi: 150
+    inputs: [rotated]
+```
+
+### Operator Families
+
+| Family | Examples |
+|---|---|
+| `pdf_edit` | merge, rotate, crop, scale, n-up, booklet, watermark, page-numbers, img2pdf, svg2pdf, compression |
+| `pdf_inspect` | render, extract-text, metadata inspect, outline inspect, forms, images |
+| `pdf_sign` | add, list, verify, delete-field, timestamp |
+| `pdf_security` | encrypt, decrypt, permissions-get, permissions-set |
+| `pdf_compare` | report, visual-diff |
+
+Each task specifies exactly one operator. The engine validates references, detects cycles, and enforces limits before any work begins.
+
+### Scripting and CI Integration
+
+Workflows are designed for headless environments:
+
+- **stdin/stdout**: use `-` as the workflow path or input path to read from stdin.
+- **Exit codes**: 0 on success, 2 for invalid workflow, 3 for input error, 4 for auth error, 5 for resource-limit exceeded, 70 for internal errors.
+- **Path redaction**: file paths are stripped from error output — safe for CI logs.
+- **Static binary**: a single musl binary works in `scratch` containers and restricted CI runners.
+
+### Programmatic API
+
+The workflow engine is re-exported from `oxidepdf-core` for Rust embedders. Construct and execute workflows programmatically:
+
+```rust
+use oxidepdf_core::{Workflow, execute_workflow, PdfOperatorRunner, ArtifactStore};
+
+let workflow: Workflow = serde_yaml::from_str(yaml_str)?;
+let store = ArtifactStore::new();
+let mut runner = PdfOperatorRunner::default();
+let result = execute_workflow(&workflow, store, &mut runner)?;
+```
+
+Individual CLI commands (`edit merge`, `inspect render`, etc.) are implemented as single-task workflows internally, so the same validation and execution path serves both interactive use and workflow documents.
 
 ## Milestones 🗺️
 
