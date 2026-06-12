@@ -1,6 +1,8 @@
+use crate::operators::{
+    run_pdf_compare, run_pdf_edit, run_pdf_inspect, run_pdf_security, run_pdf_sign,
+};
 use crate::{
-    enforce_input_bytes, resource_limit, run_pdf_compare, run_pdf_edit, run_pdf_inspect,
-    run_pdf_security, run_pdf_sign, OxideError, PdfCompareOptions, PdfEditOptions,
+    enforce_input_bytes, resource_limit, OxideError, PdfCompareOptions, PdfEditOptions,
     PdfInspectOptions, PdfSecurityOptions, PdfSignOptions,
 };
 use serde::{Deserialize, Serialize};

@@ -1,4 +1,4 @@
-use crate::{OxideError, ResourceLimits};
+use crate::{Artifact, OxideError, ResourceLimits};
 use lopdf::{Dictionary, Object};
 use std::collections::BTreeMap;
 
@@ -25,6 +25,16 @@ pub(crate) fn ensure_pdf_magic(input: &[u8]) -> Result<(), OxideError> {
     Err(OxideError::InvalidInput {
         reason: "expected PDF input magic bytes".to_owned(),
     })
+}
+
+pub(crate) fn pdf_bytes(artifact: &Artifact) -> Result<&[u8], OxideError> {
+    match artifact {
+        Artifact::Pdf(pdf) => Ok(&pdf.bytes),
+        Artifact::Bytes(bytes) => Ok(&bytes.bytes),
+        _ => Err(OxideError::InvalidInput {
+            reason: "expected PDF input artifact".to_owned(),
+        }),
+    }
 }
 
 pub(crate) fn save_pdf(mut document: lopdf::Document) -> Result<Vec<u8>, OxideError> {
