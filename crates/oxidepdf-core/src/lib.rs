@@ -97,6 +97,11 @@ pub struct TaskSpec {
 pub struct TaskId(String);
 
 impl TaskId {
+    /// Creates a task identifier.
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
     /// Returns the underlying identifier.
     pub fn as_str(&self) -> &str {
         &self.0
@@ -109,6 +114,11 @@ impl TaskId {
 pub struct ArtifactRef(String);
 
 impl ArtifactRef {
+    /// Creates an artifact reference.
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
     /// Returns the underlying reference.
     pub fn as_str(&self) -> &str {
         &self.0
@@ -486,6 +496,13 @@ impl Artifact {
             bytes: bytes.as_ref().to_vec(),
         })
     }
+
+    /// Creates a PDF artifact.
+    pub fn pdf(bytes: impl AsRef<[u8]>) -> Self {
+        Self::Pdf(PdfArtifact {
+            bytes: bytes.as_ref().to_vec(),
+        })
+    }
 }
 
 /// PDF artifact placeholder for later operators.
@@ -566,6 +583,95 @@ pub struct ExecutionResult {
 pub trait OperatorRunner {
     /// Runs a task against resolved input artifacts.
     fn run(&mut self, task: &TaskSpec, inputs: &[Artifact]) -> Result<Artifact, OxideError>;
+}
+
+/// Operator runner for object-level PDF page editing.
+#[derive(Debug, Default)]
+pub struct PdfOperatorRunner;
+
+impl OperatorRunner for PdfOperatorRunner {
+    fn run(&mut self, task: &TaskSpec, inputs: &[Artifact]) -> Result<Artifact, OxideError> {
+        match &task.op {
+            OperatorSpec::Merge(_) => merge_pdf_artifacts(inputs).map(Artifact::Pdf),
+            OperatorSpec::Split(options) => {
+                let input = single_pdf_input(inputs)?;
+                split_pdf(input, &options.pages).map(Artifact::Pdf)
+            }
+            OperatorSpec::Reorder(options) => {
+                let input = single_pdf_input(inputs)?;
+                reorder_pdf(input, &options.pages).map(Artifact::Pdf)
+            }
+            OperatorSpec::Rotate(options) => {
+                let input = single_pdf_input(inputs)?;
+                rotate_pdf(input, &options.pages, options.degrees).map(Artifact::Pdf)
+            }
+            other => Err(OxideError::UnsupportedPdfFeature {
+                feature: format!("{other:?}"),
+            }),
+        }
+    }
+}
+
+/// Merges multiple PDF artifacts into a single PDF.
+pub fn merge_pdf_artifacts(inputs: &[Artifact]) -> Result<PdfArtifact, OxideError> {
+    if inputs.len() < 2 {
+        return Err(OxideError::InvalidInput {
+            reason: "merge requires at least two PDF inputs".to_owned(),
+        });
+    }
+
+    let mut documents = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        documents.push(load_pdf(pdf_bytes(input)?)?);
+    }
+
+    merge_documents(documents).map(|bytes| PdfArtifact { bytes })
+}
+
+/// Splits a PDF by keeping the specified one-based pages.
+pub fn split_pdf(input: &[u8], pages: &str) -> Result<PdfArtifact, OxideError> {
+    let mut document = load_pdf(input)?;
+    let selected_pages = parse_page_range(pages, document.get_pages().len() as u32)?;
+    keep_pages(&mut document, &selected_pages)?;
+    save_pdf(document).map(|bytes| PdfArtifact { bytes })
+}
+
+/// Reorders a PDF by an explicit one-based page sequence.
+pub fn reorder_pdf(input: &[u8], pages: &str) -> Result<PdfArtifact, OxideError> {
+    let mut document = load_pdf(input)?;
+    let selected_pages = parse_page_range(pages, document.get_pages().len() as u32)?;
+    keep_pages(&mut document, &selected_pages)?;
+    save_pdf(document).map(|bytes| PdfArtifact { bytes })
+}
+
+/// Rotates selected PDF pages by 90, 180, or 270 degrees.
+pub fn rotate_pdf(input: &[u8], pages: &str, degrees: i16) -> Result<PdfArtifact, OxideError> {
+    let mut document = load_pdf(input)?;
+    let selected_pages = parse_page_range(pages, document.get_pages().len() as u32)?;
+    let degrees = normalize_rotation(degrees)?;
+    let pages = document.get_pages();
+
+    for page_number in selected_pages {
+        let page_id = pages
+            .get(&page_number)
+            .ok_or_else(|| OxideError::InvalidInput {
+                reason: format!("page {page_number} is out of range"),
+            })?;
+        let page_dict = document
+            .get_object_mut(*page_id)
+            .and_then(lopdf::Object::as_dict_mut)
+            .map_err(|_| OxideError::ParsePdf)?;
+        let current_rotation = page_dict
+            .get(b"Rotate")
+            .and_then(lopdf::Object::as_i64)
+            .unwrap_or(0);
+        page_dict.set(
+            "Rotate",
+            (current_rotation + i64::from(degrees)).rem_euclid(360),
+        );
+    }
+
+    save_pdf(document).map(|bytes| PdfArtifact { bytes })
 }
 
 /// Validates a workflow and returns a topological execution plan.
@@ -758,6 +864,275 @@ fn check_resource_limit_entrypoint(limits: &ResourceLimits) -> Result<(), OxideE
         return Err(OxideError::ResourceLimitExceeded {
             limit: "resource limit must be greater than zero".to_owned(),
         });
+    }
+
+    Ok(())
+}
+
+fn single_pdf_input(inputs: &[Artifact]) -> Result<&[u8], OxideError> {
+    if inputs.len() != 1 {
+        return Err(OxideError::InvalidInput {
+            reason: "operator requires exactly one PDF input".to_owned(),
+        });
+    }
+
+    pdf_bytes(&inputs[0])
+}
+
+fn pdf_bytes(artifact: &Artifact) -> Result<&[u8], OxideError> {
+    match artifact {
+        Artifact::Pdf(pdf) => Ok(&pdf.bytes),
+        Artifact::Bytes(bytes) => Ok(&bytes.bytes),
+        _ => Err(OxideError::InvalidInput {
+            reason: "expected PDF input artifact".to_owned(),
+        }),
+    }
+}
+
+fn load_pdf(input: &[u8]) -> Result<lopdf::Document, OxideError> {
+    let document = lopdf::Document::load_mem(input).map_err(map_lopdf_read_error)?;
+    if document.is_encrypted() {
+        return Err(OxideError::EncryptedPdf);
+    }
+    if document.get_pages().is_empty() {
+        return Err(OxideError::InvalidInput {
+            reason: "PDF contains no pages".to_owned(),
+        });
+    }
+
+    Ok(document)
+}
+
+fn save_pdf(mut document: lopdf::Document) -> Result<Vec<u8>, OxideError> {
+    let mut output = Vec::new();
+    document.prune_objects();
+    document.renumber_objects();
+    document
+        .save_to(&mut output)
+        .map_err(|_| OxideError::WritePdf)?;
+
+    Ok(output)
+}
+
+fn map_lopdf_read_error(error: lopdf::Error) -> OxideError {
+    match error {
+        lopdf::Error::Decryption(_) | lopdf::Error::UnsupportedSecurityHandler(_) => {
+            OxideError::EncryptedPdf
+        }
+        _ => OxideError::ParsePdf,
+    }
+}
+
+fn parse_page_range(pages: &str, page_count: u32) -> Result<Vec<u32>, OxideError> {
+    if pages.trim().is_empty() {
+        return Err(OxideError::InvalidInput {
+            reason: "page range must not be empty".to_owned(),
+        });
+    }
+
+    let mut selected = Vec::new();
+    for part in pages.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            return Err(OxideError::InvalidInput {
+                reason: "page range contains an empty item".to_owned(),
+            });
+        }
+
+        if let Some((start, end)) = part.split_once('-') {
+            let start = parse_page_number(start.trim(), page_count)?;
+            let end = parse_page_number(end.trim(), page_count)?;
+            if start > end {
+                return Err(OxideError::InvalidInput {
+                    reason: format!("page range '{part}' must be ascending"),
+                });
+            }
+            selected.extend(start..=end);
+        } else {
+            selected.push(parse_page_number(part, page_count)?);
+        }
+    }
+    let unique_pages = selected.iter().copied().collect::<BTreeSet<_>>();
+    if unique_pages.len() != selected.len() {
+        return Err(OxideError::InvalidInput {
+            reason: "page range must not contain duplicate pages".to_owned(),
+        });
+    }
+
+    Ok(selected)
+}
+
+fn parse_page_number(value: &str, page_count: u32) -> Result<u32, OxideError> {
+    let page = value.parse::<u32>().map_err(|_| OxideError::InvalidInput {
+        reason: format!("invalid page number '{value}'"),
+    })?;
+    if page == 0 || page > page_count {
+        return Err(OxideError::InvalidInput {
+            reason: format!("page {page} is out of range 1-{page_count}"),
+        });
+    }
+
+    Ok(page)
+}
+
+fn normalize_rotation(degrees: i16) -> Result<i16, OxideError> {
+    match degrees.rem_euclid(360) {
+        90 => Ok(90),
+        180 => Ok(180),
+        270 => Ok(270),
+        _ => Err(OxideError::InvalidInput {
+            reason: "rotation must be 90, 180, or 270 degrees".to_owned(),
+        }),
+    }
+}
+
+fn keep_pages(document: &mut lopdf::Document, selected_pages: &[u32]) -> Result<(), OxideError> {
+    let page_count = document.get_pages().len() as u32;
+    if selected_pages.is_empty() {
+        return Err(OxideError::InvalidInput {
+            reason: "at least one page must be selected".to_owned(),
+        });
+    }
+    let pages_before_delete = document.get_pages();
+    let selected_page_ids = selected_pages
+        .iter()
+        .map(|page| {
+            pages_before_delete
+                .get(page)
+                .copied()
+                .ok_or_else(|| OxideError::InvalidInput {
+                    reason: format!("page {page} is out of range"),
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut delete_pages = (1..=page_count)
+        .filter(|page| !selected_pages.contains(page))
+        .collect::<Vec<_>>();
+    delete_pages.sort_unstable_by(|left, right| right.cmp(left));
+    document.delete_pages(&delete_pages);
+    rebuild_pages_tree(document, &selected_page_ids)
+}
+
+fn merge_documents(documents: Vec<lopdf::Document>) -> Result<Vec<u8>, OxideError> {
+    let mut next_id = 1;
+    let mut merged = lopdf::Document::with_version("1.7");
+    let mut document_pages = BTreeMap::new();
+    let mut document_objects = BTreeMap::new();
+
+    for mut document in documents {
+        document.renumber_objects_with(next_id);
+        next_id = document.max_id + 1;
+
+        for page_id in document.get_pages().into_values() {
+            let page = document
+                .get_object(page_id)
+                .cloned()
+                .map_err(|_| OxideError::ParsePdf)?;
+            document_pages.insert(page_id, page);
+        }
+        document_objects.extend(document.objects);
+    }
+
+    let mut catalog_object = None;
+    let mut pages_object = None;
+    for (object_id, object) in document_objects {
+        match object.type_name().unwrap_or(b"") {
+            b"Catalog" => {
+                if catalog_object.is_none() {
+                    catalog_object = Some((object_id, object));
+                }
+            }
+            b"Pages" => {
+                if pages_object.is_none() {
+                    pages_object = Some((object_id, object));
+                }
+            }
+            b"Page" | b"Outlines" | b"Outline" => {}
+            _ => {
+                merged.objects.insert(object_id, object);
+            }
+        }
+    }
+
+    let (pages_id, pages_object) = pages_object.ok_or(OxideError::ParsePdf)?;
+    for (page_id, page) in &document_pages {
+        let dictionary = page.as_dict().map_err(|_| OxideError::ParsePdf)?;
+        let mut dictionary = dictionary.clone();
+        dictionary.set("Parent", pages_id);
+        merged
+            .objects
+            .insert(*page_id, lopdf::Object::Dictionary(dictionary));
+    }
+
+    let mut pages_dictionary = pages_object
+        .as_dict()
+        .map_err(|_| OxideError::ParsePdf)?
+        .clone();
+    pages_dictionary.set("Count", document_pages.len() as u32);
+    pages_dictionary.set(
+        "Kids",
+        document_pages
+            .keys()
+            .copied()
+            .map(lopdf::Object::Reference)
+            .collect::<Vec<_>>(),
+    );
+    merged
+        .objects
+        .insert(pages_id, lopdf::Object::Dictionary(pages_dictionary));
+
+    let (catalog_id, catalog_object) = catalog_object.ok_or(OxideError::ParsePdf)?;
+    let mut catalog_dictionary = catalog_object
+        .as_dict()
+        .map_err(|_| OxideError::ParsePdf)?
+        .clone();
+    catalog_dictionary.set("Pages", pages_id);
+    catalog_dictionary.remove(b"Outlines");
+    merged
+        .objects
+        .insert(catalog_id, lopdf::Object::Dictionary(catalog_dictionary));
+    merged.trailer.set("Root", catalog_id);
+    merged.max_id = merged
+        .objects
+        .keys()
+        .map(|(id, _)| *id)
+        .max()
+        .unwrap_or_default();
+
+    save_pdf(merged)
+}
+
+fn rebuild_pages_tree(
+    document: &mut lopdf::Document,
+    page_ids: &[lopdf::ObjectId],
+) -> Result<(), OxideError> {
+    let catalog = document.catalog().map_err(|_| OxideError::ParsePdf)?;
+    let pages_id = catalog
+        .get(b"Pages")
+        .and_then(lopdf::Object::as_reference)
+        .map_err(|_| OxideError::ParsePdf)?;
+    {
+        let pages_dictionary = document
+            .get_object_mut(pages_id)
+            .and_then(lopdf::Object::as_dict_mut)
+            .map_err(|_| OxideError::ParsePdf)?;
+        pages_dictionary.set("Count", page_ids.len() as u32);
+        pages_dictionary.set(
+            "Kids",
+            page_ids
+                .iter()
+                .copied()
+                .map(lopdf::Object::Reference)
+                .collect::<Vec<_>>(),
+        );
+    }
+    for page_id in page_ids {
+        let page_dictionary = document
+            .get_object_mut(*page_id)
+            .and_then(lopdf::Object::as_dict_mut)
+            .map_err(|_| OxideError::ParsePdf)?;
+        page_dictionary.set("Parent", pages_id);
     }
 
     Ok(())
@@ -1137,12 +1512,89 @@ mod tests {
         assert_eq!(runner.executed, ["fail"]);
     }
 
+    #[test]
+    fn merge_pdf_artifacts_combines_pages() {
+        let pdf = include_bytes!("../../../tests/test.pdf");
+
+        let merged = merge_pdf_artifacts(&[Artifact::pdf(pdf), Artifact::pdf(pdf)]).unwrap();
+        let document = lopdf::Document::load_mem(&merged.bytes).unwrap();
+
+        assert_eq!(document.get_pages().len(), 6);
+    }
+
+    #[test]
+    fn split_pdf_keeps_only_selected_pages() {
+        let pdf = include_bytes!("../../../tests/test.pdf");
+
+        let split = split_pdf(pdf, "2-3").unwrap();
+        let document = lopdf::Document::load_mem(&split.bytes).unwrap();
+
+        assert_eq!(document.get_pages().len(), 2);
+        assert_page_numbers(&document, &[1, 2]);
+    }
+
+    #[test]
+    fn reorder_pdf_rearranges_pages() {
+        let pdf = include_bytes!("../../../tests/test.pdf");
+
+        let reordered = reorder_pdf(pdf, "3,1,2").unwrap();
+        let document = lopdf::Document::load_mem(&reordered.bytes).unwrap();
+
+        assert_eq!(document.get_pages().len(), 3);
+        assert_page_numbers(&document, &[1, 2, 3]);
+    }
+
+    #[test]
+    fn rotate_pdf_updates_page_rotation() {
+        let pdf = include_bytes!("../../../tests/test.pdf");
+
+        let rotated = rotate_pdf(pdf, "1-2", 90).unwrap();
+        let document = lopdf::Document::load_mem(&rotated.bytes).unwrap();
+
+        assert_eq!(page_rotation(&document, 1), 90);
+        assert_eq!(page_rotation(&document, 2), 90);
+        assert_eq!(page_rotation(&document, 3), 0);
+    }
+
+    #[test]
+    fn pdf_operator_runner_handles_page_editing_tasks() {
+        let pdf = include_bytes!("../../../tests/test.pdf");
+        let mut runner = PdfOperatorRunner;
+
+        let merged = runner
+            .run(
+                &TaskSpec {
+                    id: TaskId::new("merge"),
+                    op: OperatorSpec::Merge(MergeOptions {}),
+                    inputs: vec![artifact_ref("a"), artifact_ref("b")],
+                },
+                &[Artifact::pdf(pdf), Artifact::pdf(pdf)],
+            )
+            .unwrap();
+
+        assert!(matches!(merged, Artifact::Pdf(_)));
+    }
+
     fn workflow_from_json(json: &str) -> Workflow {
         serde_json::from_str(json).unwrap()
     }
 
     fn artifact_ref(value: &str) -> ArtifactRef {
         serde_json::from_str(&format!("{value:?}")).unwrap()
+    }
+
+    fn assert_page_numbers(document: &lopdf::Document, expected: &[u32]) {
+        let pages = document.get_pages();
+        let actual = pages.keys().copied().collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    fn page_rotation(document: &lopdf::Document, page_number: u32) -> i64 {
+        let page_id = document.get_pages().get(&page_number).copied().unwrap();
+        let page = document.get_object(page_id).unwrap().as_dict().unwrap();
+        page.get(b"Rotate")
+            .and_then(lopdf::Object::as_i64)
+            .unwrap_or(0)
     }
 
     #[derive(Default)]

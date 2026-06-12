@@ -2,7 +2,9 @@
 
 use clap::{CommandFactory, Parser, Subcommand};
 use oxidepdf_core::{
-    execute_workflow, Artifact, ArtifactStore, OperatorRunner, OxideError, TaskSpec, Workflow,
+    execute_workflow, Artifact, ArtifactRef, ArtifactStore, MergeOptions, OperatorSpec, OxideError,
+    PdfOperatorRunner, ReorderOptions, RotateOptions, SplitOptions, TaskId, TaskSpec, Workflow,
+    WorkflowMetadata, WorkflowVersion,
 };
 use std::fs;
 use std::io::{self, Read, Write};
@@ -25,6 +27,14 @@ pub struct Cli {
 enum Commands {
     /// Run a workflow document.
     Run(RunArgs),
+    /// Merge multiple PDFs into one output.
+    Merge(MergeArgs),
+    /// Keep selected pages from a PDF.
+    Split(PageSelectionArgs),
+    /// Reorder pages in a PDF.
+    Reorder(PageSelectionArgs),
+    /// Rotate selected PDF pages.
+    Rotate(RotateArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -32,6 +42,61 @@ struct RunArgs {
     /// Workflow YAML or JSON file, or `-` to read from stdin.
     #[arg(long)]
     workflow: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct MergeArgs {
+    /// Input PDF files.
+    #[arg(required = true, num_args = 2..)]
+    inputs: Vec<PathBuf>,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct PageSelectionArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Page range or sequence, for example `1,3-5`.
+    #[arg(long)]
+    pages: String,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct RotateArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Page range, for example `1,3-5`.
+    #[arg(long)]
+    pages: String,
+
+    /// Rotation in degrees. Must be 90, 180, or 270.
+    #[arg(long)]
+    degrees: i16,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
 
     /// Overwrite output files when they already exist.
     #[arg(long)]
@@ -86,6 +151,12 @@ where
     let cli = Cli::try_parse_from(args).map_err(CliError::Arguments)?;
     match cli.command {
         Some(Commands::Run(args)) => run_workflow(args, stdin, stdout),
+        Some(Commands::Merge(args)) => run_merge(args, stdin, stdout),
+        Some(Commands::Split(args)) => run_page_selection(args, stdin, stdout, PageCommand::Split),
+        Some(Commands::Reorder(args)) => {
+            run_page_selection(args, stdin, stdout, PageCommand::Reorder)
+        }
+        Some(Commands::Rotate(args)) => run_rotate(args, stdin, stdout),
         None => Ok(()),
     }
 }
@@ -94,11 +165,120 @@ fn run_workflow(args: RunArgs, stdin: &[u8], stdout: &mut impl Write) -> Result<
     let workflow_bytes = read_path_or_stdin(&args.workflow, stdin).map_err(CliError::Input)?;
     let workflow = parse_workflow(&workflow_bytes, &args.workflow)?;
     let store = load_inputs(&workflow, stdin)?;
-    let mut runner = UnsupportedOperatorRunner;
+    let mut runner = PdfOperatorRunner;
     let result = execute_workflow(&workflow, store, &mut runner).map_err(CliError::Core)?;
     write_outputs(&workflow, &result.store, args.force, stdout)?;
 
     Ok(())
+}
+
+fn run_merge(args: MergeArgs, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError> {
+    let input_refs = (0..args.inputs.len())
+        .map(|index| ArtifactRef::new(format!("input_{index}")))
+        .collect::<Vec<_>>();
+    let workflow = Workflow {
+        version: WorkflowVersion::V1,
+        inputs: args
+            .inputs
+            .into_iter()
+            .zip(input_refs.iter())
+            .map(|(path, id)| oxidepdf_core::InputSpec {
+                id: id.clone(),
+                path,
+            })
+            .collect(),
+        tasks: vec![TaskSpec {
+            id: TaskId::new("merge"),
+            op: OperatorSpec::Merge(MergeOptions {}),
+            inputs: input_refs,
+        }],
+        outputs: vec![oxidepdf_core::OutputSpec {
+            id: ArtifactRef::new("output"),
+            from: ArtifactRef::new("merge"),
+            path: args.output,
+        }],
+        limits: Default::default(),
+        metadata: WorkflowMetadata::default(),
+    };
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_page_selection(
+    args: PageSelectionArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+    command: PageCommand,
+) -> Result<(), CliError> {
+    let task_id = match command {
+        PageCommand::Split => "split",
+        PageCommand::Reorder => "reorder",
+    };
+    let op = match command {
+        PageCommand::Split => OperatorSpec::Split(SplitOptions { pages: args.pages }),
+        PageCommand::Reorder => OperatorSpec::Reorder(ReorderOptions { pages: args.pages }),
+    };
+    let workflow = one_input_workflow(args.input, args.output, task_id, op);
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_rotate(args: RotateArgs, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError> {
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "rotate",
+        OperatorSpec::Rotate(RotateOptions {
+            pages: args.pages,
+            degrees: args.degrees,
+        }),
+    );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn execute_and_write_workflow(
+    workflow: Workflow,
+    stdin: &[u8],
+    force: bool,
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    let store = load_inputs(&workflow, stdin)?;
+    let mut runner = PdfOperatorRunner;
+    let result = execute_workflow(&workflow, store, &mut runner).map_err(CliError::Core)?;
+    write_outputs(&workflow, &result.store, force, stdout)
+}
+
+fn one_input_workflow(
+    input: PathBuf,
+    output: PathBuf,
+    task_id: &'static str,
+    op: OperatorSpec,
+) -> Workflow {
+    Workflow {
+        version: WorkflowVersion::V1,
+        inputs: vec![oxidepdf_core::InputSpec {
+            id: ArtifactRef::new("input"),
+            path: input,
+        }],
+        tasks: vec![TaskSpec {
+            id: TaskId::new(task_id),
+            op,
+            inputs: vec![ArtifactRef::new("input")],
+        }],
+        outputs: vec![oxidepdf_core::OutputSpec {
+            id: ArtifactRef::new("output"),
+            from: ArtifactRef::new(task_id),
+            path: output,
+        }],
+        limits: Default::default(),
+        metadata: WorkflowMetadata::default(),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PageCommand {
+    Split,
+    Reorder,
 }
 
 fn parse_workflow(bytes: &[u8], path: &Path) -> Result<Workflow, CliError> {
@@ -172,16 +352,6 @@ fn read_path_or_stdin(path: &Path, stdin: &[u8]) -> io::Result<Vec<u8>> {
 
 fn is_stdio(path: &Path) -> bool {
     path == Path::new("-")
-}
-
-struct UnsupportedOperatorRunner;
-
-impl OperatorRunner for UnsupportedOperatorRunner {
-    fn run(&mut self, task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
-        Err(OxideError::UnsupportedPdfFeature {
-            feature: format!("{:?}", task.op),
-        })
-    }
 }
 
 #[derive(Debug)]
@@ -358,8 +528,8 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_operator_returns_input_exit_code_without_output() {
-        let dir = temp_dir("unsupported_operator_returns_input_exit_code");
+    fn pdf_parse_error_returns_input_exit_code_without_output() {
+        let dir = temp_dir("pdf_parse_error_returns_input_exit_code");
         let workflow = dir.join("workflow.yaml");
         let output = dir.join("out.bin");
         fs::write(dir.join("input.bin"), b"input bytes").unwrap();
@@ -401,9 +571,93 @@ mod tests {
         assert_eq!(code, 3);
         assert_eq!(stdout, b"");
         assert!(!output.exists());
-        assert!(String::from_utf8(stderr)
-            .unwrap()
-            .contains("unsupported_pdf_feature"));
+        assert!(String::from_utf8(stderr).unwrap().contains("parse_pdf"));
+    }
+
+    #[test]
+    fn merge_command_writes_combined_pdf() {
+        let dir = temp_dir("merge_command_writes_combined_pdf");
+        let input = fixture_pdf();
+        let output = dir.join("merged.pdf");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "merge",
+                input.to_str().unwrap(),
+                input.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert_eq!(pdf_page_count(&output), 6);
+    }
+
+    #[test]
+    fn split_command_writes_selected_pages() {
+        let dir = temp_dir("split_command_writes_selected_pages");
+        let output = dir.join("split.pdf");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "split",
+                fixture_pdf().to_str().unwrap(),
+                "--pages",
+                "1,3",
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert_eq!(pdf_page_count(&output), 2);
+    }
+
+    #[test]
+    fn rotate_command_updates_rotation() {
+        let dir = temp_dir("rotate_command_updates_rotation");
+        let output = dir.join("rotated.pdf");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "rotate",
+                fixture_pdf().to_str().unwrap(),
+                "--pages",
+                "1",
+                "--degrees",
+                "90",
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert_eq!(pdf_page_rotation(&output, 1), 90);
     }
 
     #[test]
@@ -514,5 +768,25 @@ mod tests {
 
     fn yaml_path(path: impl AsRef<std::path::Path>) -> String {
         path.as_ref().display().to_string()
+    }
+
+    fn fixture_pdf() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/test.pdf")
+            .canonicalize()
+            .unwrap()
+    }
+
+    fn pdf_page_count(path: &std::path::Path) -> usize {
+        lopdf::Document::load(path).unwrap().get_pages().len()
+    }
+
+    fn pdf_page_rotation(path: &std::path::Path, page_number: u32) -> i64 {
+        let document = lopdf::Document::load(path).unwrap();
+        let page_id = document.get_pages().get(&page_number).copied().unwrap();
+        let page = document.get_object(page_id).unwrap().as_dict().unwrap();
+        page.get(b"Rotate")
+            .and_then(lopdf::Object::as_i64)
+            .unwrap_or(0)
     }
 }

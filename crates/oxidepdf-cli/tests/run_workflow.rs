@@ -57,7 +57,7 @@ fn invalid_workflow_exits_with_code_2() {
 
 #[test]
 fn unsupported_operator_exits_with_code_3() {
-    let dir = temp_dir("unsupported_operator_exits_with_code_3");
+    let dir = temp_dir("invalid_pdf_operator_exits_with_code_3");
     let input = dir.join("input.bin");
     let output = dir.join("output.bin");
     let workflow = dir.join("workflow.yaml");
@@ -94,9 +94,74 @@ fn unsupported_operator_exits_with_code_3() {
         .assert()
         .code(3)
         .stdout(predicate::eq(""))
-        .stderr(predicate::str::contains("unsupported_pdf_feature"));
+        .stderr(predicate::str::contains("parse_pdf"));
 
     assert!(!output.exists());
+}
+
+#[test]
+fn workflow_rotate_updates_pdf_page_rotation() {
+    let dir = temp_dir("workflow_rotate_updates_pdf_page_rotation");
+    let output = dir.join("output.pdf");
+    let workflow = dir.join("workflow.yaml");
+    fs::write(
+        &workflow,
+        format!(
+            r#"
+            version: 1
+            inputs:
+              - id: source
+                path: {}
+            tasks:
+              - id: rotate
+                op:
+                  rotate:
+                    pages: "1"
+                    degrees: 90
+                inputs: [source]
+            outputs:
+              - id: final
+                from: rotate
+                path: {}
+            "#,
+            fixture_pdf().display(),
+            output.display()
+        ),
+    )
+    .unwrap();
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args(["run", "--workflow", workflow.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::eq(""))
+        .stderr(predicate::eq(""));
+
+    assert_eq!(pdf_page_rotation(&output, 1), 90);
+}
+
+#[test]
+fn reorder_command_writes_parseable_pdf() {
+    let dir = temp_dir("reorder_command_writes_parseable_pdf");
+    let output = dir.join("reordered.pdf");
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args([
+            "reorder",
+            fixture_pdf().to_str().unwrap(),
+            "--pages",
+            "3,1,2",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq(""))
+        .stderr(predicate::eq(""));
+
+    assert_eq!(pdf_page_count(&output), 3);
 }
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
@@ -108,4 +173,24 @@ fn temp_dir(name: &str) -> std::path::PathBuf {
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+fn fixture_pdf() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/test.pdf")
+        .canonicalize()
+        .unwrap()
+}
+
+fn pdf_page_count(path: &std::path::Path) -> usize {
+    lopdf::Document::load(path).unwrap().get_pages().len()
+}
+
+fn pdf_page_rotation(path: &std::path::Path, page_number: u32) -> i64 {
+    let document = lopdf::Document::load(path).unwrap();
+    let page_id = document.get_pages().get(&page_number).copied().unwrap();
+    let page = document.get_object(page_id).unwrap().as_dict().unwrap();
+    page.get(b"Rotate")
+        .and_then(lopdf::Object::as_i64)
+        .unwrap_or(0)
 }

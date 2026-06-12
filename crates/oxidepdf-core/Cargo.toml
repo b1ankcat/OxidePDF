@@ -10,6 +10,7 @@ description = "Core contracts and operators for OxidePDF."
 default = []
 
 [dependencies]
+lopdf.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 
