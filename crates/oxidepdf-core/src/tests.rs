@@ -157,6 +157,40 @@ fn parses_signature_workflow_operator_schema() {
 }
 
 #[test]
+fn parses_compare_workflow_operator_schema() {
+    let workflow: Workflow = serde_yaml::from_str(
+        r#"
+            version: 1
+            inputs:
+              - id: left
+                path: ./left.pdf
+              - id: right
+                path: ./right.pdf
+            tasks:
+              - id: compare
+                op:
+                  pdf_compare:
+                    report:
+                      include_text: false
+                inputs: [left, right]
+            outputs:
+              - id: final
+                from: compare
+                path: ./report.json
+            "#,
+    )
+    .unwrap();
+
+    assert!(matches!(
+        workflow.tasks[0].op,
+        OperatorSpec::PdfCompare(PdfCompareOptions::Report(CompareOptions {
+            include_text: false,
+            ..
+        }))
+    ));
+}
+
+#[test]
 fn parses_document_interaction_workflow_operator_schema() {
     let workflow: Workflow = serde_yaml::from_str(
         r#"
@@ -533,6 +567,215 @@ fn merge_pdf_artifacts_enforces_input_and_page_limits() {
             limit: "max_pages".to_owned()
         }
     );
+}
+
+#[test]
+fn compare_identical_pdf_report_is_equal() {
+    let pdf = include_bytes!("../../../tests/test.pdf");
+
+    let artifact =
+        compare_pdf_report(pdf, pdf, &CompareOptions::default(), &Default::default()).unwrap();
+    let report: CompareReport = serde_json::from_str(&artifact.text).unwrap();
+
+    assert!(report.equal);
+    assert!(report.differences.is_empty());
+    assert_eq!(report.left.page_count, 3);
+    assert_eq!(report.left, report.right);
+}
+
+#[test]
+fn compare_report_locates_metadata_difference() {
+    let pdf = include_bytes!("../../../tests/test.pdf");
+    let changed = edit_pdf_metadata(
+        pdf,
+        &MetadataEditOptions {
+            action: MetadataEditAction::Set,
+            entries: metadata_entries([("title", "Changed Title")]),
+            keys: Vec::new(),
+        },
+        &Default::default(),
+    )
+    .unwrap();
+
+    let artifact = compare_pdf_report(
+        pdf,
+        &changed.bytes,
+        &CompareOptions::default(),
+        &Default::default(),
+    )
+    .unwrap();
+    let report: CompareReport = serde_json::from_str(&artifact.text).unwrap();
+
+    assert!(!report.equal);
+    assert!(report.differences.iter().any(|difference| difference.code
+        == CompareDifferenceCode::MetadataMismatch
+        && difference.path == "metadata"));
+}
+
+#[test]
+fn compare_report_locates_page_size_difference() {
+    let left = empty_page_pdf();
+    let right = pdf_with_media_box(300, 400);
+
+    let artifact = compare_pdf_report(
+        &left,
+        &right,
+        &CompareOptions {
+            include_text: false,
+            ..CompareOptions::default()
+        },
+        &Default::default(),
+    )
+    .unwrap();
+    let report: CompareReport = serde_json::from_str(&artifact.text).unwrap();
+
+    assert!(!report.equal);
+    assert!(report.differences.iter().any(|difference| difference.code
+        == CompareDifferenceCode::PageSizeMismatch
+        && difference.path == "pages[1].size"));
+}
+
+#[test]
+fn compare_report_locates_text_difference() {
+    let pdf = include_bytes!("../../../tests/test.pdf");
+    let changed = watermark_pdf_artifacts(
+        &[Artifact::pdf(pdf)],
+        &WatermarkOptions {
+            kind: WatermarkKind::Text,
+            text: Some("VISIBLE TEXT DIFFERENCE".to_owned()),
+            font: Some("Helvetica".to_owned()),
+            font_path: None,
+            font_size: Some(24.0),
+            opacity: Some(1.0),
+            rotation: Some(0.0),
+            position: Some("center".to_owned()),
+            pages: Some("1".to_owned()),
+            scale: None,
+            rasterize: false,
+        },
+        &Default::default(),
+    )
+    .unwrap();
+
+    let artifact = compare_pdf_report(
+        pdf,
+        &changed.bytes,
+        &CompareOptions::default(),
+        &Default::default(),
+    )
+    .unwrap();
+    let report: CompareReport = serde_json::from_str(&artifact.text).unwrap();
+
+    assert!(!report.equal);
+    assert!(report.differences.iter().any(|difference| difference.code
+        == CompareDifferenceCode::TextMismatch
+        && difference.path == "text"));
+}
+
+#[test]
+fn compare_report_makes_page_count_mismatch_explicit() {
+    let left = empty_page_pdf();
+    let right = pdf_with_blank_and_marked_page();
+
+    let artifact = compare_pdf_report(
+        &left,
+        &right,
+        &CompareOptions {
+            include_text: false,
+            ..CompareOptions::default()
+        },
+        &Default::default(),
+    )
+    .unwrap();
+    let report: CompareReport = serde_json::from_str(&artifact.text).unwrap();
+
+    assert!(!report.equal);
+    assert!(report.differences.iter().any(|difference| difference.code
+        == CompareDifferenceCode::PageCountMismatch
+        && difference.path == "pages.count"
+        && difference.left == serde_json::json!(1)
+        && difference.right == serde_json::json!(2)));
+}
+
+#[test]
+fn compare_workflow_produces_text_report() {
+    let pdf = include_bytes!("../../../tests/test.pdf");
+    let workflow = workflow_from_json(
+        r#"
+            {
+              "version": 1,
+              "inputs": [
+                { "id": "left", "path": "left.pdf" },
+                { "id": "right", "path": "right.pdf" }
+              ],
+              "tasks": [
+                {
+                  "id": "compare",
+                  "op": { "pdf_compare": { "report": {} } },
+                  "inputs": ["left", "right"]
+                }
+              ],
+              "outputs": [{ "id": "final", "from": "compare", "path": "report.json" }]
+            }
+            "#,
+    );
+    let mut store = ArtifactStore::new();
+    store.insert(artifact_ref("left"), Artifact::pdf(pdf));
+    store.insert(artifact_ref("right"), Artifact::pdf(pdf));
+    let mut runner = PdfOperatorRunner::default();
+
+    let result = execute_workflow(&workflow, store, &mut runner).unwrap();
+
+    match result.store.get(&artifact_ref("compare")).unwrap() {
+        Artifact::Text(artifact) => {
+            let report: CompareReport = serde_json::from_str(&artifact.text).unwrap();
+            assert!(report.equal);
+        }
+        other => panic!("expected text compare report, got {other:?}"),
+    }
+}
+
+#[test]
+fn compare_visual_diff_outputs_non_empty_png() {
+    let left = empty_page_pdf();
+    let right = pdf_with_rgb_fill_content();
+
+    let artifact = compare_pdf_visual_diff(
+        &left,
+        &right,
+        &VisualDiffOptions {
+            page: 1,
+            scale: Some(1.0),
+        },
+        &Default::default(),
+    )
+    .unwrap();
+    let image = image::load_from_memory(&artifact.bytes).unwrap().to_rgba8();
+
+    assert!(!artifact.bytes.is_empty());
+    assert!(image.width() > 0);
+    assert!(image.height() > 0);
+    assert!(image.pixels().any(|pixel| pixel.0 == [220, 38, 38, 255]));
+}
+
+#[test]
+fn compare_visual_diff_marks_page_size_difference() {
+    let left = pdf_with_media_box(100, 100);
+    let right = pdf_with_media_box(120, 100);
+
+    let artifact = compare_pdf_visual_diff(
+        &left,
+        &right,
+        &VisualDiffOptions {
+            page: 1,
+            scale: Some(1.0),
+        },
+        &Default::default(),
+    )
+    .unwrap();
+    let image = image::load_from_memory(&artifact.bytes).unwrap().to_rgba8();
+
+    assert!(image.pixels().any(|pixel| pixel.0 == [220, 38, 38, 255]));
 }
 
 #[test]
@@ -2937,6 +3180,24 @@ fn empty_page_pdf() -> Vec<u8> {
     page.finish();
 
     pdf.finish()
+}
+
+fn pdf_with_media_box(width: i64, height: i64) -> Vec<u8> {
+    let mut document = lopdf::Document::load_mem(&empty_page_pdf()).unwrap();
+    let page_id = *document.get_pages().get(&1).unwrap();
+    document
+        .get_object_mut(page_id)
+        .unwrap()
+        .as_dict_mut()
+        .unwrap()
+        .set(
+            "MediaBox",
+            Object::Array(vec![0.into(), 0.into(), width.into(), height.into()]),
+        );
+
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
 }
 
 fn pdf_with_unreferenced_stream_object() -> Vec<u8> {

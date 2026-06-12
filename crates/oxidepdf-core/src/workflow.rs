@@ -423,7 +423,7 @@ impl OperatorRunner for PdfOperatorRunner {
             OperatorSpec::PdfEdit(options) => run_pdf_edit(options, inputs, &self.limits),
             OperatorSpec::PdfInspect(options) => run_pdf_inspect(options, inputs, &self.limits),
             OperatorSpec::PdfSecurity(options) => run_pdf_security(options, inputs, &self.limits),
-            OperatorSpec::PdfCompare(options) => run_pdf_compare(options),
+            OperatorSpec::PdfCompare(options) => run_pdf_compare(options, inputs, &self.limits),
             OperatorSpec::PdfSign(options) => run_pdf_sign(options, inputs, &self.limits),
         }?;
         enforce_artifact_output_bytes(&artifact, &self.limits)?;

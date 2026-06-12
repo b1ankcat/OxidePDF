@@ -57,7 +57,11 @@ pub(crate) use pdf_io::{
     remap_imported_references, resource_limit, save_pdf,
 };
 
-pub use compare::PdfCompareOptions;
+pub use compare::{
+    compare_pdf_report, compare_pdf_visual_diff, CompareDifference, CompareDifferenceCode,
+    CompareOptions, CompareReport, ObjectStructureSummary, PageSizeSummary, PdfCompareOptions,
+    PdfCompareSummary, TextSummary, VisualDiffOptions,
+};
 pub use compression::{
     compress_pdf, CompressionImageFormat, CompressionImageOptions, CompressionMode,
     CompressionOptions,

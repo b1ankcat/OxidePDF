@@ -471,6 +471,57 @@ fn extract_text_command_writes_plain_text() {
 }
 
 #[test]
+fn compare_command_writes_json_report() {
+    let dir = temp_dir("compare_command_writes_json_report");
+    let output = dir.join("compare.json");
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args([
+            "compare",
+            fixture_pdf().to_str().unwrap(),
+            fixture_pdf().to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq(""))
+        .stderr(predicate::eq(""));
+
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+    assert_eq!(report["equal"], true);
+    assert_eq!(report["differences"], serde_json::json!([]));
+}
+
+#[test]
+fn compare_command_writes_visual_diff_png() {
+    let dir = temp_dir("compare_command_writes_visual_diff_png");
+    let output = dir.join("diff.png");
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args([
+            "compare",
+            fixture_pdf().to_str().unwrap(),
+            fixture_pdf().to_str().unwrap(),
+            "--visual-diff",
+            "--page",
+            "1",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq(""))
+        .stderr(predicate::eq(""));
+
+    let image = image::load_from_memory(&fs::read(output).unwrap()).unwrap();
+    assert!(image.width() > 0);
+    assert!(image.height() > 0);
+}
+
+#[test]
 fn workflow_extract_text_writes_plain_text() {
     let dir = temp_dir("workflow_extract_text_writes_plain_text");
     let output = dir.join("extracted.txt");

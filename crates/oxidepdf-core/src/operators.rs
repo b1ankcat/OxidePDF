@@ -1,27 +1,27 @@
 use crate::workflow::ResourceLimits;
 use crate::{
-    add_pdf_page_numbers_with_limits, booklet_pdf_pages_with_limits, compress_pdf,
-    crop_pdf_pages_with_limits, decrypt_pdf, delete_blank_pdf_pages_with_limits,
-    delete_pdf_pages_with_limits, edit_pdf_annotations, edit_pdf_attachment_artifacts,
-    edit_pdf_colors, edit_pdf_images_artifacts, edit_pdf_metadata, edit_pdf_outline, encrypt_pdf,
-    extract_pdf_attachment, extract_pdf_image, extract_pdf_pages_with_limits,
-    extract_text_from_pdf, fill_pdf_form, image_artifacts_to_pdf, inspect_pdf_annotations,
-    inspect_pdf_attachments, inspect_pdf_forms, inspect_pdf_images, inspect_pdf_metadata,
-    inspect_pdf_outline, inspect_pdf_permissions, merge_pdf_artifacts_with_limits,
-    nup_pdf_pages_with_limits, overlay_pdf_artifacts, pdf_bytes, pdf_to_single_page_with_limits,
-    remove_pdf_forms, remove_pdf_interactive_elements, render_pdf_page, reorder_pdf_with_limits,
-    rotate_pdf_with_limits, scale_pdf_pages_with_limits, set_pdf_permissions,
-    split_pdf_with_limits, svg_to_pdf, unlock_pdf_form_readonly, verify_pdf_signatures,
-    watermark_pdf_artifacts, AnnotationEditOptions, AnnotationInspectOptions, Artifact,
-    AttachmentEditOptions, AttachmentExtractOptions, AttachmentInspectOptions, BookletOptions,
-    ColorEditOptions, CompressionOptions, CropPagesOptions, DeleteBlankPagesOptions,
-    ExtractTextOptions, FormFillOptions, FormInspectOptions, ImageEditOptions, ImageExtractOptions,
-    ImageInspectOptions, ImageToPdfOptions, InteractiveRemovalOptions, MergeOptions,
-    MetadataEditOptions, MetadataInspectOptions, NUpOptions, OutlineEditOptions,
-    OutlineInspectOptions, OverlayOptions, OxideError, PageNumbersOptions, PageSelectionOptions,
-    PdfCompareOptions, PdfSecurityOptions, RenderOptions, ReorderOptions, RotateOptions,
-    ScalePagesOptions, SignatureOptions, SinglePageOptions, SplitOptions, SvgToPdfOptions,
-    WatermarkOptions,
+    add_pdf_page_numbers_with_limits, booklet_pdf_pages_with_limits, compare_pdf_report,
+    compare_pdf_visual_diff, compress_pdf, crop_pdf_pages_with_limits, decrypt_pdf,
+    delete_blank_pdf_pages_with_limits, delete_pdf_pages_with_limits, edit_pdf_annotations,
+    edit_pdf_attachment_artifacts, edit_pdf_colors, edit_pdf_images_artifacts, edit_pdf_metadata,
+    edit_pdf_outline, encrypt_pdf, extract_pdf_attachment, extract_pdf_image,
+    extract_pdf_pages_with_limits, extract_text_from_pdf, fill_pdf_form, image_artifacts_to_pdf,
+    inspect_pdf_annotations, inspect_pdf_attachments, inspect_pdf_forms, inspect_pdf_images,
+    inspect_pdf_metadata, inspect_pdf_outline, inspect_pdf_permissions,
+    merge_pdf_artifacts_with_limits, nup_pdf_pages_with_limits, overlay_pdf_artifacts, pdf_bytes,
+    pdf_to_single_page_with_limits, remove_pdf_forms, remove_pdf_interactive_elements,
+    render_pdf_page, reorder_pdf_with_limits, rotate_pdf_with_limits, scale_pdf_pages_with_limits,
+    set_pdf_permissions, split_pdf_with_limits, svg_to_pdf, unlock_pdf_form_readonly,
+    verify_pdf_signatures, watermark_pdf_artifacts, AnnotationEditOptions,
+    AnnotationInspectOptions, Artifact, AttachmentEditOptions, AttachmentExtractOptions,
+    AttachmentInspectOptions, BookletOptions, ColorEditOptions, CompressionOptions,
+    CropPagesOptions, DeleteBlankPagesOptions, ExtractTextOptions, FormFillOptions,
+    FormInspectOptions, ImageEditOptions, ImageExtractOptions, ImageInspectOptions,
+    ImageToPdfOptions, InteractiveRemovalOptions, MergeOptions, MetadataEditOptions,
+    MetadataInspectOptions, NUpOptions, OutlineEditOptions, OutlineInspectOptions, OverlayOptions,
+    OxideError, PageNumbersOptions, PageSelectionOptions, PdfCompareOptions, PdfSecurityOptions,
+    RenderOptions, ReorderOptions, RotateOptions, ScalePagesOptions, SignatureOptions,
+    SinglePageOptions, SplitOptions, SvgToPdfOptions, WatermarkOptions,
 };
 use serde::{Deserialize, Serialize};
 
@@ -746,10 +746,20 @@ pub(crate) fn run_pdf_security(
     }
 }
 
-pub(crate) fn run_pdf_compare(options: &PdfCompareOptions) -> Result<Artifact, OxideError> {
-    Err(OxideError::UnsupportedPdfFeature {
-        feature: format!("pdf_compare mode '{}'", options.mode),
-    })
+pub(crate) fn run_pdf_compare(
+    options: &PdfCompareOptions,
+    inputs: &[Artifact],
+    limits: &ResourceLimits,
+) -> Result<Artifact, OxideError> {
+    let (left, right) = two_pdf_inputs(inputs)?;
+    match options {
+        PdfCompareOptions::Report(options) => {
+            compare_pdf_report(left, right, options, limits).map(Artifact::Text)
+        }
+        PdfCompareOptions::VisualDiff(options) => {
+            compare_pdf_visual_diff(left, right, options, limits).map(Artifact::Image)
+        }
+    }
 }
 
 pub(crate) fn run_pdf_sign(
@@ -773,6 +783,16 @@ fn single_pdf_input(inputs: &[Artifact]) -> Result<&[u8], OxideError> {
     }
 
     pdf_bytes(&inputs[0])
+}
+
+fn two_pdf_inputs(inputs: &[Artifact]) -> Result<(&[u8], &[u8]), OxideError> {
+    if inputs.len() != 2 {
+        return Err(OxideError::InvalidInput {
+            reason: "compare requires exactly two PDF inputs".to_owned(),
+        });
+    }
+
+    Ok((pdf_bytes(&inputs[0])?, pdf_bytes(&inputs[1])?))
 }
 
 fn single_svg_input(inputs: &[Artifact]) -> Result<&[u8], OxideError> {

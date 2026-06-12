@@ -5,19 +5,20 @@ use oxidepdf_core::{
     execute_workflow, AnnotationEditAction, AnnotationEditOptions, AnnotationInspectOptions,
     Artifact, ArtifactRef, ArtifactStore, AttachmentEditAction, AttachmentEditOptions,
     AttachmentExtractOptions, AttachmentInspectOptions, BookletOptions, ColorEditAction,
-    ColorEditOptions, CompressionImageFormat, CompressionImageOptions, CompressionMode,
-    CompressionOptions, CropPagesOptions, DeleteBlankPagesOptions, ExtractTextOptions,
-    FormFieldValue, FormFillOptions, FormInspectOptions, ImageEditAction, ImageEditOptions,
-    ImageExtractOptions, ImageInspectOptions, ImageToPdfOptions, InteractiveRemovalOptions,
-    MergeOptions, MetadataEditAction, MetadataEditOptions, MetadataEntry, MetadataInspectOptions,
-    NUpOptions, OperatorSpec, OutlineEditAction, OutlineEditOptions, OutlineInspectOptions,
-    OutlineTree, OverlayKind, OverlayOptions, OxideError, PageNumberPosition, PageNumbersOptions,
-    PageSelectionOptions, PdfCompareOptions, PdfEditOptions, PdfInspectOptions, PdfOperatorRunner,
-    PdfSecurityOptions, PdfSignOptions, PermissionPolicy, RenderOptions, ReorderOptions,
-    RotateOptions, ScalePagesOptions, SecurityDecryptOptions, SecurityEncryptOptions,
-    SecurityPermissionGetOptions, SecurityPermissionSetOptions, SignatureOptions,
-    SinglePageOptions, SplitOptions, SvgToPdfOptions, TaskId, TaskSpec, WatermarkKind,
-    WatermarkOptions, Workflow, WorkflowMetadata, WorkflowVersion,
+    ColorEditOptions, CompareOptions, CompressionImageFormat, CompressionImageOptions,
+    CompressionMode, CompressionOptions, CropPagesOptions, DeleteBlankPagesOptions,
+    ExtractTextOptions, FormFieldValue, FormFillOptions, FormInspectOptions, ImageEditAction,
+    ImageEditOptions, ImageExtractOptions, ImageInspectOptions, ImageToPdfOptions,
+    InteractiveRemovalOptions, MergeOptions, MetadataEditAction, MetadataEditOptions,
+    MetadataEntry, MetadataInspectOptions, NUpOptions, OperatorSpec, OutlineEditAction,
+    OutlineEditOptions, OutlineInspectOptions, OutlineTree, OverlayKind, OverlayOptions,
+    OxideError, PageNumberPosition, PageNumbersOptions, PageSelectionOptions, PdfCompareOptions,
+    PdfEditOptions, PdfInspectOptions, PdfOperatorRunner, PdfSecurityOptions, PdfSignOptions,
+    PermissionPolicy, RenderOptions, ReorderOptions, RotateOptions, ScalePagesOptions,
+    SecurityDecryptOptions, SecurityEncryptOptions, SecurityPermissionGetOptions,
+    SecurityPermissionSetOptions, SignatureOptions, SinglePageOptions, SplitOptions,
+    SvgToPdfOptions, TaskId, TaskSpec, VisualDiffOptions, WatermarkKind, WatermarkOptions,
+    Workflow, WorkflowMetadata, WorkflowVersion,
 };
 use std::fs;
 use std::io::{self, Read, Write};
@@ -49,8 +50,7 @@ enum Commands {
     #[command(subcommand)]
     PdfInspect(PdfInspectCommand),
     /// Compare PDF files.
-    #[command(name = "pdf-compare")]
-    PdfCompare(PdfCompareArgs),
+    Compare(CompareArgs),
     /// Sign or verify PDF signature material.
     #[command(name = "pdf-sign")]
     #[command(subcommand)]
@@ -821,11 +821,7 @@ struct PermissionArgs {
 }
 
 #[derive(Debug, Parser)]
-struct PdfCompareArgs {
-    /// Explicit compare mode.
-    #[arg(long)]
-    mode: String,
-
+struct CompareArgs {
     /// Left input PDF file.
     left: PathBuf,
 
@@ -835,6 +831,18 @@ struct PdfCompareArgs {
     /// Output report file, or `-` to write to stdout.
     #[arg(short, long)]
     output: PathBuf,
+
+    /// Write a rendered visual diff PNG instead of a JSON report.
+    #[arg(long)]
+    visual_diff: bool,
+
+    /// One-based page for visual diff output.
+    #[arg(long, default_value_t = 1)]
+    page: u32,
+
+    /// Render scale for visual diff output.
+    #[arg(long)]
+    scale: Option<f32>,
 
     /// Overwrite output files when they already exist.
     #[arg(long)]
@@ -1294,7 +1302,7 @@ fn cli_reads_stdin(cli: &Cli) -> bool {
         Some(Commands::Run(args)) => is_stdio(&args.workflow),
         Some(Commands::PdfEdit(command)) => pdf_edit_reads_stdin(command),
         Some(Commands::PdfInspect(command)) => pdf_inspect_reads_stdin(command),
-        Some(Commands::PdfCompare(args)) => is_stdio(&args.left) || is_stdio(&args.right),
+        Some(Commands::Compare(args)) => is_stdio(&args.left) || is_stdio(&args.right),
         Some(Commands::PdfSign(command)) => pdf_sign_reads_stdin(command),
         Some(Commands::Metadata(command)) => metadata_reads_stdin(command),
         Some(Commands::Outline(command)) => outline_reads_stdin(command),
@@ -1434,7 +1442,7 @@ where
         Some(Commands::Run(args)) => run_workflow(args, stdin, stdout),
         Some(Commands::PdfEdit(command)) => run_pdf_edit(command, stdin, stdout),
         Some(Commands::PdfInspect(command)) => run_pdf_inspect(command, stdin, stdout),
-        Some(Commands::PdfCompare(args)) => run_pdf_compare(args, stdin, stdout),
+        Some(Commands::Compare(args)) => run_compare(args, stdin, stdout),
         Some(Commands::PdfSign(command)) => run_pdf_sign(command, stdin, stdout),
         Some(Commands::Metadata(command)) => run_metadata(command, stdin, stdout),
         Some(Commands::Outline(command)) => run_outline(command, stdin, stdout),
@@ -2005,11 +2013,15 @@ fn permission_policy(args: &PermissionArgs) -> PermissionPolicy {
     }
 }
 
-fn run_pdf_compare(
-    args: PdfCompareArgs,
-    stdin: &[u8],
-    stdout: &mut impl Write,
-) -> Result<(), CliError> {
+fn run_compare(args: CompareArgs, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError> {
+    let operator = if args.visual_diff {
+        PdfCompareOptions::VisualDiff(VisualDiffOptions {
+            page: args.page,
+            scale: args.scale,
+        })
+    } else {
+        PdfCompareOptions::Report(CompareOptions::default())
+    };
     let workflow = Workflow {
         version: WorkflowVersion::V1,
         inputs: vec![
@@ -2023,13 +2035,13 @@ fn run_pdf_compare(
             },
         ],
         tasks: vec![TaskSpec {
-            id: TaskId::new("pdf_compare"),
-            op: OperatorSpec::PdfCompare(PdfCompareOptions { mode: args.mode }),
+            id: TaskId::new("compare"),
+            op: OperatorSpec::PdfCompare(operator),
             inputs: vec![ArtifactRef::new("left"), ArtifactRef::new("right")],
         }],
         outputs: vec![oxidepdf_core::OutputSpec {
             id: ArtifactRef::new("output"),
-            from: ArtifactRef::new("pdf_compare"),
+            from: ArtifactRef::new("compare"),
             path: args.output,
         }],
         limits: Default::default(),
@@ -3020,6 +3032,7 @@ mod tests {
             "extract-text",
             "watermark",
             "verify-signatures",
+            "pdf-compare",
         ] {
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
@@ -3087,6 +3100,15 @@ mod tests {
             "output.txt",
         ])
         .unwrap();
+
+        assert!(cli_reads_stdin(&cli));
+    }
+
+    #[test]
+    fn compare_stdio_input_requires_stdin() {
+        let cli =
+            Cli::try_parse_from(["oxidepdf", "compare", "-", "right.pdf", "-o", "report.json"])
+                .unwrap();
 
         assert!(cli_reads_stdin(&cli));
     }
@@ -4685,6 +4707,72 @@ mod tests {
         assert_eq!(stdout, b"");
         assert_eq!(stderr, b"");
         assert!(!fs::read_to_string(output).unwrap().trim().is_empty());
+    }
+
+    #[test]
+    fn compare_command_writes_json_report() {
+        let dir = temp_dir("compare_command_writes_json_report");
+        let output = dir.join("compare.json");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "compare",
+                fixture_pdf().to_str().unwrap(),
+                fixture_pdf().to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        let report: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(output).unwrap()).unwrap();
+        assert_eq!(report["equal"], true);
+        assert_eq!(report["differences"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn compare_command_writes_visual_diff_png() {
+        let dir = temp_dir("compare_command_writes_visual_diff_png");
+        let left = dir.join("left.pdf");
+        let right = dir.join("right.pdf");
+        let output = dir.join("diff.png");
+        fs::write(&left, empty_page_pdf()).unwrap();
+        fs::write(&right, pdf_with_rgb_fill_content()).unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "compare",
+                left.to_str().unwrap(),
+                right.to_str().unwrap(),
+                "--visual-diff",
+                "--page",
+                "1",
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        let image = image::load_from_memory(&fs::read(output).unwrap()).unwrap();
+        assert!(image.width() > 0);
+        assert!(image.height() > 0);
     }
 
     #[test]
