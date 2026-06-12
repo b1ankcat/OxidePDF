@@ -7,6 +7,7 @@ use read_fonts::TableProvider;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 const A4_WIDTH: f32 = 595.0;
@@ -655,19 +656,22 @@ impl PdfOperatorRunner {
 
 impl OperatorRunner for PdfOperatorRunner {
     fn run(&mut self, task: &TaskSpec, inputs: &[Artifact]) -> Result<Artifact, OxideError> {
-        match &task.op {
-            OperatorSpec::Merge(_) => merge_pdf_artifacts(inputs).map(Artifact::Pdf),
+        let artifact = match &task.op {
+            OperatorSpec::Merge(_) => {
+                merge_pdf_artifacts_with_limits(inputs, &self.limits).map(Artifact::Pdf)
+            }
             OperatorSpec::Split(options) => {
                 let input = single_pdf_input(inputs)?;
-                split_pdf(input, &options.pages).map(Artifact::Pdf)
+                split_pdf_with_limits(input, &options.pages, &self.limits).map(Artifact::Pdf)
             }
             OperatorSpec::Reorder(options) => {
                 let input = single_pdf_input(inputs)?;
-                reorder_pdf(input, &options.pages).map(Artifact::Pdf)
+                reorder_pdf_with_limits(input, &options.pages, &self.limits).map(Artifact::Pdf)
             }
             OperatorSpec::Rotate(options) => {
                 let input = single_pdf_input(inputs)?;
-                rotate_pdf(input, &options.pages, options.degrees).map(Artifact::Pdf)
+                rotate_pdf_with_limits(input, &options.pages, options.degrees, &self.limits)
+                    .map(Artifact::Pdf)
             }
             OperatorSpec::ImageToPdf(options) => {
                 image_artifacts_to_pdf(inputs, options, &self.limits).map(Artifact::Pdf)
@@ -687,12 +691,22 @@ impl OperatorRunner for PdfOperatorRunner {
             OperatorSpec::Watermark(options) => {
                 watermark_pdf_artifacts(inputs, options, &self.limits).map(Artifact::Pdf)
             }
-        }
+        }?;
+        enforce_artifact_output_bytes(&artifact, &self.limits)?;
+        Ok(artifact)
     }
 }
 
 /// Merges multiple PDF artifacts into a single PDF.
 pub fn merge_pdf_artifacts(inputs: &[Artifact]) -> Result<PdfArtifact, OxideError> {
+    merge_pdf_artifacts_with_limits(inputs, &ResourceLimits::default())
+}
+
+/// Merges multiple PDF artifacts into a single PDF while enforcing resource limits.
+pub fn merge_pdf_artifacts_with_limits(
+    inputs: &[Artifact],
+    limits: &ResourceLimits,
+) -> Result<PdfArtifact, OxideError> {
     if inputs.len() < 2 {
         return Err(OxideError::InvalidInput {
             reason: "merge requires at least two PDF inputs".to_owned(),
@@ -700,32 +714,80 @@ pub fn merge_pdf_artifacts(inputs: &[Artifact]) -> Result<PdfArtifact, OxideErro
     }
 
     let mut documents = Vec::with_capacity(inputs.len());
+    let mut total_pages = 0usize;
     for input in inputs {
-        documents.push(load_pdf(pdf_bytes(input)?)?);
+        let bytes = pdf_bytes(input)?;
+        enforce_input_bytes(bytes.len(), limits)?;
+        let document = load_pdf(bytes)?;
+        total_pages = total_pages
+            .checked_add(document.get_pages().len())
+            .ok_or_else(|| resource_limit("max_pages"))?;
+        enforce_max_pages(total_pages, limits)?;
+        documents.push(document);
     }
 
-    merge_documents(documents).map(|bytes| PdfArtifact { bytes })
+    let bytes = merge_documents(documents)?;
+    enforce_output_bytes(bytes.len(), limits)?;
+    Ok(PdfArtifact { bytes })
 }
 
 /// Splits a PDF by keeping the specified one-based pages.
 pub fn split_pdf(input: &[u8], pages: &str) -> Result<PdfArtifact, OxideError> {
+    split_pdf_with_limits(input, pages, &ResourceLimits::default())
+}
+
+/// Splits a PDF by keeping the specified one-based pages while enforcing resource limits.
+pub fn split_pdf_with_limits(
+    input: &[u8],
+    pages: &str,
+    limits: &ResourceLimits,
+) -> Result<PdfArtifact, OxideError> {
+    enforce_input_bytes(input.len(), limits)?;
     let mut document = load_pdf(input)?;
+    enforce_max_pages(document.get_pages().len(), limits)?;
     let selected_pages = parse_page_range(pages, document.get_pages().len() as u32)?;
     keep_pages(&mut document, &selected_pages)?;
-    save_pdf(document).map(|bytes| PdfArtifact { bytes })
+    let bytes = save_pdf(document)?;
+    enforce_output_bytes(bytes.len(), limits)?;
+    Ok(PdfArtifact { bytes })
 }
 
 /// Reorders a PDF by an explicit one-based page sequence.
 pub fn reorder_pdf(input: &[u8], pages: &str) -> Result<PdfArtifact, OxideError> {
+    reorder_pdf_with_limits(input, pages, &ResourceLimits::default())
+}
+
+/// Reorders a PDF by an explicit one-based page sequence while enforcing resource limits.
+pub fn reorder_pdf_with_limits(
+    input: &[u8],
+    pages: &str,
+    limits: &ResourceLimits,
+) -> Result<PdfArtifact, OxideError> {
+    enforce_input_bytes(input.len(), limits)?;
     let mut document = load_pdf(input)?;
+    enforce_max_pages(document.get_pages().len(), limits)?;
     let selected_pages = parse_page_range(pages, document.get_pages().len() as u32)?;
     keep_pages(&mut document, &selected_pages)?;
-    save_pdf(document).map(|bytes| PdfArtifact { bytes })
+    let bytes = save_pdf(document)?;
+    enforce_output_bytes(bytes.len(), limits)?;
+    Ok(PdfArtifact { bytes })
 }
 
 /// Rotates selected PDF pages by 90, 180, or 270 degrees.
 pub fn rotate_pdf(input: &[u8], pages: &str, degrees: i16) -> Result<PdfArtifact, OxideError> {
+    rotate_pdf_with_limits(input, pages, degrees, &ResourceLimits::default())
+}
+
+/// Rotates selected PDF pages by 90, 180, or 270 degrees while enforcing resource limits.
+pub fn rotate_pdf_with_limits(
+    input: &[u8],
+    pages: &str,
+    degrees: i16,
+    limits: &ResourceLimits,
+) -> Result<PdfArtifact, OxideError> {
+    enforce_input_bytes(input.len(), limits)?;
     let mut document = load_pdf(input)?;
+    enforce_max_pages(document.get_pages().len(), limits)?;
     let selected_pages = parse_page_range(pages, document.get_pages().len() as u32)?;
     let degrees = normalize_rotation(degrees)?;
     let pages = document.get_pages();
@@ -750,7 +812,9 @@ pub fn rotate_pdf(input: &[u8], pages: &str, degrees: i16) -> Result<PdfArtifact
         );
     }
 
-    save_pdf(document).map(|bytes| PdfArtifact { bytes })
+    let bytes = save_pdf(document)?;
+    enforce_output_bytes(bytes.len(), limits)?;
+    Ok(PdfArtifact { bytes })
 }
 
 /// Converts image artifacts into a PDF with one image per page.
@@ -781,7 +845,9 @@ pub fn image_artifacts_to_pdf(
     }
 
     let layout = ImageLayout::from_options(options)?;
-    write_images_pdf(&images, layout).map(|bytes| PdfArtifact { bytes })
+    let bytes = write_images_pdf(&images, layout)?;
+    enforce_output_bytes(bytes.len(), limits)?;
+    Ok(PdfArtifact { bytes })
 }
 
 /// Converts an SVG artifact into a PDF. Defaults to vector output.
@@ -808,6 +874,7 @@ pub fn svg_to_pdf(
             .map_err(|_| OxideError::WritePdf)?
     };
 
+    enforce_output_bytes(bytes.len(), limits)?;
     Ok(PdfArtifact { bytes })
 }
 
@@ -818,6 +885,7 @@ pub fn render_pdf_page(
     limits: &ResourceLimits,
 ) -> Result<ImageArtifact, OxideError> {
     enforce_input_bytes(input.len(), limits)?;
+    ensure_pdf_magic(input)?;
     let format = options.format.as_deref().unwrap_or("png");
     if format != "png" {
         return Err(OxideError::InvalidInput {
@@ -862,6 +930,7 @@ pub fn render_pdf_page(
     if bytes.is_empty() {
         return Err(OxideError::RenderPdf);
     }
+    enforce_output_bytes(bytes.len(), limits)?;
 
     Ok(ImageArtifact { bytes })
 }
@@ -873,6 +942,7 @@ pub fn extract_text_from_pdf(
     limits: &ResourceLimits,
 ) -> Result<TextArtifact, OxideError> {
     enforce_input_bytes(input.len(), limits)?;
+    ensure_pdf_magic(input)?;
     let format = options.format.as_deref().unwrap_or("plain");
     if format != "plain" {
         return Err(OxideError::InvalidInput {
@@ -907,10 +977,12 @@ pub fn extract_text_from_pdf(
         });
     }
 
-    Ok(TextArtifact {
+    let artifact = TextArtifact {
         text: pages.concat(),
         diagnostics,
-    })
+    };
+    enforce_output_bytes(artifact.text.len(), limits)?;
+    Ok(artifact)
 }
 
 /// Adds a text, image, or SVG watermark to selected PDF pages.
@@ -943,27 +1015,34 @@ pub fn watermark_pdf_artifacts(
             append_text_watermark(&mut document, &pages, text, &font, settings)?;
         }
         WatermarkKind::Image => {
-            let image = decode_image(watermark_input.ok_or_else(|| OxideError::InvalidInput {
-                reason: "image watermark requires an image input".to_owned(),
-            })?)?;
+            let image = decode_limited_image(
+                watermark_input.ok_or_else(|| OxideError::InvalidInput {
+                    reason: "image watermark requires an image input".to_owned(),
+                })?,
+                limits,
+            )?;
             append_image_watermark(&mut document, &pages, &image, settings)?;
         }
         WatermarkKind::Svg => {
             let svg = watermark_input.ok_or_else(|| OxideError::InvalidInput {
                 reason: "SVG watermark requires an SVG input".to_owned(),
             })?;
+            enforce_input_bytes(svg.len(), limits)?;
+            let tree = parse_svg(svg)?;
+            let pixels = svg_pixel_count(&tree)?;
+            enforce_max_pixels(pixels, limits)?;
             if options.rasterize {
-                let tree = parse_svg(svg)?;
                 let image = rasterize_svg(&tree)?;
                 append_image_watermark(&mut document, &pages, &image, settings)?;
             } else {
-                let tree = parse_svg(svg)?;
                 append_svg_watermark(&mut document, &pages, &tree, settings)?;
             }
         }
     }
 
-    save_pdf(document).map(|bytes| PdfArtifact { bytes })
+    let bytes = save_pdf(document)?;
+    enforce_output_bytes(bytes.len(), limits)?;
+    Ok(PdfArtifact { bytes })
 }
 
 /// Validates a workflow and returns a topological execution plan.
@@ -984,6 +1063,9 @@ pub fn execute_workflow(
     runner: &mut impl OperatorRunner,
 ) -> Result<ExecutionResult, OxideError> {
     let plan = validate_workflow(workflow)?;
+    enforce_workflow_input_limits(workflow, &store)?;
+    let started_at = Instant::now();
+    let timeout = workflow.limits.timeout_ms.map(Duration::from_millis);
     let tasks_by_id = workflow
         .tasks
         .iter()
@@ -991,6 +1073,7 @@ pub fn execute_workflow(
         .collect::<BTreeMap<_, _>>();
 
     for task_id in &plan.task_order {
+        enforce_timeout(started_at, timeout)?;
         let task = tasks_by_id.get(task_id).ok_or_else(|| {
             invalid_workflow(format!(
                 "task '{}' disappeared after validation",
@@ -1010,10 +1093,40 @@ pub fn execute_workflow(
             })
             .collect::<Result<Vec<_>, _>>()?;
         let artifact = runner.run(task, &inputs)?;
+        enforce_timeout(started_at, timeout)?;
         store.insert(ArtifactRef(task.id.as_str().to_owned()), artifact);
     }
 
     Ok(ExecutionResult { plan, store })
+}
+
+fn enforce_workflow_input_limits(
+    workflow: &Workflow,
+    store: &ArtifactStore,
+) -> Result<(), OxideError> {
+    let mut total_input_bytes = 0u64;
+    for input in &workflow.inputs {
+        let artifact = store.get(&input.id).ok_or_else(|| {
+            invalid_workflow(format!(
+                "input artifact '{}' is missing at execution time",
+                input.id.as_str()
+            ))
+        })?;
+        let size = artifact_size(artifact);
+        enforce_input_bytes(size, &workflow.limits)?;
+        total_input_bytes = total_input_bytes
+            .checked_add(size as u64)
+            .ok_or_else(|| resource_limit("max_total_input_bytes"))?;
+        if workflow
+            .limits
+            .max_total_input_bytes
+            .is_some_and(|limit| total_input_bytes > limit)
+        {
+            return Err(resource_limit("max_total_input_bytes"));
+        }
+    }
+
+    Ok(())
 }
 
 fn collect_ids(workflow: &Workflow) -> Result<BTreeSet<ArtifactRef>, OxideError> {
@@ -1249,6 +1362,7 @@ fn svg_bytes(artifact: &Artifact) -> Result<&[u8], OxideError> {
 }
 
 fn load_pdf(input: &[u8]) -> Result<lopdf::Document, OxideError> {
+    ensure_pdf_magic(input)?;
     let document = lopdf::Document::load_mem(input).map_err(map_lopdf_read_error)?;
     if document.is_encrypted() {
         return Err(OxideError::EncryptedPdf);
@@ -1260,6 +1374,16 @@ fn load_pdf(input: &[u8]) -> Result<lopdf::Document, OxideError> {
     }
 
     Ok(document)
+}
+
+fn ensure_pdf_magic(input: &[u8]) -> Result<(), OxideError> {
+    if input.starts_with(b"%PDF-") {
+        return Ok(());
+    }
+
+    Err(OxideError::InvalidInput {
+        reason: "expected PDF input magic bytes".to_owned(),
+    })
 }
 
 fn save_pdf(mut document: lopdf::Document) -> Result<Vec<u8>, OxideError> {
@@ -1517,6 +1641,14 @@ fn decode_image(input: &[u8]) -> Result<DecodedImage, OxideError> {
     })
 }
 
+fn decode_limited_image(input: &[u8], limits: &ResourceLimits) -> Result<DecodedImage, OxideError> {
+    enforce_input_bytes(input.len(), limits)?;
+    let decoded = decode_image(input)?;
+    let pixels = u64::from(decoded.width) * u64::from(decoded.height);
+    enforce_max_pixels(pixels, limits)?;
+    Ok(decoded)
+}
+
 fn write_images_pdf(images: &[DecodedImage], layout: ImageLayout) -> Result<Vec<u8>, OxideError> {
     let mut next_ref = 1;
     let mut alloc_ref = || {
@@ -1597,8 +1729,21 @@ fn image_placement(image: &DecodedImage, layout: ImageLayout) -> (f32, f32, f32,
 }
 
 fn parse_svg(input: &[u8]) -> Result<svg2pdf::usvg::Tree, OxideError> {
+    ensure_svg_magic(input)?;
     let options = svg2pdf::usvg::Options::default();
     svg2pdf::usvg::Tree::from_data(input, &options).map_err(|_| OxideError::SvgParse)
+}
+
+fn ensure_svg_magic(input: &[u8]) -> Result<(), OxideError> {
+    let input = input
+        .strip_prefix(&[0xEF, 0xBB, 0xBF])
+        .unwrap_or(input)
+        .trim_ascii_start();
+    if input.starts_with(b"<svg") || input.starts_with(b"<?xml") {
+        return Ok(());
+    }
+
+    Err(OxideError::SvgParse)
 }
 
 fn svg_pixel_count(tree: &svg2pdf::usvg::Tree) -> Result<u64, OxideError> {
@@ -2245,6 +2390,41 @@ fn enforce_max_pixels(pixels: u64, limits: &ResourceLimits) -> Result<(), OxideE
     Ok(())
 }
 
+fn enforce_output_bytes(size: usize, limits: &ResourceLimits) -> Result<(), OxideError> {
+    if let Some(limit) = limits.max_output_bytes {
+        if size as u64 > limit {
+            return Err(resource_limit("max_output_bytes"));
+        }
+    }
+
+    Ok(())
+}
+
+fn enforce_artifact_output_bytes(
+    artifact: &Artifact,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
+    enforce_output_bytes(artifact_size(artifact), limits)
+}
+
+fn artifact_size(artifact: &Artifact) -> usize {
+    match artifact {
+        Artifact::Pdf(pdf) => pdf.bytes.len(),
+        Artifact::Image(image) => image.bytes.len(),
+        Artifact::Text(text) => text.text.len(),
+        Artifact::Svg(svg) => svg.bytes.len(),
+        Artifact::Bytes(bytes) => bytes.bytes.len(),
+    }
+}
+
+fn enforce_timeout(started_at: Instant, timeout: Option<Duration>) -> Result<(), OxideError> {
+    if timeout.is_some_and(|timeout| started_at.elapsed() > timeout) {
+        return Err(resource_limit("timeout_ms"));
+    }
+
+    Ok(())
+}
+
 fn resource_limit(limit: impl Into<String>) -> OxideError {
     OxideError::ResourceLimitExceeded {
         limit: limit.into(),
@@ -2671,6 +2851,41 @@ mod tests {
     }
 
     #[test]
+    fn merge_pdf_artifacts_enforces_input_and_page_limits() {
+        let pdf = include_bytes!("../../../tests/test.pdf");
+
+        let input_err = merge_pdf_artifacts_with_limits(
+            &[Artifact::pdf(pdf), Artifact::pdf(pdf)],
+            &ResourceLimits {
+                max_input_bytes: Some(1),
+                ..ResourceLimits::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            input_err,
+            OxideError::ResourceLimitExceeded {
+                limit: "max_input_bytes".to_owned()
+            }
+        );
+
+        let page_err = merge_pdf_artifacts_with_limits(
+            &[Artifact::pdf(pdf), Artifact::pdf(pdf)],
+            &ResourceLimits {
+                max_pages: Some(5),
+                ..ResourceLimits::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            page_err,
+            OxideError::ResourceLimitExceeded {
+                limit: "max_pages".to_owned()
+            }
+        );
+    }
+
+    #[test]
     fn split_pdf_keeps_only_selected_pages() {
         let pdf = include_bytes!("../../../tests/test.pdf");
 
@@ -2679,6 +2894,28 @@ mod tests {
 
         assert_eq!(document.get_pages().len(), 2);
         assert_page_numbers(&document, &[1, 2]);
+    }
+
+    #[test]
+    fn split_pdf_enforces_resource_limits() {
+        let pdf = include_bytes!("../../../tests/test.pdf");
+
+        let err = split_pdf_with_limits(
+            pdf,
+            "1",
+            &ResourceLimits {
+                max_pages: Some(2),
+                ..ResourceLimits::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            OxideError::ResourceLimitExceeded {
+                limit: "max_pages".to_owned()
+            }
+        );
     }
 
     #[test]
@@ -2705,6 +2942,15 @@ mod tests {
     }
 
     #[test]
+    fn rotate_pdf_rejects_non_pdf_magic_bytes() {
+        let err =
+            rotate_pdf_with_limits(b"not a pdf", "1", 90, &ResourceLimits::default()).unwrap_err();
+
+        assert!(matches!(err, OxideError::InvalidInput { .. }));
+        assert!(err.to_string().contains("expected PDF"));
+    }
+
+    #[test]
     fn pdf_operator_runner_handles_page_editing_tasks() {
         let pdf = include_bytes!("../../../tests/test.pdf");
         let mut runner = PdfOperatorRunner::default();
@@ -2721,6 +2967,35 @@ mod tests {
             .unwrap();
 
         assert!(matches!(merged, Artifact::Pdf(_)));
+    }
+
+    #[test]
+    fn pdf_operator_runner_enforces_output_size_limit() {
+        let pdf = include_bytes!("../../../tests/test.pdf");
+        let mut runner = PdfOperatorRunner::with_limits(ResourceLimits {
+            max_output_bytes: Some(1),
+            ..ResourceLimits::default()
+        });
+
+        let err = runner
+            .run(
+                &TaskSpec {
+                    id: TaskId::new("split"),
+                    op: OperatorSpec::Split(SplitOptions {
+                        pages: "1".to_owned(),
+                    }),
+                    inputs: vec![artifact_ref("source")],
+                },
+                &[Artifact::pdf(pdf)],
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            OxideError::ResourceLimitExceeded {
+                limit: "max_output_bytes".to_owned()
+            }
+        );
     }
 
     #[test]
@@ -2789,6 +3064,28 @@ mod tests {
     }
 
     #[test]
+    fn image_artifacts_to_pdf_enforces_output_size_limit() {
+        let image = include_bytes!("../../../tests/test.jpg");
+
+        let err = image_artifacts_to_pdf(
+            &[Artifact::image(image)],
+            &ImageToPdfOptions::default(),
+            &ResourceLimits {
+                max_output_bytes: Some(1),
+                ..ResourceLimits::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            OxideError::ResourceLimitExceeded {
+                limit: "max_output_bytes".to_owned()
+            }
+        );
+    }
+
+    #[test]
     fn svg_to_pdf_converts_vector_svg_to_parseable_pdf() {
         let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
             <rect x="10" y="10" width="100" height="60" fill="#0077cc"/>
@@ -2821,6 +3118,18 @@ mod tests {
     fn svg_to_pdf_rejects_invalid_svg() {
         let err = svg_to_pdf(
             b"<svg><broken>",
+            &SvgToPdfOptions::default(),
+            &ResourceLimits::default(),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, OxideError::SvgParse);
+    }
+
+    #[test]
+    fn svg_to_pdf_rejects_non_svg_magic_bytes() {
+        let err = svg_to_pdf(
+            b"%PDF-1.7\nnot svg",
             &SvgToPdfOptions::default(),
             &ResourceLimits::default(),
         )
@@ -2918,6 +3227,19 @@ mod tests {
     }
 
     #[test]
+    fn extract_text_from_pdf_rejects_non_pdf_magic_bytes() {
+        let err = extract_text_from_pdf(
+            b"<svg></svg>",
+            &ExtractTextOptions::default(),
+            &ResourceLimits::default(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, OxideError::InvalidInput { .. }));
+        assert!(err.to_string().contains("expected PDF"));
+    }
+
+    #[test]
     fn pdf_operator_runner_handles_extract_text_tasks() {
         let pdf = include_bytes!("../../../tests/test.pdf");
         let mut runner = PdfOperatorRunner::default();
@@ -2937,6 +3259,71 @@ mod tests {
             panic!("expected text artifact");
         };
         assert!(!text.text.trim().is_empty());
+    }
+
+    #[test]
+    fn execute_workflow_enforces_timeout() {
+        let workflow = workflow_from_json(
+            r#"
+            {
+              "version": 1,
+              "inputs": [{ "id": "source", "path": "input.bin" }],
+              "tasks": [
+                {
+                  "id": "slow",
+                  "op": { "merge": {} },
+                  "inputs": ["source"]
+                }
+              ],
+              "outputs": [{ "id": "final", "from": "slow", "path": "out.bin" }],
+              "limits": { "timeout_ms": 1 }
+            }
+            "#,
+        );
+        let mut store = ArtifactStore::new();
+        store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
+        let mut runner = SlowRunner;
+
+        let err = execute_workflow(&workflow, store, &mut runner).unwrap_err();
+
+        assert_eq!(
+            err,
+            OxideError::ResourceLimitExceeded {
+                limit: "timeout_ms".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn execute_workflow_enforces_total_input_size_limit() {
+        let workflow = workflow_from_json(
+            r#"
+            {
+              "version": 1,
+              "inputs": [
+                { "id": "first", "path": "a.bin" },
+                { "id": "second", "path": "b.bin" }
+              ],
+              "tasks": [],
+              "outputs": [{ "id": "final", "from": "first", "path": "out.bin" }],
+              "limits": { "max_total_input_bytes": 9 }
+            }
+            "#,
+        );
+        let mut store = ArtifactStore::new();
+        store.insert(artifact_ref("first"), Artifact::bytes(b"12345"));
+        store.insert(artifact_ref("second"), Artifact::bytes(b"67890"));
+        let mut runner = RecordingRunner::default();
+
+        let err = execute_workflow(&workflow, store, &mut runner).unwrap_err();
+
+        assert_eq!(
+            err,
+            OxideError::ResourceLimitExceeded {
+                limit: "max_total_input_bytes".to_owned()
+            }
+        );
+        assert!(runner.executed.is_empty());
     }
 
     #[test]
@@ -2994,6 +3381,41 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err, OxideError::FontResolution);
+    }
+
+    #[test]
+    fn watermark_pdf_enforces_image_pixel_limit() {
+        let pdf = include_bytes!("../../../tests/test.pdf");
+        let image = include_bytes!("../../../tests/test.jpg");
+
+        let err = watermark_pdf_artifacts(
+            &[Artifact::pdf(pdf), Artifact::image(image)],
+            &WatermarkOptions {
+                kind: WatermarkKind::Image,
+                text: None,
+                font: None,
+                font_path: None,
+                font_size: None,
+                opacity: None,
+                rotation: None,
+                position: None,
+                pages: None,
+                scale: None,
+                rasterize: false,
+            },
+            &ResourceLimits {
+                max_pixels: Some(1),
+                ..ResourceLimits::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            OxideError::ResourceLimitExceeded {
+                limit: "max_pixels".to_owned()
+            }
+        );
     }
 
     #[test]
@@ -3087,6 +3509,32 @@ mod tests {
         let document = lopdf::Document::load_mem(&watermarked.bytes).unwrap();
 
         assert!(page_xobject_subtypes(&document, 1).contains(&b"Image".to_vec()));
+    }
+
+    #[test]
+    fn watermark_pdf_rejects_malformed_svg_without_panic() {
+        let pdf = include_bytes!("../../../tests/test.pdf");
+
+        let err = watermark_pdf_artifacts(
+            &[Artifact::pdf(pdf), Artifact::svg(b"<svg><broken>")],
+            &WatermarkOptions {
+                kind: WatermarkKind::Svg,
+                text: None,
+                font: None,
+                font_path: None,
+                font_size: None,
+                opacity: None,
+                rotation: None,
+                position: None,
+                pages: None,
+                scale: None,
+                rasterize: false,
+            },
+            &ResourceLimits::default(),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, OxideError::SvgParse);
     }
 
     fn workflow_from_json(json: &str) -> Workflow {
@@ -3255,6 +3703,15 @@ mod tests {
             }
 
             Ok(Artifact::bytes(task.id.as_str().as_bytes()))
+        }
+    }
+
+    struct SlowRunner;
+
+    impl OperatorRunner for SlowRunner {
+        fn run(&mut self, _task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            Ok(Artifact::bytes(b"finished"))
         }
     }
 }

@@ -631,8 +631,10 @@ fn parse_workflow(bytes: &[u8], path: &Path) -> Result<Workflow, CliError> {
 
 fn load_inputs(workflow: &Workflow, stdin: &[u8]) -> Result<ArtifactStore, CliError> {
     let mut store = ArtifactStore::new();
+    let mut total_input_bytes = 0u64;
     for input in &workflow.inputs {
         let bytes = read_path_or_stdin(&input.path, stdin).map_err(CliError::Input)?;
+        enforce_cli_input_limits(bytes.len(), &mut total_input_bytes, &workflow.limits)?;
         store.insert(input.id.clone(), Artifact::bytes(bytes));
     }
 
@@ -656,6 +658,7 @@ fn write_outputs(
             })
         })?;
         let bytes = artifact_bytes(artifact)?;
+        enforce_cli_output_limit(bytes.len(), &workflow.limits)?;
         if is_stdio(&output.path) {
             stdout.write_all(bytes).map_err(CliError::Io)?;
         } else {
@@ -688,6 +691,52 @@ fn read_path_or_stdin(path: &Path, stdin: &[u8]) -> io::Result<Vec<u8>> {
     } else {
         fs::read(path)
     }
+}
+
+fn enforce_cli_input_limits(
+    size: usize,
+    total_input_bytes: &mut u64,
+    limits: &oxidepdf_core::ResourceLimits,
+) -> Result<(), CliError> {
+    if limits
+        .max_input_bytes
+        .is_some_and(|limit| size as u64 > limit)
+    {
+        return Err(CliError::Core(OxideError::ResourceLimitExceeded {
+            limit: "max_input_bytes".to_owned(),
+        }));
+    }
+    *total_input_bytes = total_input_bytes.checked_add(size as u64).ok_or_else(|| {
+        CliError::Core(OxideError::ResourceLimitExceeded {
+            limit: "max_total_input_bytes".to_owned(),
+        })
+    })?;
+    if limits
+        .max_total_input_bytes
+        .is_some_and(|limit| *total_input_bytes > limit)
+    {
+        return Err(CliError::Core(OxideError::ResourceLimitExceeded {
+            limit: "max_total_input_bytes".to_owned(),
+        }));
+    }
+
+    Ok(())
+}
+
+fn enforce_cli_output_limit(
+    size: usize,
+    limits: &oxidepdf_core::ResourceLimits,
+) -> Result<(), CliError> {
+    if limits
+        .max_output_bytes
+        .is_some_and(|limit| size as u64 > limit)
+    {
+        return Err(CliError::Core(OxideError::ResourceLimitExceeded {
+            limit: "max_output_bytes".to_owned(),
+        }));
+    }
+
+    Ok(())
 }
 
 fn is_stdio(path: &Path) -> bool {
@@ -732,10 +781,25 @@ impl std::fmt::Display for CliError {
         match self {
             Self::Arguments(error) => write!(formatter, "{error}"),
             Self::Workflow(error) => write!(formatter, "invalid workflow: {error}"),
-            Self::Input(error) => write!(formatter, "input error: {error}"),
-            Self::Io(error) => write!(formatter, "I/O error: {error}"),
+            Self::Input(error) => write!(formatter, "input error: {}", sanitized_io_error(error)),
+            Self::Io(error) => write!(formatter, "I/O error: {}", sanitized_io_error(error)),
             Self::Core(error) => write!(formatter, "{}: {error}", error.code()),
         }
+    }
+}
+
+fn sanitized_io_error(error: &io::Error) -> &'static str {
+    match error.kind() {
+        io::ErrorKind::NotFound => "file not found",
+        io::ErrorKind::PermissionDenied => "permission denied",
+        io::ErrorKind::AlreadyExists => "file already exists",
+        io::ErrorKind::InvalidInput => "invalid input",
+        io::ErrorKind::InvalidData => "invalid data",
+        io::ErrorKind::UnexpectedEof => "unexpected end of file",
+        io::ErrorKind::WriteZero => "write failed",
+        io::ErrorKind::Interrupted => "operation interrupted",
+        io::ErrorKind::TimedOut => "operation timed out",
+        _ => "operation failed",
     }
 }
 
@@ -944,7 +1008,150 @@ mod tests {
         assert_eq!(code, 3);
         assert_eq!(stdout, b"");
         assert!(!output.exists());
-        assert!(String::from_utf8(stderr).unwrap().contains("parse_pdf"));
+        let stderr = String::from_utf8(stderr).unwrap();
+        assert!(stderr.contains("invalid_input"));
+        assert!(stderr.contains("expected PDF"));
+    }
+
+    #[test]
+    fn workflow_enforces_total_input_size_limit() {
+        let dir = temp_dir("workflow_enforces_total_input_size_limit");
+        let workflow = dir.join("workflow.yaml");
+        let output = dir.join("out.bin");
+        fs::write(dir.join("input_a.bin"), b"12345").unwrap();
+        fs::write(dir.join("input_b.bin"), b"67890").unwrap();
+        fs::write(
+            &workflow,
+            format!(
+                r#"
+                version: 1
+                inputs:
+                  - id: first
+                    path: {}
+                  - id: second
+                    path: {}
+                tasks: []
+                outputs:
+                  - id: final
+                    from: first
+                    path: {}
+                limits:
+                  max_total_input_bytes: 9
+                "#,
+                yaml_path(dir.join("input_a.bin")),
+                yaml_path(dir.join("input_b.bin")),
+                yaml_path(&output)
+            ),
+        )
+        .unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            ["oxidepdf", "run", "--workflow", workflow.to_str().unwrap()],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 5);
+        assert_eq!(stdout, b"");
+        assert!(!output.exists());
+        assert!(String::from_utf8(stderr)
+            .unwrap()
+            .contains("max_total_input_bytes"));
+    }
+
+    #[test]
+    fn workflow_enforces_output_size_limit() {
+        let dir = temp_dir("workflow_enforces_output_size_limit");
+        let workflow = dir.join("workflow.yaml");
+        let output = dir.join("out.bin");
+        fs::write(dir.join("input.bin"), b"larger than limit").unwrap();
+        fs::write(
+            &workflow,
+            format!(
+                r#"
+                version: 1
+                inputs:
+                  - id: source
+                    path: {}
+                tasks: []
+                outputs:
+                  - id: final
+                    from: source
+                    path: {}
+                limits:
+                  max_output_bytes: 1
+                "#,
+                yaml_path(dir.join("input.bin")),
+                yaml_path(&output)
+            ),
+        )
+        .unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            ["oxidepdf", "run", "--workflow", workflow.to_str().unwrap()],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 5);
+        assert_eq!(stdout, b"");
+        assert!(!output.exists());
+        assert!(String::from_utf8(stderr)
+            .unwrap()
+            .contains("max_output_bytes"));
+    }
+
+    #[test]
+    fn error_output_redacts_sensitive_material_and_paths() {
+        let dir = temp_dir("error_output_redacts_sensitive_material_and_paths");
+        let secret_dir = dir.join("secret-client-certificates");
+        fs::create_dir_all(&secret_dir).unwrap();
+        let missing = secret_dir.join("client-password-token.pem");
+        let workflow = dir.join("workflow.yaml");
+        fs::write(
+            &workflow,
+            format!(
+                r#"
+                version: 1
+                inputs:
+                  - id: source
+                    path: {}
+                tasks: []
+                outputs:
+                  - id: final
+                    from: source
+                    path: {}
+                "#,
+                yaml_path(&missing),
+                yaml_path(dir.join("out.bin"))
+            ),
+        )
+        .unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            ["oxidepdf", "run", "--workflow", workflow.to_str().unwrap()],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        let stderr = String::from_utf8(stderr).unwrap();
+
+        assert_eq!(code, 3);
+        assert_eq!(stdout, b"");
+        assert!(!stderr.contains(dir.to_str().unwrap()));
+        assert!(!stderr.to_ascii_lowercase().contains("password"));
+        assert!(!stderr.to_ascii_lowercase().contains("token"));
+        assert!(!stderr.to_ascii_lowercase().contains("certificate"));
+        assert!(!stderr.contains(".pem"));
+        assert!(!stderr.contains("stack backtrace"));
     }
 
     #[test]

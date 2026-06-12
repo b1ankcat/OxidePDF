@@ -94,7 +94,7 @@ fn unsupported_operator_exits_with_code_3() {
         .assert()
         .code(3)
         .stdout(predicate::eq(""))
-        .stderr(predicate::str::contains("parse_pdf"));
+        .stderr(predicate::str::contains("expected PDF"));
 
     assert!(!output.exists());
 }
