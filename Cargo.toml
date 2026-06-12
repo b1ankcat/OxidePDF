@@ -12,12 +12,12 @@ rust-version = "1.80"
 
 [workspace.dependencies]
 clap = { version = "4.5.40", features = ["derive"] }
-cms = { version = "0.2.3", features = ["std"] }
+cms = { version = "0.2.3", features = ["builder", "std"] }
 const-oid = "0.9.6"
 der = { version = "0.7.10", features = ["alloc"] }
 hayro = "0.7.1"
 oxidepdf-core = { path = "crates/oxidepdf-core" }
-p256 = { version = "0.13.2", default-features = false, features = ["ecdsa", "pkcs8", "sha256", "std"] }
+p256 = { version = "0.13.2", default-features = false, features = ["ecdsa", "pem", "pkcs8", "sha256", "std"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 serde_yaml = "0.9.34"
@@ -39,7 +39,7 @@ fontdb = { version = "0.23.0", default-features = false, features = ["fs", "std"
 skrifa = { version = "0.30.0", default-features = false, features = ["std"] }
 read-fonts = { version = "0.28.0", default-features = false }
 pem-rfc7468 = { version = "1.0.0-rc.1", features = ["alloc"] }
-x509-cert = "0.2.5"
+x509-cert = { version = "0.2.5", features = ["builder"] }
 zeroize = "1.8.2"
 assert_cmd = "2.1.1"
 predicates = "3.1.3"

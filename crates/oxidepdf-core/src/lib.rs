@@ -91,11 +91,13 @@ pub use security::{
     SecurityEncryptOptions, SecurityPermissionGetOptions, SecurityPermissionSetOptions,
 };
 pub use signatures::{
+    add_pdf_signature, add_pdf_timestamp, delete_pdf_signature_field,
     inspect_pdf_signature_markers_for_research, verify_pdf_signatures, ByteRangeResearch,
-    ByteRangeVerification, ContentsVerification, SignatureCheckState, SignatureCheckStatus,
-    SignatureDiagnostic, SignatureEntryReport, SignatureListEntry, SignatureListReport,
-    SignatureMode, SignatureOptions, SignatureResearchReport, SignatureVerdict,
-    SignatureVerificationReport,
+    ByteRangeVerification, ContentsVerification, SignatureAddOptions, SignatureCheckState,
+    SignatureCheckStatus, SignatureDeleteFieldOptions, SignatureDiagnostic, SignatureEntryReport,
+    SignatureListEntry, SignatureListReport, SignatureMode, SignatureOptions,
+    SignatureResearchReport, SignatureVerdict, SignatureVerificationReport, TimestampAddOptions,
+    TimestampReport,
 };
 
 #[cfg(test)]

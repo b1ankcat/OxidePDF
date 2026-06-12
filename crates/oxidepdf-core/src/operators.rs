@@ -1,8 +1,9 @@
 use crate::workflow::ResourceLimits;
 use crate::{
-    add_pdf_page_numbers_with_limits, booklet_pdf_pages_with_limits, compare_pdf_report,
-    compare_pdf_visual_diff, compress_pdf, crop_pdf_pages_with_limits, decrypt_pdf,
-    delete_blank_pdf_pages_with_limits, delete_pdf_pages_with_limits, edit_pdf_annotations,
+    add_pdf_page_numbers_with_limits, add_pdf_signature, add_pdf_timestamp,
+    booklet_pdf_pages_with_limits, compare_pdf_report, compare_pdf_visual_diff, compress_pdf,
+    crop_pdf_pages_with_limits, decrypt_pdf, delete_blank_pdf_pages_with_limits,
+    delete_pdf_pages_with_limits, delete_pdf_signature_field, edit_pdf_annotations,
     edit_pdf_attachment_artifacts, edit_pdf_colors, edit_pdf_images_artifacts, edit_pdf_metadata,
     edit_pdf_outline, encrypt_pdf, extract_pdf_attachment, extract_pdf_image,
     extract_pdf_pages_with_limits, extract_text_from_pdf, fill_pdf_form, image_artifacts_to_pdf,
@@ -20,8 +21,9 @@ use crate::{
     ImageToPdfOptions, InteractiveRemovalOptions, MergeOptions, MetadataEditOptions,
     MetadataInspectOptions, NUpOptions, OutlineEditOptions, OutlineInspectOptions, OverlayOptions,
     OxideError, PageNumbersOptions, PageSelectionOptions, PdfCompareOptions, PdfSecurityOptions,
-    RenderOptions, ReorderOptions, RotateOptions, ScalePagesOptions, SignatureMode,
-    SignatureOptions, SinglePageOptions, SplitOptions, SvgToPdfOptions, WatermarkOptions,
+    RenderOptions, ReorderOptions, RotateOptions, ScalePagesOptions, SignatureAddOptions,
+    SignatureDeleteFieldOptions, SignatureMode, SignatureOptions, SinglePageOptions, SplitOptions,
+    SvgToPdfOptions, TimestampAddOptions, WatermarkOptions,
 };
 use serde::{Deserialize, Serialize};
 
@@ -525,27 +527,42 @@ impl From<PdfInspectOptions> for PdfInspectOptionsDef {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "PdfSignOptionsDef", into = "PdfSignOptionsDef")]
 pub enum PdfSignOptions {
+    /// Add a digital signature.
+    Add(SignatureAddOptions),
     /// List PDF signatures without trust validation.
     List(SignatureOptions),
     /// Verify PDF signatures and certificate material.
     Verify(SignatureOptions),
+    /// Delete a signature field.
+    DeleteField(SignatureDeleteFieldOptions),
+    /// Add or inspect a timestamp token.
+    Timestamp(TimestampAddOptions),
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct PdfSignOptionsDef {
+    add: Option<SignatureAddOptions>,
     list: Option<SignatureOptions>,
     verify: Option<SignatureOptions>,
+    delete_field: Option<SignatureDeleteFieldOptions>,
+    timestamp: Option<TimestampAddOptions>,
 }
 
 impl TryFrom<PdfSignOptionsDef> for PdfSignOptions {
     type Error = OxideError;
 
     fn try_from(value: PdfSignOptionsDef) -> Result<Self, Self::Error> {
-        let operation_count = [value.list.is_some(), value.verify.is_some()]
-            .into_iter()
-            .filter(|present| *present)
-            .count();
+        let operation_count = [
+            value.add.is_some(),
+            value.list.is_some(),
+            value.verify.is_some(),
+            value.delete_field.is_some(),
+            value.timestamp.is_some(),
+        ]
+        .into_iter()
+        .filter(|present| *present)
+        .count();
 
         if operation_count != 1 {
             return Err(OxideError::InvalidWorkflow {
@@ -553,12 +570,21 @@ impl TryFrom<PdfSignOptionsDef> for PdfSignOptions {
             });
         }
 
+        if let Some(options) = value.add {
+            return Ok(Self::Add(options));
+        }
         if let Some(mut options) = value.list {
             options.mode = SignatureMode::List;
             return Ok(Self::List(options));
         }
         if let Some(options) = value.verify {
             return Ok(Self::Verify(options));
+        }
+        if let Some(options) = value.delete_field {
+            return Ok(Self::DeleteField(options));
+        }
+        if let Some(options) = value.timestamp {
+            return Ok(Self::Timestamp(options));
         }
 
         unreachable!("operation count was already checked");
@@ -568,12 +594,24 @@ impl TryFrom<PdfSignOptionsDef> for PdfSignOptions {
 impl From<PdfSignOptions> for PdfSignOptionsDef {
     fn from(value: PdfSignOptions) -> Self {
         match value {
+            PdfSignOptions::Add(options) => Self {
+                add: Some(options),
+                ..Self::default()
+            },
             PdfSignOptions::List(options) => Self {
                 list: Some(options),
                 ..Self::default()
             },
             PdfSignOptions::Verify(options) => Self {
                 verify: Some(options),
+                ..Self::default()
+            },
+            PdfSignOptions::DeleteField(options) => Self {
+                delete_field: Some(options),
+                ..Self::default()
+            },
+            PdfSignOptions::Timestamp(options) => Self {
+                timestamp: Some(options),
                 ..Self::default()
             },
         }
@@ -789,6 +827,10 @@ pub(crate) fn run_pdf_sign(
     limits: &ResourceLimits,
 ) -> Result<Artifact, OxideError> {
     match options {
+        PdfSignOptions::Add(options) => {
+            let input = single_pdf_input(inputs)?;
+            add_pdf_signature(input, options, limits).map(|bytes| Artifact::pdf(&bytes))
+        }
         PdfSignOptions::List(options) => {
             let input = single_pdf_input(inputs)?;
             verify_pdf_signatures(input, options, limits).map(Artifact::Text)
@@ -796,6 +838,14 @@ pub(crate) fn run_pdf_sign(
         PdfSignOptions::Verify(options) => {
             let input = single_pdf_input(inputs)?;
             verify_pdf_signatures(input, options, limits).map(Artifact::Text)
+        }
+        PdfSignOptions::DeleteField(options) => {
+            let input = single_pdf_input(inputs)?;
+            delete_pdf_signature_field(input, options, limits).map(|bytes| Artifact::pdf(&bytes))
+        }
+        PdfSignOptions::Timestamp(options) => {
+            let input = single_pdf_input(inputs)?;
+            add_pdf_timestamp(input, options, limits).map(Artifact::Text)
         }
     }
 }

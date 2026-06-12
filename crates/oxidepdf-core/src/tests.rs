@@ -1,8 +1,13 @@
 use super::*;
+use der::{pem::LineEnding, Decode, Encode, EncodePem};
 use lopdf::{dictionary, Dictionary, Object, Stream};
+use p256::pkcs8::EncodePrivateKey;
 use pdf_writer::Finish;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::str::FromStr;
+use std::time::Duration;
+use x509_cert::builder::Builder;
 
 const A4_WIDTH: f32 = 595.0;
 const A4_HEIGHT: f32 = 842.0;
@@ -184,6 +189,65 @@ fn parses_signature_list_workflow_operator_schema() {
         OperatorSpec::PdfSign(PdfSignOptions::List(SignatureOptions {
             mode: SignatureMode::List,
             trust_anchors: None,
+        }))
+    ));
+}
+
+#[test]
+fn parses_signature_mutation_workflow_operator_schema() {
+    let workflow: Workflow = serde_yaml::from_str(
+        r#"
+            version: 1
+            inputs:
+              - id: source
+                path: ./unsigned.pdf
+            tasks:
+              - id: add_sig
+                op:
+                  pdf_sign:
+                    add:
+                      field_name: Approval
+                      certificate: ./cert.pem
+                      private_key: ./key.pem
+                      contents_reserved_bytes: 8192
+                inputs: [source]
+              - id: delete_sig
+                op:
+                  pdf_sign:
+                    delete_field:
+                      field_name: Approval
+                      destructive: true
+                inputs: [add_sig]
+              - id: timestamp
+                op:
+                  pdf_sign:
+                    timestamp:
+                      token: ./timestamp.tsr
+                inputs: [delete_sig]
+            outputs:
+              - id: final
+                from: timestamp
+                path: ./report.json
+            "#,
+    )
+    .unwrap();
+
+    assert!(matches!(
+        workflow.tasks[0].op,
+        OperatorSpec::PdfSign(PdfSignOptions::Add(SignatureAddOptions { .. }))
+    ));
+    assert!(matches!(
+        workflow.tasks[1].op,
+        OperatorSpec::PdfSign(PdfSignOptions::DeleteField(SignatureDeleteFieldOptions {
+            destructive: true,
+            ..
+        }))
+    ));
+    assert!(matches!(
+        workflow.tasks[2].op,
+        OperatorSpec::PdfSign(PdfSignOptions::Timestamp(TimestampAddOptions {
+            token: Some(_),
+            tsa_url: None,
         }))
     ));
 }
@@ -2230,6 +2294,197 @@ fn pdf_operator_runner_emits_signature_list_report_without_trust_anchors() {
 }
 
 #[test]
+fn signature_field_delete_refuses_signed_field_without_destructive_flag() {
+    let pdf = pdf_with_signature_dictionary(vec![0, 64, 192, 64], vec![0x30, 0x82]);
+
+    let err = delete_pdf_signature_field(
+        &pdf,
+        &SignatureDeleteFieldOptions {
+            field_name: "Approval".to_owned(),
+            destructive: false,
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        err,
+        OxideError::InvalidInput {
+            reason: "signature field contains signed value material; pass destructive delete explicitly to remove it".to_owned()
+        }
+    );
+}
+
+#[test]
+fn signature_field_delete_removes_field_when_destructive_is_explicit() {
+    let pdf = pdf_with_signature_dictionary(vec![0, 64, 192, 64], vec![0x30, 0x82]);
+
+    let deleted = delete_pdf_signature_field(
+        &pdf,
+        &SignatureDeleteFieldOptions {
+            field_name: "Approval".to_owned(),
+            destructive: true,
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let report = verify_pdf_signatures(
+        &deleted,
+        &SignatureOptions {
+            mode: SignatureMode::Verify,
+            trust_anchors: Some(write_test_trust_anchors("delete_signature_field")),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let report: SignatureVerificationReport = serde_json::from_str(&report.text).unwrap();
+
+    assert_eq!(report.verdict, SignatureVerdict::Indeterminate);
+    assert!(report.signatures.is_empty());
+    assert!(report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "no_signatures"));
+}
+
+#[test]
+fn add_signature_creates_pdf_that_verifies_and_detects_tamper() {
+    let pdf = include_bytes!("../../../tests/test.pdf");
+    let (certificate_path, private_key_path) = write_p256_signing_material("add_signature");
+
+    let signed_pdf = add_pdf_signature(
+        pdf,
+        &SignatureAddOptions {
+            field_name: "Approval".to_owned(),
+            certificate: certificate_path.clone(),
+            private_key: private_key_path,
+            contents_reserved_bytes: Some(16_384),
+            appearance_field: None,
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let report = verify_pdf_signatures(
+        &signed_pdf,
+        &SignatureOptions {
+            mode: SignatureMode::Verify,
+            trust_anchors: Some(certificate_path.clone()),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let report: SignatureVerificationReport = serde_json::from_str(&report.text).unwrap();
+
+    assert_eq!(report.signatures.len(), 1);
+    assert_eq!(report.signatures[0].field_name.as_deref(), Some("Approval"));
+    assert_eq!(
+        report.signatures[0].digest_status.status,
+        SignatureCheckState::Passed
+    );
+    assert_eq!(
+        report.signatures[0].signature_status.status,
+        SignatureCheckState::Passed
+    );
+    assert_eq!(
+        report.signatures[0].certificate_chain_status.status,
+        SignatureCheckState::Passed
+    );
+
+    let mut tampered = signed_pdf.clone();
+    let byte_range = report.signatures[0].byte_range.values.unwrap();
+    let tamper_index = usize::try_from(byte_range[1] / 2).unwrap();
+    tampered[tamper_index] ^= 0x01;
+    let tampered_report = verify_pdf_signatures(
+        &tampered,
+        &SignatureOptions {
+            mode: SignatureMode::Verify,
+            trust_anchors: Some(certificate_path),
+        },
+        &ResourceLimits::default(),
+    );
+    assert!(
+        tampered_report.is_err() || {
+            let report: SignatureVerificationReport =
+                serde_json::from_str(&tampered_report.unwrap().text).unwrap();
+            report.verdict == SignatureVerdict::Invalid
+                || report
+                    .signatures
+                    .iter()
+                    .any(|signature| signature.digest_status.status == SignatureCheckState::Failed)
+        }
+    );
+}
+
+#[test]
+fn timestamp_add_requires_exactly_one_timestamp_source() {
+    let pdf = include_bytes!("../../../tests/test.pdf");
+
+    let err = add_pdf_timestamp(
+        pdf,
+        &TimestampAddOptions::default(),
+        &ResourceLimits::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        err,
+        OxideError::InvalidInput {
+            reason: "timestamp add requires exactly one of tsa_url or token".to_owned()
+        }
+    );
+}
+
+#[test]
+fn timestamp_add_reports_invalid_explicit_token_without_modifying_pdf() {
+    let pdf = include_bytes!("../../../tests/test.pdf");
+    let token_path = std::env::temp_dir().join(format!(
+        "oxidepdf_core_invalid_timestamp_{}.tsr",
+        std::process::id()
+    ));
+    std::fs::write(&token_path, b"not cms der").unwrap();
+
+    let report = add_pdf_timestamp(
+        pdf,
+        &TimestampAddOptions {
+            tsa_url: None,
+            token: Some(token_path),
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let report: TimestampReport = serde_json::from_str(&report.text).unwrap();
+
+    assert_eq!(report.status.status, SignatureCheckState::Failed);
+    assert!(report.input_preserved);
+    assert!(report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "timestamp_not_embedded"));
+}
+
+#[test]
+fn add_signature_validates_inputs_without_leaking_key_paths() {
+    let pdf = include_bytes!("../../../tests/test.pdf");
+    let err = add_pdf_signature(
+        pdf,
+        &SignatureAddOptions {
+            field_name: String::new(),
+            certificate: PathBuf::from("/sensitive/cert.pem"),
+            private_key: PathBuf::from("/sensitive/private-key.pem"),
+            contents_reserved_bytes: None,
+            appearance_field: None,
+        },
+        &ResourceLimits::default(),
+    )
+    .unwrap_err();
+    let message = err.to_string();
+
+    assert!(message.contains("signature field name must not be empty"));
+    assert!(!message.contains("/sensitive"));
+    assert!(!message.contains("private-key.pem"));
+}
+
+#[test]
 fn verify_pdf_signatures_without_trust_anchors_is_indeterminate_not_trusted() {
     let pdf = pdf_with_signature_dictionary(vec![0, 64, 192, 64], vec![0x30, 0x82]);
 
@@ -2981,6 +3236,48 @@ fn write_test_trust_anchors(name: &str) -> PathBuf {
     )
     .unwrap();
     path
+}
+
+fn write_p256_signing_material(name: &str) -> (PathBuf, PathBuf) {
+    let dir = std::env::temp_dir().join(format!(
+        "oxidepdf_core_{name}_{}_signing",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let private_key_path = dir.join("signer-key.pem");
+    let certificate_path = dir.join("signer-cert.pem");
+
+    let signing_key = p256::ecdsa::SigningKey::from_bytes((&[7u8; 32]).into()).unwrap();
+    let private_key_pem = signing_key
+        .to_pkcs8_pem(LineEnding::LF)
+        .unwrap()
+        .to_string();
+    let verifying_key = *signing_key.verifying_key();
+    let public_key = spki::SubjectPublicKeyInfoOwned::from_key(verifying_key).unwrap();
+    let subject = x509_cert::name::Name::from_str("CN=OxidePDF Test Signer,O=OxidePDF,C=US")
+        .unwrap()
+        .to_der()
+        .unwrap();
+    let subject = x509_cert::name::Name::from_der(&subject).unwrap();
+    let validity = x509_cert::time::Validity::from_now(Duration::from_secs(60 * 60)).unwrap();
+    let serial_number = x509_cert::serial_number::SerialNumber::from(42u32);
+    let certificate = x509_cert::builder::CertificateBuilder::new(
+        x509_cert::builder::Profile::Root,
+        serial_number,
+        validity,
+        subject,
+        public_key,
+        &signing_key,
+    )
+    .unwrap()
+    .build::<p256::ecdsa::DerSignature>()
+    .unwrap();
+    let certificate_pem = certificate.to_pem(LineEnding::LF).unwrap();
+
+    std::fs::write(&private_key_path, private_key_pem).unwrap();
+    std::fs::write(&certificate_path, certificate_pem).unwrap();
+    (certificate_path, private_key_path)
 }
 
 fn write_empty_trust_anchors(name: &str) -> PathBuf {

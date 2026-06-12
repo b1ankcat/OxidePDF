@@ -16,9 +16,10 @@ use oxidepdf_core::{
     PdfEditOptions, PdfInspectOptions, PdfOperatorRunner, PdfSecurityOptions, PdfSignOptions,
     PermissionPolicy, RenderOptions, ReorderOptions, RotateOptions, ScalePagesOptions,
     SecurityDecryptOptions, SecurityEncryptOptions, SecurityPermissionGetOptions,
-    SecurityPermissionSetOptions, SignatureOptions, SinglePageOptions, SplitOptions,
-    SvgToPdfOptions, TaskId, TaskSpec, VisualDiffOptions, WatermarkKind, WatermarkOptions,
-    Workflow, WorkflowMetadata, WorkflowVersion,
+    SecurityPermissionSetOptions, SignatureAddOptions, SignatureDeleteFieldOptions,
+    SignatureOptions, SinglePageOptions, SplitOptions, SvgToPdfOptions, TaskId, TaskSpec,
+    TimestampAddOptions, VisualDiffOptions, WatermarkKind, WatermarkOptions, Workflow,
+    WorkflowMetadata, WorkflowVersion,
 };
 use std::fs;
 use std::io::{self, Read, Write};
@@ -58,6 +59,9 @@ enum Commands {
     /// List or verify PDF digital signatures.
     #[command(subcommand)]
     Sign(SignCommand),
+    /// Add document timestamp material.
+    #[command(subcommand)]
+    Timestamp(TimestampCommand),
     /// Inspect, set, delete, or validate document metadata.
     #[command(subcommand)]
     Metadata(MetadataCommand),
@@ -172,10 +176,21 @@ enum PdfSignCommand {
 
 #[derive(Debug, Subcommand)]
 enum SignCommand {
+    /// Add a PDF digital signature.
+    Add(SignAddArgs),
     /// List PDF signatures.
     List(ListSignaturesArgs),
     /// Verify PDF signatures and certificates.
     Verify(VerifySignaturesArgs),
+    /// Delete a PDF signature field.
+    #[command(name = "delete-field")]
+    DeleteField(SignDeleteFieldArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum TimestampCommand {
+    /// Add or inspect explicit timestamp material.
+    Add(TimestampAddArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -693,6 +708,40 @@ struct WatermarkArgs {
 }
 
 #[derive(Debug, Parser)]
+struct SignAddArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Signature field name to create or fill.
+    #[arg(long)]
+    field_name: String,
+
+    /// PEM file containing the signer certificate.
+    #[arg(long)]
+    certificate: PathBuf,
+
+    /// PEM file containing the signer private key.
+    #[arg(long)]
+    private_key: PathBuf,
+
+    /// Reserved signature Contents bytes.
+    #[arg(long)]
+    contents_reserved_bytes: Option<usize>,
+
+    /// Optional visual signature appearance field to bind.
+    #[arg(long)]
+    appearance_field: Option<String>,
+
+    /// Output signed PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
 struct VerifySignaturesArgs {
     /// Input PDF file, or `-` to read from stdin.
     input: PathBuf,
@@ -714,6 +763,50 @@ struct VerifySignaturesArgs {
 struct ListSignaturesArgs {
     /// Input PDF file, or `-` to read from stdin.
     input: PathBuf,
+
+    /// Output report file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct SignDeleteFieldArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Signature field name to delete.
+    #[arg(long)]
+    field_name: String,
+
+    /// Allow deleting a field that contains signature value material.
+    #[arg(long)]
+    destructive: bool,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct TimestampAddArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Explicit TSA endpoint. Live TSA requests are not performed by this offline build.
+    #[arg(long)]
+    tsa_url: Option<String>,
+
+    /// Explicit RFC 3161 timestamp token DER file.
+    #[arg(long)]
+    token: Option<PathBuf>,
 
     /// Output report file, or `-` to write to stdout.
     #[arg(short, long)]
@@ -1330,6 +1423,7 @@ fn cli_reads_stdin(cli: &Cli) -> bool {
         Some(Commands::Compare(args)) => is_stdio(&args.left) || is_stdio(&args.right),
         Some(Commands::PdfSign(command)) => pdf_sign_reads_stdin(command),
         Some(Commands::Sign(command)) => sign_reads_stdin(command),
+        Some(Commands::Timestamp(command)) => timestamp_reads_stdin(command),
         Some(Commands::Metadata(command)) => metadata_reads_stdin(command),
         Some(Commands::Outline(command)) => outline_reads_stdin(command),
         Some(Commands::Attach(command)) => attach_reads_stdin(command),
@@ -1388,8 +1482,16 @@ fn pdf_sign_reads_stdin(command: &PdfSignCommand) -> bool {
 
 fn sign_reads_stdin(command: &SignCommand) -> bool {
     match command {
+        SignCommand::Add(args) => is_stdio(&args.input),
         SignCommand::List(args) => is_stdio(&args.input),
         SignCommand::Verify(args) => is_stdio(&args.input),
+        SignCommand::DeleteField(args) => is_stdio(&args.input),
+    }
+}
+
+fn timestamp_reads_stdin(command: &TimestampCommand) -> bool {
+    match command {
+        TimestampCommand::Add(args) => is_stdio(&args.input),
     }
 }
 
@@ -1478,6 +1580,7 @@ where
         Some(Commands::Compare(args)) => run_compare(args, stdin, stdout),
         Some(Commands::PdfSign(command)) => run_pdf_sign(command, stdin, stdout),
         Some(Commands::Sign(command)) => run_sign(command, stdin, stdout),
+        Some(Commands::Timestamp(command)) => run_timestamp(command, stdin, stdout),
         Some(Commands::Metadata(command)) => run_metadata(command, stdin, stdout),
         Some(Commands::Outline(command)) => run_outline(command, stdin, stdout),
         Some(Commands::Attach(command)) => run_attach(command, stdin, stdout),
@@ -1552,8 +1655,20 @@ fn run_pdf_sign(
 
 fn run_sign(command: SignCommand, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError> {
     match command {
+        SignCommand::Add(args) => run_add_signature(args, stdin, stdout),
         SignCommand::List(args) => run_list_signatures(args, stdin, stdout),
         SignCommand::Verify(args) => run_verify_signatures(args, stdin, stdout),
+        SignCommand::DeleteField(args) => run_delete_signature_field(args, stdin, stdout),
+    }
+}
+
+fn run_timestamp(
+    command: TimestampCommand,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    match command {
+        TimestampCommand::Add(args) => run_add_timestamp(args, stdin, stdout),
     }
 }
 
@@ -1966,6 +2081,27 @@ fn run_verify_signatures(
     execute_and_write_workflow(workflow, stdin, args.force, stdout)
 }
 
+fn run_add_signature(
+    args: SignAddArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "add_signature",
+        OperatorSpec::PdfSign(PdfSignOptions::Add(SignatureAddOptions {
+            field_name: args.field_name,
+            certificate: args.certificate,
+            private_key: args.private_key,
+            contents_reserved_bytes: args.contents_reserved_bytes,
+            appearance_field: args.appearance_field,
+        })),
+    );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
 fn run_list_signatures(
     args: ListSignaturesArgs,
     stdin: &[u8],
@@ -1978,6 +2114,42 @@ fn run_list_signatures(
         OperatorSpec::PdfSign(PdfSignOptions::List(SignatureOptions {
             mode: oxidepdf_core::SignatureMode::List,
             trust_anchors: None,
+        })),
+    );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_delete_signature_field(
+    args: SignDeleteFieldArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "delete_signature_field",
+        OperatorSpec::PdfSign(PdfSignOptions::DeleteField(SignatureDeleteFieldOptions {
+            field_name: args.field_name,
+            destructive: args.destructive,
+        })),
+    );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_add_timestamp(
+    args: TimestampAddArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "add_timestamp",
+        OperatorSpec::PdfSign(PdfSignOptions::Timestamp(TimestampAddOptions {
+            tsa_url: args.tsa_url,
+            token: args.token,
         })),
     );
 
@@ -3023,8 +3195,13 @@ fn sanitized_io_error(error: &io::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use der::{pem::LineEnding, Decode, Encode, EncodePem};
     use lopdf::dictionary;
+    use p256::pkcs8::EncodePrivateKey;
     use std::fs;
+    use std::str::FromStr;
+    use std::time::Duration;
+    use x509_cert::builder::Builder;
 
     #[test]
     fn clap_definition_is_valid() {
@@ -4191,6 +4368,178 @@ mod tests {
     }
 
     #[test]
+    fn sign_delete_field_command_requires_destructive_for_signed_field() {
+        let dir = temp_dir("sign_delete_field_command_requires_destructive");
+        let input = write_signature_pdf(&dir);
+        let output = dir.join("deleted.pdf");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "sign",
+                "delete-field",
+                input.to_str().unwrap(),
+                "--field-name",
+                "Approval",
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        let stderr = String::from_utf8(stderr).unwrap();
+
+        assert_eq!(code, 3);
+        assert_eq!(stdout, b"");
+        assert!(stderr.contains("signed value material"));
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn sign_delete_field_command_deletes_when_destructive_is_explicit() {
+        let dir = temp_dir("sign_delete_field_command_deletes");
+        let input = write_signature_pdf(&dir);
+        let output = dir.join("deleted.pdf");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "sign",
+                "delete-field",
+                input.to_str().unwrap(),
+                "--field-name",
+                "Approval",
+                "--destructive",
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        let report_output = dir.join("report.json");
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "sign",
+                "verify",
+                output.to_str().unwrap(),
+                "-o",
+                report_output.to_str().unwrap(),
+            ],
+            [],
+            &mut Vec::new(),
+            &mut Vec::new(),
+        );
+        assert_eq!(code, 0);
+        let report: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(report_output).unwrap()).unwrap();
+        assert_eq!(report["verdict"], "indeterminate");
+        assert!(report["signatures"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn timestamp_add_command_requires_token_or_tsa_url() {
+        let dir = temp_dir("timestamp_add_command_requires_source");
+        let input = write_signature_pdf(&dir);
+        let output = dir.join("timestamp-report.json");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "timestamp",
+                "add",
+                input.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        let stderr = String::from_utf8(stderr).unwrap();
+
+        assert_eq!(code, 3);
+        assert_eq!(stdout, b"");
+        assert!(stderr.contains("exactly one of tsa_url or token"));
+    }
+
+    #[test]
+    fn sign_add_command_writes_signed_pdf() {
+        let dir = temp_dir("sign_add_command_writes_signed_pdf");
+        let input = fixture_pdf();
+        let output = dir.join("new-signed.pdf");
+        let (cert, key) = write_p256_signing_material(&dir);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "sign",
+                "add",
+                input.to_str().unwrap(),
+                "--field-name",
+                "Approval",
+                "--certificate",
+                cert.to_str().unwrap(),
+                "--private-key",
+                key.to_str().unwrap(),
+                "--contents-reserved-bytes",
+                "16384",
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        let report_output = dir.join("signature-report.json");
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "sign",
+                "verify",
+                output.to_str().unwrap(),
+                "--trust-anchors",
+                cert.to_str().unwrap(),
+                "-o",
+                report_output.to_str().unwrap(),
+            ],
+            [],
+            &mut Vec::new(),
+            &mut Vec::new(),
+        );
+        assert_eq!(code, 0);
+        let report: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(report_output).unwrap()).unwrap();
+        assert_eq!(report["signatures"][0]["digest_status"]["status"], "passed");
+        assert_eq!(
+            report["signatures"][0]["signature_status"]["status"],
+            "passed"
+        );
+        assert_eq!(
+            report["signatures"][0]["certificate_chain_status"]["status"],
+            "passed"
+        );
+    }
+
+    #[test]
     fn metadata_commands_set_and_get_json_report() {
         let dir = temp_dir("metadata_commands_set_and_get_json_report");
         let input = dir.join("input.pdf");
@@ -5111,6 +5460,41 @@ mod tests {
         )
         .unwrap();
         path
+    }
+
+    fn write_p256_signing_material(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+        let private_key_path = dir.join("signer-key.pem");
+        let certificate_path = dir.join("signer-cert.pem");
+        let signing_key = p256::ecdsa::SigningKey::from_bytes((&[7u8; 32]).into()).unwrap();
+        let private_key_pem = signing_key
+            .to_pkcs8_pem(LineEnding::LF)
+            .unwrap()
+            .to_string();
+        let verifying_key = *signing_key.verifying_key();
+        let public_key = spki::SubjectPublicKeyInfoOwned::from_key(verifying_key).unwrap();
+        let subject = x509_cert::name::Name::from_str("CN=OxidePDF Test Signer,O=OxidePDF,C=US")
+            .unwrap()
+            .to_der()
+            .unwrap();
+        let subject = x509_cert::name::Name::from_der(&subject).unwrap();
+        let validity = x509_cert::time::Validity::from_now(Duration::from_secs(60 * 60)).unwrap();
+        let serial_number = x509_cert::serial_number::SerialNumber::from(42u32);
+        let certificate = x509_cert::builder::CertificateBuilder::new(
+            x509_cert::builder::Profile::Root,
+            serial_number,
+            validity,
+            subject,
+            public_key,
+            &signing_key,
+        )
+        .unwrap()
+        .build::<p256::ecdsa::DerSignature>()
+        .unwrap();
+        let certificate_pem = certificate.to_pem(LineEnding::LF).unwrap();
+
+        fs::write(&private_key_path, private_key_pem).unwrap();
+        fs::write(&certificate_path, certificate_pem).unwrap();
+        (certificate_path, private_key_path)
     }
 
     fn write_signature_pdf(dir: &Path) -> std::path::PathBuf {
