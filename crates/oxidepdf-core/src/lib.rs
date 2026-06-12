@@ -639,6 +639,10 @@ impl OperatorRunner for PdfOperatorRunner {
                 let input = single_svg_input(inputs)?;
                 svg_to_pdf(input, options, &self.limits).map(Artifact::Pdf)
             }
+            OperatorSpec::Render(options) => {
+                let input = single_pdf_input(inputs)?;
+                render_pdf_page(input, options, &self.limits).map(Artifact::Image)
+            }
             other => Err(OxideError::UnsupportedPdfFeature {
                 feature: format!("{other:?}"),
             }),
@@ -764,6 +768,61 @@ pub fn svg_to_pdf(
     };
 
     Ok(PdfArtifact { bytes })
+}
+
+/// Renders a one-based PDF page to PNG bytes.
+pub fn render_pdf_page(
+    input: &[u8],
+    options: &RenderOptions,
+    limits: &ResourceLimits,
+) -> Result<ImageArtifact, OxideError> {
+    enforce_input_bytes(input.len(), limits)?;
+    let format = options.format.as_deref().unwrap_or("png");
+    if format != "png" {
+        return Err(OxideError::InvalidInput {
+            reason: format!("unsupported render format '{format}'"),
+        });
+    }
+    if options.page == 0 {
+        return Err(OxideError::InvalidInput {
+            reason: "page number must be one or greater".to_owned(),
+        });
+    }
+    let scale = options.scale.unwrap_or(1.0);
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(OxideError::InvalidInput {
+            reason: "render scale must be greater than zero".to_owned(),
+        });
+    }
+
+    let pdf = hayro::hayro_syntax::Pdf::new(input.to_vec()).map_err(|_| OxideError::RenderPdf)?;
+    let page_count = pdf.pages().len();
+    enforce_max_pages(page_count, limits)?;
+    let page_index = usize::try_from(options.page - 1).map_err(|_| OxideError::InvalidInput {
+        reason: format!("page {} is out of range 1-{page_count}", options.page),
+    })?;
+    let page = pdf
+        .pages()
+        .get(page_index)
+        .ok_or_else(|| OxideError::InvalidInput {
+            reason: format!("page {} is out of range 1-{page_count}", options.page),
+        })?;
+
+    let cache = hayro::RenderCache::new();
+    let interpreter_settings = hayro::hayro_interpret::InterpreterSettings::default();
+    let render_settings = hayro::RenderSettings {
+        x_scale: scale,
+        y_scale: scale,
+        bg_color: hayro::vello_cpu::color::palette::css::WHITE,
+        ..Default::default()
+    };
+    let pixmap = hayro::render(page, &cache, &interpreter_settings, &render_settings);
+    let bytes = pixmap.into_png().map_err(|_| OxideError::RenderPdf)?;
+    if bytes.is_empty() {
+        return Err(OxideError::RenderPdf);
+    }
+
+    Ok(ImageArtifact { bytes })
 }
 
 /// Validates a workflow and returns a topological execution plan.
@@ -1986,6 +2045,45 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err, OxideError::SvgParse);
+    }
+
+    #[test]
+    fn render_pdf_page_writes_png_for_real_pdf() {
+        let pdf = include_bytes!("../../../tests/test.pdf");
+
+        let image = render_pdf_page(
+            pdf,
+            &RenderOptions {
+                page: 1,
+                format: Some("png".to_owned()),
+                scale: Some(1.0),
+            },
+            &ResourceLimits::default(),
+        )
+        .unwrap();
+        let decoded = image::load_from_memory(&image.bytes).unwrap();
+
+        assert!(decoded.width() > 0);
+        assert!(decoded.height() > 0);
+    }
+
+    #[test]
+    fn render_pdf_page_rejects_out_of_range_page() {
+        let pdf = include_bytes!("../../../tests/test.pdf");
+
+        let err = render_pdf_page(
+            pdf,
+            &RenderOptions {
+                page: 99,
+                format: Some("png".to_owned()),
+                scale: Some(1.0),
+            },
+            &ResourceLimits::default(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, OxideError::InvalidInput { .. }));
+        assert!(err.to_string().contains("page 99 is out of range"));
     }
 
     fn workflow_from_json(json: &str) -> Workflow {

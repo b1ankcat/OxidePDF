@@ -3,8 +3,8 @@
 use clap::{CommandFactory, Parser, Subcommand};
 use oxidepdf_core::{
     execute_workflow, Artifact, ArtifactRef, ArtifactStore, ImageToPdfOptions, MergeOptions,
-    OperatorSpec, OxideError, PdfOperatorRunner, ReorderOptions, RotateOptions, SplitOptions,
-    SvgToPdfOptions, TaskId, TaskSpec, Workflow, WorkflowMetadata, WorkflowVersion,
+    OperatorSpec, OxideError, PdfOperatorRunner, RenderOptions, ReorderOptions, RotateOptions,
+    SplitOptions, SvgToPdfOptions, TaskId, TaskSpec, Workflow, WorkflowMetadata, WorkflowVersion,
 };
 use std::fs;
 use std::io::{self, Read, Write};
@@ -41,6 +41,8 @@ enum Commands {
     /// Convert an SVG document into a PDF.
     #[command(name = "svg2pdf")]
     Svg2pdf(SvgToPdfArgs),
+    /// Render a PDF page into a PNG image.
+    Render(RenderArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -146,19 +148,44 @@ struct SvgToPdfArgs {
     force: bool,
 }
 
+#[derive(Debug, Parser)]
+struct RenderArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// One-based page number to render.
+    #[arg(long)]
+    page: u32,
+
+    /// Render scale. For 144 DPI output from a 72 DPI PDF, use 2.0.
+    #[arg(long)]
+    scale: Option<f32>,
+
+    /// Output PNG file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
 /// Parses CLI arguments and runs the requested command.
 pub fn run() -> i32 {
-    let mut stdin_buffer = Vec::new();
-    if let Err(error) = io::stdin().lock().read_to_end(&mut stdin_buffer) {
-        let _ = writeln!(io::stderr().lock(), "oxidepdf: input error: {error}");
-        return 3;
-    }
+    let args = std::env::args_os().collect::<Vec<_>>();
+    let stdin_buffer = match stdin_for_args(args.clone()) {
+        Ok(buffer) => buffer,
+        Err(error) => {
+            let _ = writeln!(io::stderr().lock(), "oxidepdf: {error}");
+            return error.exit_code();
+        }
+    };
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
     let stderr = io::stderr();
     let mut stderr = stderr.lock();
 
-    run_with_io(std::env::args_os(), &stdin_buffer, &mut stdout, &mut stderr)
+    run_with_io(args, &stdin_buffer, &mut stdout, &mut stderr)
 }
 
 /// Runs the CLI with injectable IO for tests.
@@ -186,6 +213,37 @@ pub fn command() -> clap::Command {
     Cli::command()
 }
 
+fn stdin_for_args<I, S>(args: I) -> Result<Vec<u8>, CliError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<std::ffi::OsString> + Clone,
+{
+    let cli = Cli::try_parse_from(args).map_err(CliError::Arguments)?;
+    if cli_reads_stdin(&cli) {
+        let mut stdin_buffer = Vec::new();
+        io::stdin()
+            .lock()
+            .read_to_end(&mut stdin_buffer)
+            .map_err(CliError::Input)?;
+        Ok(stdin_buffer)
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+fn cli_reads_stdin(cli: &Cli) -> bool {
+    match &cli.command {
+        Some(Commands::Run(args)) => is_stdio(&args.workflow),
+        Some(Commands::Merge(args)) => args.inputs.iter().any(|input| is_stdio(input)),
+        Some(Commands::Split(args)) | Some(Commands::Reorder(args)) => is_stdio(&args.input),
+        Some(Commands::Rotate(args)) => is_stdio(&args.input),
+        Some(Commands::Img2pdf(args)) => args.inputs.iter().any(|input| is_stdio(input)),
+        Some(Commands::Svg2pdf(args)) => is_stdio(&args.input),
+        Some(Commands::Render(args)) => is_stdio(&args.input),
+        None => false,
+    }
+}
+
 fn run_with_io_result<I, S>(args: I, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError>
 where
     I: IntoIterator<Item = S>,
@@ -202,6 +260,7 @@ where
         Some(Commands::Rotate(args)) => run_rotate(args, stdin, stdout),
         Some(Commands::Img2pdf(args)) => run_img2pdf(args, stdin, stdout),
         Some(Commands::Svg2pdf(args)) => run_svg2pdf(args, stdin, stdout),
+        Some(Commands::Render(args)) => run_render(args, stdin, stdout),
         None => Ok(()),
     }
 }
@@ -326,6 +385,21 @@ fn run_svg2pdf(args: SvgToPdfArgs, stdin: &[u8], stdout: &mut impl Write) -> Res
         "svg2pdf",
         OperatorSpec::SvgToPdf(SvgToPdfOptions {
             rasterize: args.rasterize,
+        }),
+    );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_render(args: RenderArgs, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError> {
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "render",
+        OperatorSpec::Render(RenderOptions {
+            page: args.page,
+            format: Some("png".to_owned()),
+            scale: args.scale,
         }),
     );
 
@@ -521,6 +595,31 @@ mod tests {
         let version = command.get_version().unwrap();
 
         assert_eq!(version, env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn render_file_input_does_not_require_stdin() {
+        let stdin = stdin_for_args([
+            "oxidepdf",
+            "render",
+            "input.pdf",
+            "--page",
+            "1",
+            "-o",
+            "output.png",
+        ])
+        .unwrap();
+
+        assert!(stdin.is_empty());
+    }
+
+    #[test]
+    fn render_stdio_input_requires_stdin() {
+        let cli =
+            Cli::try_parse_from(["oxidepdf", "render", "-", "--page", "1", "-o", "output.png"])
+                .unwrap();
+
+        assert!(cli_reads_stdin(&cli));
     }
 
     #[test]

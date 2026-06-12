@@ -10,6 +10,7 @@ description = "Core contracts and operators for OxidePDF."
 default = []
 
 [dependencies]
+hayro.workspace = true
 image.workspace = true
 lopdf.workspace = true
 pdf-writer.workspace = true

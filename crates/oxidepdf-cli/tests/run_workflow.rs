@@ -214,6 +214,54 @@ fn svg2pdf_command_writes_parseable_pdf() {
     assert_eq!(pdf_page_count(&output), 1);
 }
 
+#[test]
+fn render_command_writes_png() {
+    let dir = temp_dir("render_command_writes_png");
+    let output = dir.join("page.png");
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args([
+            "render",
+            fixture_pdf().to_str().unwrap(),
+            "--page",
+            "1",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq(""))
+        .stderr(predicate::eq(""));
+
+    let image = image::load_from_memory(&fs::read(output).unwrap()).unwrap();
+    assert!(image.width() > 0);
+    assert!(image.height() > 0);
+}
+
+#[test]
+fn render_command_rejects_out_of_range_page() {
+    let dir = temp_dir("render_command_rejects_out_of_range_page");
+    let output = dir.join("page.png");
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args([
+            "render",
+            fixture_pdf().to_str().unwrap(),
+            "--page",
+            "99",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .code(3)
+        .stdout(predicate::eq(""))
+        .stderr(predicate::str::contains("page 99 is out of range"));
+
+    assert!(!output.exists());
+}
+
 fn temp_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "oxidepdf_cli_integration_{}_{}",
