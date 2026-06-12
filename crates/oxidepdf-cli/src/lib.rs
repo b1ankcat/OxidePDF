@@ -2,10 +2,12 @@
 
 use clap::{CommandFactory, Parser, Subcommand};
 use oxidepdf_core::{
-    execute_workflow, Artifact, ArtifactRef, ArtifactStore, ExtractTextOptions, ImageToPdfOptions,
-    MergeOptions, OperatorSpec, OxideError, PdfCompareOptions, PdfEditOptions, PdfInspectOptions,
-    PdfOperatorRunner, PdfSecurityOptions, PdfSignOptions, RenderOptions, ReorderOptions,
-    RotateOptions, SignatureOptions, SplitOptions, SvgToPdfOptions, TaskId, TaskSpec,
+    execute_workflow, Artifact, ArtifactRef, ArtifactStore, BookletOptions, CropPagesOptions,
+    DeleteBlankPagesOptions, ExtractTextOptions, ImageToPdfOptions, MergeOptions, NUpOptions,
+    OperatorSpec, OxideError, PageNumberPosition, PageNumbersOptions, PageSelectionOptions,
+    PdfCompareOptions, PdfEditOptions, PdfInspectOptions, PdfOperatorRunner, PdfSecurityOptions,
+    PdfSignOptions, RenderOptions, ReorderOptions, RotateOptions, ScalePagesOptions,
+    SignatureOptions, SinglePageOptions, SplitOptions, SvgToPdfOptions, TaskId, TaskSpec,
     WatermarkKind, WatermarkOptions, Workflow, WorkflowMetadata, WorkflowVersion,
 };
 use std::fs;
@@ -56,12 +58,39 @@ enum PdfEditCommand {
     /// Keep selected pages from a PDF.
     #[command(name = "keep-pages")]
     KeepPages(PageSelectionArgs),
+    /// Extract selected pages from a PDF.
+    #[command(name = "extract-pages")]
+    ExtractPages(PageSelectionArgs),
     /// Reorder pages in a PDF.
     #[command(name = "reorder-pages")]
     ReorderPages(PageSelectionArgs),
     /// Rotate selected PDF pages.
     #[command(name = "rotate-pages")]
     RotatePages(RotateArgs),
+    /// Delete selected pages from a PDF.
+    #[command(name = "delete-pages")]
+    DeletePages(PageSelectionArgs),
+    /// Delete structurally blank pages from a PDF.
+    #[command(name = "delete-blank-pages")]
+    DeleteBlankPages(DeleteBlankPagesArgs),
+    /// Crop selected PDF pages.
+    #[command(name = "crop-pages")]
+    CropPages(CropPagesArgs),
+    /// Scale selected PDF pages.
+    #[command(name = "scale-pages")]
+    ScalePages(ScalePagesArgs),
+    /// Combine all pages into one tall page.
+    #[command(name = "single-page")]
+    SinglePage(SinglePageArgs),
+    /// Lay multiple source pages on each output page.
+    #[command(name = "nup")]
+    NUp(NUpArgs),
+    /// Arrange pages for booklet printing.
+    #[command(name = "booklet")]
+    Booklet(BookletArgs),
+    /// Add page numbers to pages.
+    #[command(name = "page-numbers")]
+    PageNumbers(PageNumbersArgs),
     /// Convert one or more images into PDF pages.
     #[command(name = "img2pdf")]
     Img2pdf(ImageToPdfArgs),
@@ -151,6 +180,187 @@ struct RotateArgs {
     /// Overwrite output files when they already exist.
     #[arg(long)]
     force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct DeleteBlankPagesArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct CropPagesArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Page range, for example `1,3-5`. Defaults to all pages.
+    #[arg(long)]
+    pages: Option<String>,
+
+    /// Left coordinate of the new CropBox.
+    #[arg(long)]
+    left: f32,
+
+    /// Bottom coordinate of the new CropBox.
+    #[arg(long)]
+    bottom: f32,
+
+    /// Right coordinate of the new CropBox.
+    #[arg(long)]
+    right: f32,
+
+    /// Top coordinate of the new CropBox.
+    #[arg(long)]
+    top: f32,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct ScalePagesArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Page range, for example `1,3-5`. Defaults to all pages.
+    #[arg(long)]
+    pages: Option<String>,
+
+    /// Scale factor applied to page boxes and page contents.
+    #[arg(long)]
+    factor: f32,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct SinglePageArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct NUpArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Number of columns on each output page.
+    #[arg(long)]
+    columns: u32,
+
+    /// Number of rows on each output page.
+    #[arg(long)]
+    rows: u32,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct BookletArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct PageNumbersArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Page range, for example `1,3-5`. Defaults to all pages.
+    #[arg(long)]
+    pages: Option<String>,
+
+    /// First number written on the first selected page.
+    #[arg(long, default_value_t = 1)]
+    start: u32,
+
+    /// Text before the number.
+    #[arg(long, default_value = "")]
+    prefix: String,
+
+    /// Text after the number.
+    #[arg(long, default_value = "")]
+    suffix: String,
+
+    /// Font size in PDF points.
+    #[arg(long, default_value_t = 12.0)]
+    font_size: f32,
+
+    /// Page number placement.
+    #[arg(long, value_enum, default_value_t = CliPageNumberPosition::BottomCenter)]
+    position: CliPageNumberPosition,
+
+    /// Output PDF file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum CliPageNumberPosition {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+}
+
+impl From<CliPageNumberPosition> for PageNumberPosition {
+    fn from(value: CliPageNumberPosition) -> Self {
+        match value {
+            CliPageNumberPosition::TopLeft => Self::TopLeft,
+            CliPageNumberPosition::TopCenter => Self::TopCenter,
+            CliPageNumberPosition::TopRight => Self::TopRight,
+            CliPageNumberPosition::BottomLeft => Self::BottomLeft,
+            CliPageNumberPosition::BottomCenter => Self::BottomCenter,
+            CliPageNumberPosition::BottomRight => Self::BottomRight,
+        }
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -421,10 +631,18 @@ fn cli_reads_stdin(cli: &Cli) -> bool {
 fn pdf_edit_reads_stdin(command: &PdfEditCommand) -> bool {
     match command {
         PdfEditCommand::Merge(args) => args.inputs.iter().any(|input| is_stdio(input)),
-        PdfEditCommand::KeepPages(args) | PdfEditCommand::ReorderPages(args) => {
-            is_stdio(&args.input)
-        }
+        PdfEditCommand::KeepPages(args)
+        | PdfEditCommand::ExtractPages(args)
+        | PdfEditCommand::ReorderPages(args) => is_stdio(&args.input),
         PdfEditCommand::RotatePages(args) => is_stdio(&args.input),
+        PdfEditCommand::DeletePages(args) => is_stdio(&args.input),
+        PdfEditCommand::DeleteBlankPages(args) => is_stdio(&args.input),
+        PdfEditCommand::CropPages(args) => is_stdio(&args.input),
+        PdfEditCommand::ScalePages(args) => is_stdio(&args.input),
+        PdfEditCommand::SinglePage(args) => is_stdio(&args.input),
+        PdfEditCommand::NUp(args) => is_stdio(&args.input),
+        PdfEditCommand::Booklet(args) => is_stdio(&args.input),
+        PdfEditCommand::PageNumbers(args) => is_stdio(&args.input),
         PdfEditCommand::Img2pdf(args) => args.inputs.iter().any(|input| is_stdio(input)),
         PdfEditCommand::Svg2pdf(args) => is_stdio(&args.input),
         PdfEditCommand::Watermark(args) => {
@@ -473,10 +691,21 @@ fn run_pdf_edit(
         PdfEditCommand::KeepPages(args) => {
             run_page_selection(args, stdin, stdout, PageCommand::KeepPages)
         }
+        PdfEditCommand::ExtractPages(args) => {
+            run_page_selection(args, stdin, stdout, PageCommand::ExtractPages)
+        }
         PdfEditCommand::ReorderPages(args) => {
             run_page_selection(args, stdin, stdout, PageCommand::ReorderPages)
         }
         PdfEditCommand::RotatePages(args) => run_rotate(args, stdin, stdout),
+        PdfEditCommand::DeletePages(args) => run_delete_pages(args, stdin, stdout),
+        PdfEditCommand::DeleteBlankPages(args) => run_delete_blank_pages(args, stdin, stdout),
+        PdfEditCommand::CropPages(args) => run_crop_pages(args, stdin, stdout),
+        PdfEditCommand::ScalePages(args) => run_scale_pages(args, stdin, stdout),
+        PdfEditCommand::SinglePage(args) => run_single_page(args, stdin, stdout),
+        PdfEditCommand::NUp(args) => run_nup(args, stdin, stdout),
+        PdfEditCommand::Booklet(args) => run_booklet(args, stdin, stdout),
+        PdfEditCommand::PageNumbers(args) => run_page_numbers(args, stdin, stdout),
         PdfEditCommand::Img2pdf(args) => run_img2pdf(args, stdin, stdout),
         PdfEditCommand::Svg2pdf(args) => run_svg2pdf(args, stdin, stdout),
         PdfEditCommand::Watermark(args) => run_watermark(args, stdin, stdout),
@@ -554,12 +783,18 @@ fn run_page_selection(
 ) -> Result<(), CliError> {
     let task_id = match command {
         PageCommand::KeepPages => "keep_pages",
+        PageCommand::ExtractPages => "extract_pages",
         PageCommand::ReorderPages => "reorder_pages",
     };
     let op = match command {
         PageCommand::KeepPages => OperatorSpec::PdfEdit(PdfEditOptions::KeepPages(SplitOptions {
             pages: args.pages,
         })),
+        PageCommand::ExtractPages => {
+            OperatorSpec::PdfEdit(PdfEditOptions::ExtractPages(PageSelectionOptions {
+                pages: args.pages,
+            }))
+        }
         PageCommand::ReorderPages => {
             OperatorSpec::PdfEdit(PdfEditOptions::ReorderPages(ReorderOptions {
                 pages: args.pages,
@@ -579,6 +814,141 @@ fn run_rotate(args: RotateArgs, stdin: &[u8], stdout: &mut impl Write) -> Result
         OperatorSpec::PdfEdit(PdfEditOptions::RotatePages(RotateOptions {
             pages: args.pages,
             degrees: args.degrees,
+        })),
+    );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_delete_pages(
+    args: PageSelectionArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "delete_pages",
+        OperatorSpec::PdfEdit(PdfEditOptions::DeletePages(PageSelectionOptions {
+            pages: args.pages,
+        })),
+    );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_delete_blank_pages(
+    args: DeleteBlankPagesArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "delete_blank_pages",
+        OperatorSpec::PdfEdit(PdfEditOptions::DeleteBlankPages(
+            DeleteBlankPagesOptions::default(),
+        )),
+    );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_crop_pages(
+    args: CropPagesArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "crop_pages",
+        OperatorSpec::PdfEdit(PdfEditOptions::CropPages(CropPagesOptions {
+            pages: args.pages,
+            left: args.left,
+            bottom: args.bottom,
+            right: args.right,
+            top: args.top,
+        })),
+    );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_scale_pages(
+    args: ScalePagesArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "scale_pages",
+        OperatorSpec::PdfEdit(PdfEditOptions::ScalePages(ScalePagesOptions {
+            pages: args.pages,
+            factor: args.factor,
+        })),
+    );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_single_page(
+    args: SinglePageArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "single_page",
+        OperatorSpec::PdfEdit(PdfEditOptions::SinglePage(SinglePageOptions::default())),
+    );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_nup(args: NUpArgs, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError> {
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "nup",
+        OperatorSpec::PdfEdit(PdfEditOptions::NUp(NUpOptions {
+            columns: args.columns,
+            rows: args.rows,
+        })),
+    );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_booklet(args: BookletArgs, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError> {
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "booklet",
+        OperatorSpec::PdfEdit(PdfEditOptions::Booklet(BookletOptions::default())),
+    );
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_page_numbers(
+    args: PageNumbersArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "page_numbers",
+        OperatorSpec::PdfEdit(PdfEditOptions::PageNumbers(PageNumbersOptions {
+            pages: args.pages,
+            start: args.start,
+            prefix: args.prefix,
+            suffix: args.suffix,
+            font_size: args.font_size,
+            position: args.position.into(),
         })),
     );
 
@@ -844,6 +1214,7 @@ fn one_input_workflow(
 #[derive(Debug, Clone, Copy)]
 enum PageCommand {
     KeepPages,
+    ExtractPages,
     ReorderPages,
 }
 
@@ -1550,6 +1921,290 @@ mod tests {
         assert_eq!(stdout, b"");
         assert_eq!(stderr, b"");
         assert_eq!(pdf_page_rotation(&output, 1), 90);
+    }
+
+    #[test]
+    fn delete_pages_command_removes_selected_pages() {
+        let dir = temp_dir("delete_pages_command_removes_selected_pages");
+        let output = dir.join("deleted.pdf");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "pdf-edit",
+                "delete-pages",
+                fixture_pdf().to_str().unwrap(),
+                "--pages",
+                "2",
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert_eq!(pdf_page_count(&output), 2);
+    }
+
+    #[test]
+    fn extract_pages_command_writes_selected_pages() {
+        let dir = temp_dir("extract_pages_command_writes_selected_pages");
+        let output = dir.join("extracted.pdf");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "pdf-edit",
+                "extract-pages",
+                fixture_pdf().to_str().unwrap(),
+                "--pages",
+                "3,1",
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert_eq!(pdf_page_count(&output), 2);
+    }
+
+    #[test]
+    fn crop_pages_command_sets_crop_box() {
+        let dir = temp_dir("crop_pages_command_sets_crop_box");
+        let output = dir.join("cropped.pdf");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "pdf-edit",
+                "crop-pages",
+                fixture_pdf().to_str().unwrap(),
+                "--pages",
+                "1",
+                "--left",
+                "10",
+                "--bottom",
+                "20",
+                "--right",
+                "300",
+                "--top",
+                "400",
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert_eq!(
+            pdf_page_box(&output, 1, b"CropBox"),
+            [10.0, 20.0, 300.0, 400.0]
+        );
+    }
+
+    #[test]
+    fn scale_pages_command_scales_selected_page() {
+        let dir = temp_dir("scale_pages_command_scales_selected_page");
+        let output = dir.join("scaled.pdf");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "pdf-edit",
+                "scale-pages",
+                fixture_pdf().to_str().unwrap(),
+                "--pages",
+                "1",
+                "--factor",
+                "0.5",
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert_eq!(pdf_page_box(&output, 1, b"MediaBox")[2], 306.0);
+        assert_eq!(pdf_page_box(&output, 2, b"MediaBox")[2], 612.0);
+    }
+
+    #[test]
+    fn delete_blank_pages_command_removes_structurally_blank_pages() {
+        let dir = temp_dir("delete_blank_pages_command_removes_structurally_blank_pages");
+        let input = dir.join("blank-and-marked.pdf");
+        let output = dir.join("without-blank.pdf");
+        fs::write(&input, pdf_with_blank_and_marked_page()).unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "pdf-edit",
+                "delete-blank-pages",
+                input.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert_eq!(pdf_page_count(&output), 1);
+    }
+
+    #[test]
+    fn single_page_command_combines_pages() {
+        let dir = temp_dir("single_page_command_combines_pages");
+        let output = dir.join("single.pdf");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "pdf-edit",
+                "single-page",
+                fixture_pdf().to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert_eq!(pdf_page_count(&output), 1);
+        assert_eq!(pdf_page_box(&output, 1, b"MediaBox")[3], 2376.0);
+    }
+
+    #[test]
+    fn nup_command_places_pages_on_fewer_output_pages() {
+        let dir = temp_dir("nup_command_places_pages_on_fewer_output_pages");
+        let output = dir.join("nup.pdf");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "pdf-edit",
+                "nup",
+                fixture_pdf().to_str().unwrap(),
+                "--columns",
+                "2",
+                "--rows",
+                "2",
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert_eq!(pdf_page_count(&output), 1);
+        assert_eq!(pdf_page_xobject_count(&output, 1), 3);
+    }
+
+    #[test]
+    fn booklet_command_writes_imposed_pages() {
+        let dir = temp_dir("booklet_command_writes_imposed_pages");
+        let output = dir.join("booklet.pdf");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "pdf-edit",
+                "booklet",
+                fixture_pdf().to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert_eq!(pdf_page_count(&output), 2);
+        assert_eq!(pdf_page_xobject_count(&output, 2), 2);
+    }
+
+    #[test]
+    fn page_numbers_command_writes_selected_page_labels() {
+        let dir = temp_dir("page_numbers_command_writes_selected_page_labels");
+        let output = dir.join("numbered.pdf");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "pdf-edit",
+                "page-numbers",
+                fixture_pdf().to_str().unwrap(),
+                "--pages",
+                "2-3",
+                "--start",
+                "7",
+                "--prefix",
+                "p",
+                "--position",
+                "bottom-right",
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"");
+        assert_eq!(stderr, b"");
+        assert!(!pdf_page_content_contains(&output, 1, "p7"));
+        assert!(pdf_page_content_contains(&output, 2, "p7"));
+        assert!(pdf_page_content_contains(&output, 3, "p8"));
     }
 
     #[test]
@@ -2311,6 +2966,100 @@ mod tests {
         page.get(b"Rotate")
             .and_then(lopdf::Object::as_i64)
             .unwrap_or(0)
+    }
+
+    fn pdf_page_box(path: &std::path::Path, page_number: u32, key: &[u8]) -> [f32; 4] {
+        let document = lopdf::Document::load(path).unwrap();
+        let page_id = document.get_pages().get(&page_number).copied().unwrap();
+        let page = document.get_object(page_id).unwrap().as_dict().unwrap();
+        let values = page.get(key).unwrap().as_array().unwrap();
+        [
+            pdf_object_to_f32(&values[0]),
+            pdf_object_to_f32(&values[1]),
+            pdf_object_to_f32(&values[2]),
+            pdf_object_to_f32(&values[3]),
+        ]
+    }
+
+    fn pdf_object_to_f32(object: &lopdf::Object) -> f32 {
+        match object {
+            lopdf::Object::Integer(value) => *value as f32,
+            lopdf::Object::Real(value) => *value,
+            other => panic!("unexpected page box value: {other:?}"),
+        }
+    }
+
+    fn pdf_page_xobject_count(path: &std::path::Path, page_number: u32) -> usize {
+        let document = lopdf::Document::load(path).unwrap();
+        let page_id = document.get_pages().get(&page_number).copied().unwrap();
+        let page = document.get_object(page_id).unwrap().as_dict().unwrap();
+        let resources = page.get(b"Resources").unwrap().as_dict().unwrap();
+        resources
+            .get(b"XObject")
+            .and_then(lopdf::Object::as_dict)
+            .map(|dictionary| dictionary.len())
+            .unwrap_or(0)
+    }
+
+    fn pdf_page_content_contains(path: &std::path::Path, page_number: u32, expected: &str) -> bool {
+        let document = lopdf::Document::load(path).unwrap();
+        let page_id = document.get_pages().get(&page_number).copied().unwrap();
+        String::from_utf8_lossy(&document.get_page_content(page_id).unwrap()).contains(expected)
+    }
+
+    fn pdf_with_blank_and_marked_page() -> Vec<u8> {
+        let mut document = lopdf::Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let blank_page_id = document.new_object_id();
+        let marked_page_id = document.new_object_id();
+        let marked_content_id = document.new_object_id();
+        let catalog_id = document.new_object_id();
+        let marked_content = lopdf::content::Content {
+            operations: vec![lopdf::content::Operation::new("q", vec![])],
+        }
+        .encode()
+        .unwrap();
+        document.objects.insert(
+            marked_content_id,
+            lopdf::Object::Stream(lopdf::Stream::new(lopdf::Dictionary::new(), marked_content)),
+        );
+        document.objects.insert(
+            blank_page_id,
+            lopdf::Object::Dictionary(lopdf::dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "MediaBox" => lopdf::Object::Array(vec![0.into(), 0.into(), 100.into(), 100.into()]),
+            }),
+        );
+        document.objects.insert(
+            marked_page_id,
+            lopdf::Object::Dictionary(lopdf::dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "MediaBox" => lopdf::Object::Array(vec![0.into(), 0.into(), 100.into(), 100.into()]),
+                "Contents" => marked_content_id,
+            }),
+        );
+        document.objects.insert(
+            pages_id,
+            lopdf::Object::Dictionary(lopdf::dictionary! {
+                "Type" => "Pages",
+                "Kids" => lopdf::Object::Array(vec![blank_page_id.into(), marked_page_id.into()]),
+                "Count" => 2,
+            }),
+        );
+        document.objects.insert(
+            catalog_id,
+            lopdf::Object::Dictionary(lopdf::dictionary! {
+                "Type" => "Catalog",
+                "Pages" => pages_id,
+            }),
+        );
+        document.trailer.set("Root", catalog_id);
+
+        let mut bytes = Vec::new();
+        document.save_to(&mut bytes).unwrap();
+        bytes
     }
 
     fn page_has_content_operator(path: &std::path::Path, page_number: u32, operator: &str) -> bool {

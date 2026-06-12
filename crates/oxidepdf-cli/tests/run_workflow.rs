@@ -413,6 +413,104 @@ fn render_command_rejects_out_of_range_page() {
     assert!(!output.exists());
 }
 
+#[test]
+fn workflow_crop_pages_sets_crop_box() {
+    let dir = temp_dir("workflow_crop_pages_sets_crop_box");
+    let output = dir.join("cropped.pdf");
+    let workflow = dir.join("workflow.yaml");
+    fs::write(
+        &workflow,
+        format!(
+            r#"
+            version: 1
+            inputs:
+              - id: source
+                path: {}
+            tasks:
+              - id: crop
+                op:
+                  pdf_edit:
+                    crop_pages:
+                      pages: "1"
+                      left: 10.0
+                      bottom: 20.0
+                      right: 300.0
+                      top: 400.0
+                inputs: [source]
+            outputs:
+              - id: final
+                from: crop
+                path: {}
+            "#,
+            fixture_pdf().display(),
+            output.display()
+        ),
+    )
+    .unwrap();
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args(["run", "--workflow", workflow.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::eq(""))
+        .stderr(predicate::eq(""));
+
+    assert_eq!(
+        pdf_page_box(&output, 1, b"CropBox"),
+        [10.0, 20.0, 300.0, 400.0]
+    );
+}
+
+#[test]
+fn workflow_page_numbers_writes_selected_labels() {
+    let dir = temp_dir("workflow_page_numbers_writes_selected_labels");
+    let output = dir.join("numbered.pdf");
+    let workflow = dir.join("workflow.yaml");
+    fs::write(
+        &workflow,
+        format!(
+            r#"
+            version: 1
+            inputs:
+              - id: source
+                path: {}
+            tasks:
+              - id: number
+                op:
+                  pdf_edit:
+                    page_numbers:
+                      pages: "2-3"
+                      start: 4
+                      prefix: "p"
+                      suffix: ""
+                      font_size: 10.0
+                      position: bottom_right
+                inputs: [source]
+            outputs:
+              - id: final
+                from: number
+                path: {}
+            "#,
+            fixture_pdf().display(),
+            output.display()
+        ),
+    )
+    .unwrap();
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args(["run", "--workflow", workflow.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::eq(""))
+        .stderr(predicate::eq(""));
+
+    assert!(!page_content_contains(&output, 1, "p4"));
+    assert!(page_content_contains(&output, 2, "p4"));
+    assert!(page_content_contains(&output, 3, "p5"));
+}
+
 fn temp_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "oxidepdf_cli_integration_{}_{}",
@@ -449,6 +547,33 @@ fn pdf_page_rotation(path: &std::path::Path, page_number: u32) -> i64 {
     page.get(b"Rotate")
         .and_then(lopdf::Object::as_i64)
         .unwrap_or(0)
+}
+
+fn pdf_page_box(path: &std::path::Path, page_number: u32, key: &[u8]) -> [f32; 4] {
+    let document = lopdf::Document::load(path).unwrap();
+    let page_id = document.get_pages().get(&page_number).copied().unwrap();
+    let page = document.get_object(page_id).unwrap().as_dict().unwrap();
+    let values = page.get(key).unwrap().as_array().unwrap();
+    [
+        pdf_object_to_f32(&values[0]),
+        pdf_object_to_f32(&values[1]),
+        pdf_object_to_f32(&values[2]),
+        pdf_object_to_f32(&values[3]),
+    ]
+}
+
+fn pdf_object_to_f32(object: &lopdf::Object) -> f32 {
+    match object {
+        lopdf::Object::Integer(value) => *value as f32,
+        lopdf::Object::Real(value) => *value,
+        other => panic!("unexpected page box value: {other:?}"),
+    }
+}
+
+fn page_content_contains(path: &std::path::Path, page_number: u32, expected: &str) -> bool {
+    let document = lopdf::Document::load(path).unwrap();
+    let page_id = document.get_pages().get(&page_number).copied().unwrap();
+    String::from_utf8_lossy(&document.get_page_content(page_id).unwrap()).contains(expected)
 }
 
 fn page_has_content_operator(path: &std::path::Path, page_number: u32, operator: &str) -> bool {
