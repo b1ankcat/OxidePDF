@@ -4,8 +4,8 @@ use clap::{CommandFactory, Parser, Subcommand};
 use oxidepdf_core::{
     execute_workflow, Artifact, ArtifactRef, ArtifactStore, ExtractTextOptions, ImageToPdfOptions,
     MergeOptions, OperatorSpec, OxideError, PdfOperatorRunner, RenderOptions, ReorderOptions,
-    RotateOptions, SplitOptions, SvgToPdfOptions, TaskId, TaskSpec, WatermarkKind,
-    WatermarkOptions, Workflow, WorkflowMetadata, WorkflowVersion,
+    RotateOptions, SignatureOptions, SplitOptions, SvgToPdfOptions, TaskId, TaskSpec,
+    WatermarkKind, WatermarkOptions, Workflow, WorkflowMetadata, WorkflowVersion,
 };
 use std::fs;
 use std::io::{self, Read, Write};
@@ -49,6 +49,9 @@ enum Commands {
     ExtractText(ExtractTextArgs),
     /// Add a text, image, or SVG watermark to a PDF.
     Watermark(WatermarkArgs),
+    /// Verify PDF signatures and certificates.
+    #[command(name = "verify-signatures")]
+    VerifySignatures(VerifySignaturesArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -252,6 +255,20 @@ struct WatermarkArgs {
     force: bool,
 }
 
+#[derive(Debug, Parser)]
+struct VerifySignaturesArgs {
+    /// Input PDF file, or `-` to read from stdin.
+    input: PathBuf,
+
+    /// Output report file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Overwrite output files when they already exist.
+    #[arg(long)]
+    force: bool,
+}
+
 /// Parses CLI arguments and runs the requested command.
 pub fn run() -> i32 {
     let args = std::env::args_os().collect::<Vec<_>>();
@@ -326,6 +343,7 @@ fn cli_reads_stdin(cli: &Cli) -> bool {
         Some(Commands::Watermark(args)) => {
             is_stdio(&args.input) || args.watermark.as_ref().is_some_and(|path| is_stdio(path))
         }
+        Some(Commands::VerifySignatures(args)) => is_stdio(&args.input),
         None => false,
     }
 }
@@ -349,6 +367,7 @@ where
         Some(Commands::Render(args)) => run_render(args, stdin, stdout),
         Some(Commands::ExtractText(args)) => run_extract_text(args, stdin, stdout),
         Some(Commands::Watermark(args)) => run_watermark(args, stdin, stdout),
+        Some(Commands::VerifySignatures(args)) => run_verify_signatures(args, stdin, stdout),
         None => Ok(()),
     }
 }
@@ -561,6 +580,21 @@ fn run_watermark(
         limits: Default::default(),
         metadata: WorkflowMetadata::default(),
     };
+
+    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+}
+
+fn run_verify_signatures(
+    args: VerifySignaturesArgs,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    let workflow = one_input_workflow(
+        args.input,
+        args.output,
+        "verify_signatures",
+        OperatorSpec::Signature(SignatureOptions::default()),
+    );
 
     execute_and_write_workflow(workflow, stdin, args.force, stdout)
 }
@@ -822,6 +856,7 @@ mod tests {
 
         assert!(help.contains("OxidePDF"));
         assert!(help.contains("pure Rust PDF toolkit"));
+        assert!(help.contains("verify-signatures"));
     }
 
     #[test]
@@ -1515,6 +1550,34 @@ mod tests {
     }
 
     #[test]
+    fn verify_signatures_command_returns_clear_unsupported_error() {
+        let dir = temp_dir("verify_signatures_command_returns_clear_unsupported_error");
+        let output = dir.join("signature-report.json");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            [
+                "oxidepdf",
+                "verify-signatures",
+                fixture_signature_pdf().to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        let stderr = String::from_utf8(stderr).unwrap();
+
+        assert_eq!(code, 3);
+        assert_eq!(stdout, b"");
+        assert!(!output.exists());
+        assert!(stderr.contains("unsupported_pdf_feature"));
+        assert!(stderr.contains("PDF signatures and certificate validation"));
+    }
+
+    #[test]
     fn workflow_img2pdf_writes_parseable_pdf() {
         let dir = temp_dir("workflow_img2pdf_writes_parseable_pdf");
         let workflow = dir.join("workflow.yaml");
@@ -1602,6 +1665,53 @@ mod tests {
         assert_eq!(stdout, b"");
         assert_eq!(stderr, b"");
         assert!(!fs::read_to_string(output).unwrap().trim().is_empty());
+    }
+
+    #[test]
+    fn workflow_signature_operator_returns_unsupported_error() {
+        let dir = temp_dir("workflow_signature_operator_returns_unsupported_error");
+        let workflow = dir.join("workflow.yaml");
+        let output = dir.join("signature-report.json");
+        fs::write(
+            &workflow,
+            format!(
+                r#"
+                version: 1
+                inputs:
+                  - id: source
+                    path: {}
+                tasks:
+                  - id: verify
+                    op:
+                      signature:
+                        mode: verify
+                    inputs: [source]
+                outputs:
+                  - id: final
+                    from: verify
+                    path: {}
+                "#,
+                yaml_path(fixture_signature_pdf()),
+                yaml_path(&output)
+            ),
+        )
+        .unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let code = run_with_io(
+            ["oxidepdf", "run", "--workflow", workflow.to_str().unwrap()],
+            [],
+            &mut stdout,
+            &mut stderr,
+        );
+        let stderr = String::from_utf8(stderr).unwrap();
+
+        assert_eq!(code, 3);
+        assert_eq!(stdout, b"");
+        assert!(!output.exists());
+        assert!(stderr.contains("unsupported_pdf_feature"));
+        assert!(stderr.contains("PDF signatures and certificate validation"));
     }
 
     #[test]
@@ -1724,6 +1834,13 @@ mod tests {
     fn fixture_jpg() -> std::path::PathBuf {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/test.jpg")
+            .canonicalize()
+            .unwrap()
+    }
+
+    fn fixture_signature_pdf() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/signature-placeholder.pdf")
             .canonicalize()
             .unwrap()
     }

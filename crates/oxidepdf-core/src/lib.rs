@@ -193,6 +193,8 @@ pub enum OperatorSpec {
     Watermark(WatermarkOptions),
     /// Render PDF pages to images.
     Render(RenderOptions),
+    /// Verify PDF signatures and certificate material.
+    Signature(SignatureOptions),
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -207,6 +209,7 @@ struct OperatorSpecDef {
     extract_text: Option<ExtractTextOptions>,
     watermark: Option<WatermarkOptions>,
     render: Option<RenderOptions>,
+    signature: Option<SignatureOptions>,
 }
 
 impl TryFrom<OperatorSpecDef> for OperatorSpec {
@@ -223,6 +226,7 @@ impl TryFrom<OperatorSpecDef> for OperatorSpec {
             value.extract_text.is_some(),
             value.watermark.is_some(),
             value.render.is_some(),
+            value.signature.is_some(),
         ]
         .into_iter()
         .filter(|present| *present)
@@ -260,6 +264,9 @@ impl TryFrom<OperatorSpecDef> for OperatorSpec {
         }
         if let Some(options) = value.render {
             return Ok(Self::Render(options));
+        }
+        if let Some(options) = value.signature {
+            return Ok(Self::Signature(options));
         }
 
         unreachable!("operator count was already checked");
@@ -303,6 +310,10 @@ impl From<OperatorSpec> for OperatorSpecDef {
             },
             OperatorSpec::Render(options) => Self {
                 render: Some(options),
+                ..Self::default()
+            },
+            OperatorSpec::Signature(options) => Self {
+                signature: Some(options),
                 ..Self::default()
             },
         }
@@ -409,6 +420,24 @@ pub struct RenderOptions {
     pub format: Option<String>,
     /// Optional render scale.
     pub scale: Option<f32>,
+}
+
+/// Options for signature and certificate operations.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SignatureOptions {
+    /// Requested signature operation. The current product boundary supports
+    /// schema recognition only and returns a clear unsupported error.
+    pub mode: SignatureMode,
+}
+
+/// Requested signature operation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignatureMode {
+    /// Verify PDF signatures and embedded certificate material.
+    #[default]
+    Verify,
 }
 
 /// Structured core error.
@@ -691,6 +720,9 @@ impl OperatorRunner for PdfOperatorRunner {
             OperatorSpec::Watermark(options) => {
                 watermark_pdf_artifacts(inputs, options, &self.limits).map(Artifact::Pdf)
             }
+            OperatorSpec::Signature(_) => Err(OxideError::UnsupportedPdfFeature {
+                feature: "PDF signatures and certificate validation".to_owned(),
+            }),
         }?;
         enforce_artifact_output_bytes(&artifact, &self.limits)?;
         Ok(artifact)
@@ -815,6 +847,56 @@ pub fn rotate_pdf_with_limits(
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
     Ok(PdfArtifact { bytes })
+}
+
+/// Scans PDF bytes for signature dictionary markers for research prototypes.
+///
+/// This does not cryptographically verify signatures, certificates, digests,
+/// revocation data, timestamp tokens, or PAdES policy. Until the formal
+/// signature implementation is added, production workflows must use
+/// `OperatorSpec::Signature`, which returns `UnsupportedPdfFeature`.
+pub fn inspect_pdf_signature_markers_for_research(
+    input: &[u8],
+) -> Result<SignatureResearchReport, OxideError> {
+    ensure_pdf_magic(input)?;
+
+    Ok(SignatureResearchReport {
+        signature_dictionary_count: count_subslice(input, b"/Type /Sig"),
+        byte_ranges: parse_byte_ranges_for_research(input),
+        subfilters: parse_name_values_after_token(input, b"/SubFilter"),
+    })
+}
+
+/// Non-production report returned by the signature research scanner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureResearchReport {
+    /// Count of literal `/Type /Sig` markers.
+    pub signature_dictionary_count: usize,
+    /// Parsed `/ByteRange [...]` arrays found by the scanner.
+    pub byte_ranges: Vec<ByteRangeResearch>,
+    /// Literal `/SubFilter /Name` values seen in the PDF bytes.
+    pub subfilters: Vec<String>,
+}
+
+/// Non-production structural summary of a PDF signature ByteRange.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ByteRangeResearch {
+    /// First signed range start offset.
+    pub first_start: u64,
+    /// First signed range length.
+    pub first_len: u64,
+    /// Second signed range start offset.
+    pub second_start: u64,
+    /// Second signed range length.
+    pub second_len: u64,
+    /// Whether both ranges are inside the input byte length.
+    pub in_bounds: bool,
+    /// Whether the two ranges are non-overlapping and ordered.
+    pub ordered_non_overlapping: bool,
+    /// Length of the unsigned gap between the two signed ranges, if ordered.
+    pub gap_len: Option<u64>,
+    /// Total number of bytes covered by the two signed ranges.
+    pub covered_len: Option<u64>,
 }
 
 /// Converts image artifacts into a PDF with one image per page.
@@ -1384,6 +1466,124 @@ fn ensure_pdf_magic(input: &[u8]) -> Result<(), OxideError> {
     Err(OxideError::InvalidInput {
         reason: "expected PDF input magic bytes".to_owned(),
     })
+}
+
+fn count_subslice(haystack: &[u8], needle: &[u8]) -> usize {
+    if needle.is_empty() {
+        return 0;
+    }
+
+    haystack
+        .windows(needle.len())
+        .filter(|window| *window == needle)
+        .count()
+}
+
+fn parse_byte_ranges_for_research(input: &[u8]) -> Vec<ByteRangeResearch> {
+    let mut ranges = Vec::new();
+    let mut offset = 0usize;
+    while let Some(relative) = find_subslice(&input[offset..], b"/ByteRange") {
+        let token_start = offset + relative;
+        offset = token_start + b"/ByteRange".len();
+        let Some(open_relative) = input[offset..].iter().position(|byte| *byte == b'[') else {
+            continue;
+        };
+        let array_start = offset + open_relative + 1;
+        let Some(close_relative) = input[array_start..].iter().position(|byte| *byte == b']')
+        else {
+            continue;
+        };
+        let array_end = array_start + close_relative;
+        offset = array_end + 1;
+        let numbers = input[array_start..array_end]
+            .split(|byte| byte.is_ascii_whitespace())
+            .filter(|part| !part.is_empty())
+            .filter_map(parse_ascii_u64)
+            .collect::<Vec<_>>();
+        if numbers.len() < 4 {
+            continue;
+        }
+        ranges.push(byte_range_research(
+            numbers[0],
+            numbers[1],
+            numbers[2],
+            numbers[3],
+            input.len() as u64,
+        ));
+    }
+
+    ranges
+}
+
+fn byte_range_research(
+    first_start: u64,
+    first_len: u64,
+    second_start: u64,
+    second_len: u64,
+    input_len: u64,
+) -> ByteRangeResearch {
+    let first_end = first_start.checked_add(first_len);
+    let second_end = second_start.checked_add(second_len);
+    let in_bounds = first_end.is_some_and(|end| end <= input_len)
+        && second_end.is_some_and(|end| end <= input_len);
+    let ordered_non_overlapping = first_end.is_some_and(|end| end <= second_start);
+    let gap_len = ordered_non_overlapping.then(|| second_start - first_end.unwrap_or(second_start));
+    let covered_len = first_len.checked_add(second_len);
+
+    ByteRangeResearch {
+        first_start,
+        first_len,
+        second_start,
+        second_len,
+        in_bounds,
+        ordered_non_overlapping,
+        gap_len,
+        covered_len,
+    }
+}
+
+fn parse_name_values_after_token(input: &[u8], token: &[u8]) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut offset = 0usize;
+    while let Some(relative) = find_subslice(&input[offset..], token) {
+        let value_start = offset + relative + token.len();
+        offset = value_start;
+        let Some(name_start_relative) = input[value_start..].iter().position(|byte| *byte == b'/')
+        else {
+            continue;
+        };
+        let name_start = value_start + name_start_relative + 1;
+        let name_end = input[name_start..]
+            .iter()
+            .position(|byte| is_pdf_delimiter_or_whitespace(*byte))
+            .map_or(input.len(), |end| name_start + end);
+        if name_end > name_start {
+            values.push(String::from_utf8_lossy(&input[name_start..name_end]).into_owned());
+        }
+        offset = name_end;
+    }
+
+    values
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn parse_ascii_u64(input: &[u8]) -> Option<u64> {
+    if input.is_empty() || input.iter().any(|byte| !byte.is_ascii_digit()) {
+        return None;
+    }
+
+    input.iter().try_fold(0u64, |acc, byte| {
+        acc.checked_mul(10)?.checked_add(u64::from(byte - b'0'))
+    })
+}
+
+fn is_pdf_delimiter_or_whitespace(byte: u8) -> bool {
+    byte.is_ascii_whitespace() || matches!(byte, b'/' | b'<' | b'>' | b'[' | b']' | b'(' | b')')
 }
 
 fn save_pdf(mut document: lopdf::Document) -> Result<Vec<u8>, OxideError> {
@@ -2577,6 +2777,36 @@ mod tests {
     }
 
     #[test]
+    fn parses_signature_workflow_operator_schema() {
+        let workflow: Workflow = serde_yaml::from_str(
+            r#"
+            version: 1
+            inputs:
+              - id: source
+                path: ./signed.pdf
+            tasks:
+              - id: verify
+                op:
+                  signature:
+                    mode: verify
+                inputs: [source]
+            outputs:
+              - id: final
+                from: verify
+                path: ./report.json
+            "#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            workflow.tasks[0].op,
+            OperatorSpec::Signature(SignatureOptions {
+                mode: SignatureMode::Verify
+            })
+        ));
+    }
+
+    #[test]
     fn missing_required_workflow_field_fails() {
         let err = serde_json::from_str::<Workflow>(
             r#"
@@ -2996,6 +3226,82 @@ mod tests {
                 limit: "max_output_bytes".to_owned()
             }
         );
+    }
+
+    #[test]
+    fn pdf_operator_runner_returns_unsupported_for_signature_validation() {
+        let pdf = include_bytes!("../../../tests/fixtures/signature-placeholder.pdf");
+        let mut runner = PdfOperatorRunner::default();
+
+        let err = runner
+            .run(
+                &TaskSpec {
+                    id: TaskId::new("verify"),
+                    op: OperatorSpec::Signature(SignatureOptions::default()),
+                    inputs: vec![artifact_ref("source")],
+                },
+                &[Artifact::pdf(pdf)],
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            OxideError::UnsupportedPdfFeature {
+                feature: "PDF signatures and certificate validation".to_owned()
+            }
+        );
+        assert_eq!(err.code(), "unsupported_pdf_feature");
+    }
+
+    #[test]
+    fn signature_research_scanner_finds_signature_markers() {
+        let pdf = include_bytes!("../../../tests/fixtures/signature-placeholder.pdf");
+
+        let report = inspect_pdf_signature_markers_for_research(pdf).unwrap();
+
+        assert_eq!(report.signature_dictionary_count, 1);
+        assert_eq!(report.subfilters, vec!["adbe.pkcs7.detached"]);
+        assert_eq!(report.byte_ranges.len(), 1);
+        assert_eq!(report.byte_ranges[0].first_start, 0);
+        assert_eq!(report.byte_ranges[0].first_len, 64);
+        assert_eq!(report.byte_ranges[0].second_start, 192);
+        assert_eq!(report.byte_ranges[0].second_len, 64);
+        assert!(report.byte_ranges[0].in_bounds);
+        assert!(report.byte_ranges[0].ordered_non_overlapping);
+        assert_eq!(report.byte_ranges[0].gap_len, Some(128));
+        assert_eq!(report.byte_ranges[0].covered_len, Some(128));
+    }
+
+    #[test]
+    fn signature_research_scanner_reports_out_of_bounds_byte_range() {
+        let pdf = b"%PDF-1.7\n1 0 obj\n<< /Type /Sig /SubFilter /ETSI.CAdES.detached /ByteRange [0 5 999 10] >>\nendobj\n%%EOF";
+
+        let report = inspect_pdf_signature_markers_for_research(pdf).unwrap();
+
+        assert_eq!(report.signature_dictionary_count, 1);
+        assert_eq!(report.subfilters, vec!["ETSI.CAdES.detached"]);
+        assert_eq!(report.byte_ranges.len(), 1);
+        assert!(!report.byte_ranges[0].in_bounds);
+        assert!(report.byte_ranges[0].ordered_non_overlapping);
+        assert_eq!(report.byte_ranges[0].covered_len, Some(15));
+    }
+
+    #[test]
+    fn signature_research_scanner_ignores_malformed_byte_range() {
+        let pdf = b"%PDF-1.7\n1 0 obj\n<< /Type /Sig /ByteRange [0 nope 10 5] >>\nendobj\n%%EOF";
+
+        let report = inspect_pdf_signature_markers_for_research(pdf).unwrap();
+
+        assert_eq!(report.signature_dictionary_count, 1);
+        assert!(report.byte_ranges.is_empty());
+    }
+
+    #[test]
+    fn signature_research_scanner_rejects_non_pdf_magic_bytes() {
+        let err = inspect_pdf_signature_markers_for_research(b"not a pdf").unwrap_err();
+
+        assert!(matches!(err, OxideError::InvalidInput { .. }));
+        assert!(err.to_string().contains("expected PDF"));
     }
 
     #[test]
