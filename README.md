@@ -235,6 +235,18 @@ The CLI groups commands under the same families: `pdf_edit`, `pdf_inspect`, `pdf
 
 Each task specifies exactly one operator. The engine validates references, detects cycles, and enforces limits before any work begins.
 
+### Execution Model
+
+The engine compiles the task graph into dependency layers and runs the tasks within each layer in parallel, so independent branches of a pipeline execute concurrently rather than one after another. A layer acts as a barrier: its tasks all finish before the next layer starts, which keeps results deterministic regardless of scheduling.
+
+Memory use is kept close to the live working set rather than the full pipeline:
+
+- **Zero-copy artifacts**: artifacts are reference-counted, so handing the same PDF to several tasks shares one buffer instead of copying it per hop.
+- **Eager eviction**: an intermediate artifact is dropped as soon as its last consuming task has run, unless a workflow output references it.
+- **Large-artifact spill**: payloads above 64 MiB are spilled to a memory-mapped temporary file, so very large inputs and outputs do not stay resident in heap.
+
+Encrypted PDFs that store objects in compressed object streams are fully supported on the decrypt path.
+
 ### Scripting and CI Integration
 
 Workflows are designed for headless environments:
@@ -253,8 +265,8 @@ use oxidepdf_core::{Workflow, execute_workflow, PdfOperatorRunner, ArtifactStore
 
 let workflow: Workflow = serde_yaml::from_str(yaml_str)?;
 let store = ArtifactStore::new();
-let mut runner = PdfOperatorRunner::default();
-let result = execute_workflow(&workflow, store, &mut runner)?;
+let runner = PdfOperatorRunner::default();
+let result = execute_workflow(&workflow, store, &runner)?;
 ```
 
 Individual CLI commands (`pdf_edit merge`, `pdf_inspect render`, etc.) are implemented as single-task workflows internally, so the same validation and execution path serves both interactive use and workflow documents.
