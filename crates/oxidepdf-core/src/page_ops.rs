@@ -173,7 +173,9 @@ pub fn merge_pdf_artifacts_with_limits(
 
     let bytes = merge_documents(documents)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 /// Splits a PDF by keeping the specified one-based pages.
@@ -194,7 +196,9 @@ pub fn split_pdf_with_limits(
     keep_pages(&mut document, &selected_pages)?;
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 /// Extracts selected PDF pages.
@@ -229,7 +233,9 @@ pub fn reorder_pdf_with_limits(
     keep_pages(&mut document, &selected_pages)?;
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 /// Rotates selected PDF pages by 90, 180, or 270 degrees.
@@ -273,7 +279,9 @@ pub fn rotate_pdf_with_limits(
 
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 /// Deletes selected PDF pages.
@@ -303,7 +311,9 @@ pub fn delete_pdf_pages_with_limits(
     keep_pages(&mut document, &kept_pages)?;
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 /// Deletes structurally blank pages.
@@ -347,7 +357,9 @@ pub fn delete_blank_pdf_pages_with_limits(
     keep_pages(&mut document, &kept_pages)?;
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 /// Crops selected PDF pages.
@@ -383,7 +395,9 @@ pub fn crop_pdf_pages_with_limits(
     }
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 /// Scales selected PDF pages.
@@ -423,7 +437,9 @@ pub fn scale_pdf_pages_with_limits(
     }
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 /// Combines all pages into one tall page.
@@ -516,7 +532,9 @@ pub fn pdf_to_single_page_with_limits(
     rebuild_pages_tree(&mut document, &[first_page])?;
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 /// Lays multiple source pages on each output page.
@@ -550,7 +568,9 @@ pub fn nup_pdf_pages_with_limits(
         options.rows,
     )?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 /// Arranges pages for booklet printing.
@@ -583,7 +603,9 @@ pub fn booklet_pdf_pages_with_limits(
 
     let bytes = impose_pages(&source, &page_ids, &order, layout, 2, 1)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 /// Adds page numbers to selected PDF pages.
@@ -634,7 +656,9 @@ pub fn add_pdf_page_numbers_with_limits(
     }
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 pub(crate) fn parse_page_range(pages: &str, page_count: u32) -> Result<Vec<u32>, OxideError> {

@@ -40,7 +40,9 @@ pub fn remove_pdf_interactive_elements(
     }
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 pub(crate) fn remove_annotations(document: &mut lopdf::Document) -> Result<(), OxideError> {

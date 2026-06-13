@@ -264,7 +264,9 @@ pub fn compare_pdf_visual_diff(
         return Err(OxideError::RenderPdf);
     }
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(ImageArtifact { bytes })
+    Ok(ImageArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 fn enforce_compare_inputs(

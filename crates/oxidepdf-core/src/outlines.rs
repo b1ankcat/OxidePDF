@@ -74,7 +74,9 @@ pub fn edit_pdf_outline(
     }
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 fn read_outline_tree(document: &lopdf::Document) -> Result<OutlineTree, OxideError> {

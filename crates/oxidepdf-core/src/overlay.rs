@@ -224,7 +224,9 @@ pub fn image_artifacts_to_pdf(
     let layout = ImageLayout::from_options(options)?;
     let bytes = write_images_pdf(&images, layout)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 /// Converts an SVG artifact into a PDF. Defaults to vector output.
@@ -252,7 +254,9 @@ pub fn svg_to_pdf(
     };
 
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 /// Renders a one-based PDF page to PNG bytes.
@@ -309,7 +313,9 @@ pub fn render_pdf_page(
     }
     enforce_output_bytes(bytes.len(), limits)?;
 
-    Ok(ImageArtifact { bytes })
+    Ok(ImageArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 /// Extracts plain text from a PDF and records page-level diagnostics.
@@ -460,7 +466,9 @@ pub fn overlay_pdf_artifacts(
 
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 /// Inspects image XObject resources.
@@ -547,7 +555,9 @@ pub fn edit_pdf_images_artifacts(
 
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 /// Extracts the decoded RGB payload for a named image XObject.
@@ -570,7 +580,9 @@ pub fn extract_pdf_image(
                     .get_plain_content()
                     .map_err(|_| OxideError::ParsePdf)?;
                 enforce_output_bytes(bytes.len(), limits)?;
-                return Ok(BytesArtifact { bytes });
+                return Ok(BytesArtifact {
+                    bytes: bytes.into(),
+                });
             }
         }
     }
@@ -610,7 +622,9 @@ pub fn edit_pdf_colors(
     }
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 #[derive(Debug, Serialize)]

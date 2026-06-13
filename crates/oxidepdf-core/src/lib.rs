@@ -43,10 +43,10 @@ pub use outlines::{
     OutlineInspectOptions, OutlineItem, OutlineTree,
 };
 pub use workflow::{
-    execute_workflow, validate_workflow, Artifact, ArtifactRef, ArtifactStore, BytesArtifact,
-    ExecutionPlan, ExecutionResult, ImageArtifact, InputSpec, OperatorRunner, OperatorSpec,
-    OutputSpec, PdfArtifact, PdfOperatorRunner, ResourceLimits, SvgArtifact, TaskId, TaskSpec,
-    TextArtifact, TextExtractionDiagnostic, TextExtractionDiagnosticCode, Workflow,
+    execute_workflow, validate_workflow, Artifact, ArtifactBytes, ArtifactRef, ArtifactStore,
+    BytesArtifact, ExecutionPlan, ExecutionResult, ImageArtifact, InputSpec, OperatorRunner,
+    OperatorSpec, OutputSpec, PdfArtifact, PdfOperatorRunner, ResourceLimits, SvgArtifact, TaskId,
+    TaskSpec, TextArtifact, TextExtractionDiagnostic, TextExtractionDiagnosticCode, Workflow,
     WorkflowMetadata, WorkflowVersion, WORKFLOW_SCHEMA_VERSION,
 };
 

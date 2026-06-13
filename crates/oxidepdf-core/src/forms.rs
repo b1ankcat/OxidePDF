@@ -70,7 +70,9 @@ pub fn fill_pdf_form(
     }
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 pub fn unlock_pdf_form_readonly(
@@ -87,7 +89,9 @@ pub fn unlock_pdf_form_readonly(
     }
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 pub fn remove_pdf_forms(input: &[u8], limits: &ResourceLimits) -> Result<PdfArtifact, OxideError> {
@@ -97,7 +101,9 @@ pub fn remove_pdf_forms(input: &[u8], limits: &ResourceLimits) -> Result<PdfArti
     remove_acroform(&mut document)?;
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 fn collect_form_fields(document: &lopdf::Document) -> Result<Vec<FormFieldReport>, OxideError> {

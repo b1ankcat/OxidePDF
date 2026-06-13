@@ -549,7 +549,9 @@ fn save_security_pdf(
         .save_to(&mut bytes)
         .map_err(|_| OxideError::WritePdf)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 fn normalize_plain_document(mut document: Document) -> Result<Document, OxideError> {

@@ -78,7 +78,9 @@ pub fn edit_pdf_attachment_artifacts(
             add_attachment(&mut document, options, attachment)?;
             let bytes = save_pdf(document)?;
             enforce_output_bytes(bytes.len(), limits)?;
-            Ok(PdfArtifact { bytes })
+            Ok(PdfArtifact {
+                bytes: bytes.into(),
+            })
         }
         AttachmentEditAction::Delete => {
             if inputs.len() != 1 {
@@ -93,7 +95,9 @@ pub fn edit_pdf_attachment_artifacts(
             delete_attachment(&mut document, required_name(options)?)?;
             let bytes = save_pdf(document)?;
             enforce_output_bytes(bytes.len(), limits)?;
-            Ok(PdfArtifact { bytes })
+            Ok(PdfArtifact {
+                bytes: bytes.into(),
+            })
         }
     }
 }
@@ -108,7 +112,7 @@ pub fn extract_pdf_attachment(
     let attachment = find_attachment_stream(&document, name)?;
     enforce_output_bytes(attachment.len(), limits)?;
     Ok(BytesArtifact {
-        bytes: attachment.to_vec(),
+        bytes: attachment.to_vec().into(),
     })
 }
 

@@ -1267,7 +1267,7 @@ fn attachments_add_list_extract_and_delete() {
 
     let extracted =
         extract_pdf_attachment(&edited.bytes, "note.txt", &ResourceLimits::default()).unwrap();
-    assert_eq!(extracted.bytes, b"attachment bytes");
+    assert_eq!(extracted.bytes.as_slice(), b"attachment bytes");
 
     let deleted = edit_pdf_attachment_artifacts(
         &[Artifact::pdf(&edited.bytes)],
@@ -4087,6 +4087,45 @@ fn collect_form_xobject_operators(
             collect_form_xobject_operators(document, id, seen, operators);
         }
     }
+}
+
+#[test]
+fn artifact_bytes_clone_is_zero_copy() {
+    let payload = vec![7u8; 4096];
+    let original = ArtifactBytes::from(payload);
+    let cloned = original.clone();
+
+    // Cloning an ArtifactBytes must share the same backing allocation rather
+    // than copying the bytes, so the two views point at the same address.
+    assert_eq!(original.as_ptr(), cloned.as_ptr());
+    assert_eq!(original.as_slice(), cloned.as_slice());
+}
+
+#[test]
+fn artifact_clone_shares_pdf_payload() {
+    let artifact = Artifact::pdf(vec![1u8; 1024]);
+    let cloned = artifact.clone();
+
+    let (Artifact::Pdf(original), Artifact::Pdf(copy)) = (&artifact, &cloned) else {
+        panic!("expected PDF artifacts");
+    };
+    assert_eq!(original.bytes.as_ptr(), copy.bytes.as_ptr());
+}
+
+#[test]
+fn text_artifact_size_includes_diagnostics() {
+    let text = TextArtifact {
+        text: "abc".to_owned(),
+        diagnostics: vec![TextExtractionDiagnostic {
+            page: 1,
+            code: TextExtractionDiagnosticCode::NoTextLayer,
+            message: "no text layer".to_owned(),
+        }],
+    };
+
+    // Size must account for the diagnostics, not just the text body, so the
+    // resource-limit check cannot be bypassed with diagnostics-heavy output.
+    assert!(crate::workflow::artifact_size(&Artifact::Text(text)) > "abc".len());
 }
 
 fn simple_svg() -> &'static [u8] {

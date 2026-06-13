@@ -71,7 +71,9 @@ pub fn compress_pdf(
 
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact { bytes })
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
 }
 
 fn validate_compression_options(options: &CompressionOptions) -> Result<(), OxideError> {

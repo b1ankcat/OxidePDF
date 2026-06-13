@@ -8,6 +8,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Current workflow schema version.
@@ -278,29 +279,86 @@ impl Artifact {
     /// Creates a raw byte artifact.
     pub fn bytes(bytes: impl AsRef<[u8]>) -> Self {
         Self::Bytes(BytesArtifact {
-            bytes: bytes.as_ref().to_vec(),
+            bytes: ArtifactBytes::from(bytes.as_ref()),
         })
     }
 
     /// Creates a PDF artifact.
     pub fn pdf(bytes: impl AsRef<[u8]>) -> Self {
         Self::Pdf(PdfArtifact {
-            bytes: bytes.as_ref().to_vec(),
+            bytes: ArtifactBytes::from(bytes.as_ref()),
         })
     }
 
     /// Creates an image artifact.
     pub fn image(bytes: impl AsRef<[u8]>) -> Self {
         Self::Image(ImageArtifact {
-            bytes: bytes.as_ref().to_vec(),
+            bytes: ArtifactBytes::from(bytes.as_ref()),
         })
     }
 
     /// Creates an SVG artifact.
     pub fn svg(bytes: impl AsRef<[u8]>) -> Self {
         Self::Svg(SvgArtifact {
-            bytes: bytes.as_ref().to_vec(),
+            bytes: ArtifactBytes::from(bytes.as_ref()),
         })
+    }
+}
+
+/// Reference-counted artifact payload.
+///
+/// Cloning an `ArtifactBytes` only bumps an atomic reference count; no bytes are
+/// copied. This lets the executor hand the same large PDF to several tasks, and
+/// keep inputs in the store, without duplicating multi-hundred-megabyte buffers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactBytes {
+    bytes: Arc<[u8]>,
+}
+
+impl ArtifactBytes {
+    /// Returns the payload length in bytes.
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    /// Returns whether the payload is empty.
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    /// Returns the payload as a byte slice.
+    pub fn as_slice(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+impl std::ops::Deref for ArtifactBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.bytes
+    }
+}
+
+impl AsRef<[u8]> for ArtifactBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+impl From<Vec<u8>> for ArtifactBytes {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes: Arc::from(bytes.into_boxed_slice()),
+        }
+    }
+}
+
+impl From<&[u8]> for ArtifactBytes {
+    fn from(bytes: &[u8]) -> Self {
+        Self {
+            bytes: Arc::from(bytes),
+        }
     }
 }
 
@@ -308,14 +366,14 @@ impl Artifact {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PdfArtifact {
     /// Serialized bytes until object-level artifacts are added.
-    pub bytes: Vec<u8>,
+    pub bytes: ArtifactBytes,
 }
 
 /// Image artifact placeholder for later operators.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageArtifact {
     /// Encoded image bytes.
-    pub bytes: Vec<u8>,
+    pub bytes: ArtifactBytes,
 }
 
 /// Text artifact.
@@ -349,14 +407,14 @@ pub enum TextExtractionDiagnosticCode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SvgArtifact {
     /// SVG document bytes.
-    pub bytes: Vec<u8>,
+    pub bytes: ArtifactBytes,
 }
 
 /// Byte artifact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BytesArtifact {
     /// Raw bytes.
-    pub bytes: Vec<u8>,
+    pub bytes: ArtifactBytes,
 }
 
 /// In-memory artifact store used by the serial executor.
@@ -667,14 +725,28 @@ fn enforce_artifact_output_bytes(
     crate::enforce_output_bytes(artifact_size(artifact), limits)
 }
 
-fn artifact_size(artifact: &Artifact) -> usize {
+pub(crate) fn artifact_size(artifact: &Artifact) -> usize {
     match artifact {
         Artifact::Pdf(pdf) => pdf.bytes.len(),
         Artifact::Image(image) => image.bytes.len(),
-        Artifact::Text(text) => text.text.len(),
+        Artifact::Text(text) => text_artifact_size(text),
         Artifact::Svg(svg) => svg.bytes.len(),
         Artifact::Bytes(bytes) => bytes.bytes.len(),
     }
+}
+
+/// Estimates the in-memory footprint of a text artifact, including the
+/// page-level diagnostics that `text.text.len()` alone omits. Undercounting
+/// here would let a diagnostics-heavy artifact slip past `max_output_bytes`.
+fn text_artifact_size(text: &TextArtifact) -> usize {
+    let diagnostics_size = text
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            std::mem::size_of::<TextExtractionDiagnostic>() + diagnostic.message.len()
+        })
+        .sum::<usize>();
+    text.text.len() + diagnostics_size
 }
 
 fn enforce_timeout(started_at: Instant, timeout: Option<Duration>) -> Result<(), OxideError> {
