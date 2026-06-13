@@ -42,4 +42,12 @@ x509-cert.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+der.workspace = true
+image.workspace = true
+lopdf.workspace = true
+p256.workspace = true
+pdf-writer.workspace = true
+serde_json.workspace = true
 serde_yaml.workspace = true
+spki.workspace = true
+x509-cert.workspace = true

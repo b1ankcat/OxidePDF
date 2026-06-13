@@ -99,6 +99,3 @@ pub use signatures::{
     SignatureResearchReport, SignatureVerdict, SignatureVerificationReport, TimestampAddOptions,
     TimestampReport,
 };
-
-#[cfg(test)]
-mod tests;
