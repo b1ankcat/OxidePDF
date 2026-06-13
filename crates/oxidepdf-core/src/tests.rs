@@ -437,11 +437,11 @@ fn linear_workflow_executes_tasks_in_dependency_order() {
     );
     let mut store = ArtifactStore::new();
     store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
-    let mut runner = RecordingRunner::default();
+    let runner = RecordingRunner::default();
 
-    let result = execute_workflow(&workflow, store, &mut runner).unwrap();
+    let result = execute_workflow(&workflow, store, &runner).unwrap();
 
-    assert_eq!(runner.executed, ["rotate", "render"]);
+    assert_eq!(runner.executed(), ["rotate", "render"]);
     assert_eq!(
         result.store.get(&artifact_ref("render")),
         Some(&Artifact::bytes(b"render"))
@@ -502,9 +502,9 @@ fn intermediate_artifact_evicted_after_last_consumer() {
     );
     let mut store = ArtifactStore::new();
     store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
-    let mut runner = RecordingRunner::default();
+    let runner = RecordingRunner::default();
 
-    let result = execute_workflow(&workflow, store, &mut runner).unwrap();
+    let result = execute_workflow(&workflow, store, &runner).unwrap();
 
     // "source" and "rotate" are fully consumed and not referenced by any
     // output, so they must be evicted; only the output artifact survives.
@@ -541,9 +541,9 @@ fn output_referenced_artifact_is_not_evicted() {
     );
     let mut store = ArtifactStore::new();
     store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
-    let mut runner = RecordingRunner::default();
+    let runner = RecordingRunner::default();
 
-    let result = execute_workflow(&workflow, store, &mut runner).unwrap();
+    let result = execute_workflow(&workflow, store, &runner).unwrap();
 
     // "rotate" is consumed by "render" but is also an output, so it must stay.
     assert!(result.store.get(&artifact_ref("rotate")).is_some());
@@ -708,16 +708,12 @@ fn task_failure_stops_downstream_execution() {
     let expected = OxideError::InvalidInput {
         reason: "runner failed".to_owned(),
     };
-    let mut runner = RecordingRunner {
-        fail_on: Some("fail"),
-        error: Some(expected.clone()),
-        ..RecordingRunner::default()
-    };
+    let runner = RecordingRunner::with_failure("fail", expected.clone());
 
-    let err = execute_workflow(&workflow, store, &mut runner).unwrap_err();
+    let err = execute_workflow(&workflow, store, &runner).unwrap_err();
 
     assert_eq!(err, expected);
-    assert_eq!(runner.executed, ["fail"]);
+    assert_eq!(runner.executed(), ["fail"]);
 }
 
 #[test]
@@ -918,9 +914,9 @@ fn compare_workflow_produces_text_report() {
     let mut store = ArtifactStore::new();
     store.insert(artifact_ref("left"), Artifact::pdf(pdf));
     store.insert(artifact_ref("right"), Artifact::pdf(pdf));
-    let mut runner = PdfOperatorRunner::default();
+    let runner = PdfOperatorRunner::default();
 
-    let result = execute_workflow(&workflow, store, &mut runner).unwrap();
+    let result = execute_workflow(&workflow, store, &runner).unwrap();
 
     match result.store.get(&artifact_ref("compare")).unwrap() {
         Artifact::Text(artifact) => {
@@ -2263,7 +2259,7 @@ fn color_operations_rewrite_simple_content_and_reject_rasterize_pages() {
 #[test]
 fn pdf_operator_runner_handles_page_editing_tasks() {
     let pdf = include_bytes!("../../../tests/test.pdf");
-    let mut runner = PdfOperatorRunner::default();
+    let runner = PdfOperatorRunner::default();
 
     let merged = runner
         .run(
@@ -2282,7 +2278,7 @@ fn pdf_operator_runner_handles_page_editing_tasks() {
 #[test]
 fn pdf_operator_runner_enforces_output_size_limit() {
     let pdf = include_bytes!("../../../tests/test.pdf");
-    let mut runner = PdfOperatorRunner::with_limits(ResourceLimits {
+    let runner = PdfOperatorRunner::with_limits(ResourceLimits {
         max_output_bytes: Some(1),
         ..ResourceLimits::default()
     });
@@ -2312,7 +2308,7 @@ fn pdf_operator_runner_enforces_output_size_limit() {
 fn pdf_operator_runner_emits_signature_verification_report() {
     let pdf = pdf_with_signature_dictionary(vec![0, 64, 192, 64], vec![0x30, 0x82]);
     let trust_anchors = write_test_trust_anchors("signature_report");
-    let mut runner = PdfOperatorRunner::default();
+    let runner = PdfOperatorRunner::default();
 
     let artifact = runner
         .run(
@@ -2360,7 +2356,7 @@ fn pdf_operator_runner_emits_signature_verification_report() {
 #[test]
 fn pdf_operator_runner_emits_signature_list_report_without_trust_anchors() {
     let pdf = pdf_with_signature_dictionary(vec![0, 64, 192, 64], vec![0x30, 0x82]);
-    let mut runner = PdfOperatorRunner::default();
+    let runner = PdfOperatorRunner::default();
 
     let artifact = runner
         .run(
@@ -3020,7 +3016,7 @@ fn extract_text_from_pdf_rejects_non_pdf_magic_bytes() {
 #[test]
 fn pdf_operator_runner_handles_extract_text_tasks() {
     let pdf = include_bytes!("../../../tests/test.pdf");
-    let mut runner = PdfOperatorRunner::default();
+    let runner = PdfOperatorRunner::default();
 
     let extracted = runner
         .run(
@@ -3062,15 +3058,65 @@ fn execute_workflow_enforces_timeout() {
     );
     let mut store = ArtifactStore::new();
     store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
-    let mut runner = SlowRunner;
+    let runner = SlowRunner;
 
-    let err = execute_workflow(&workflow, store, &mut runner).unwrap_err();
+    let err = execute_workflow(&workflow, store, &runner).unwrap_err();
 
     assert_eq!(
         err,
         OxideError::ResourceLimitExceeded {
             limit: "timeout_ms".to_owned()
         }
+    );
+}
+
+#[test]
+fn independent_tasks_in_a_layer_run_in_parallel() {
+    // Eight independent tasks each sleep 50ms. Run serially that is 400ms; in
+    // parallel it should finish in well under that. Use a generous bound to stay
+    // robust on busy CI while still proving concurrency.
+    let tasks = (0..8)
+        .map(|i| {
+            format!(
+                r#"{{ "id": "t{i}", "op": {{ "pdf_edit": {{ "merge": {{}} }} }}, "inputs": ["source"] }}"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let outputs = (0..8)
+        .map(|i| format!(r#"{{ "id": "o{i}", "from": "t{i}", "path": "out{i}.bin" }}"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    let workflow = workflow_from_json(&format!(
+        r#"
+            {{
+              "version": 1,
+              "inputs": [{{ "id": "source", "path": "input.bin" }}],
+              "tasks": [{tasks}],
+              "outputs": [{outputs}]
+            }}
+            "#,
+    ));
+    let mut store = ArtifactStore::new();
+    store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
+
+    struct SleepRunner;
+    impl OperatorRunner for SleepRunner {
+        fn run(&self, task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            Ok(Artifact::bytes(task.id.as_str().as_bytes()))
+        }
+    }
+
+    let started = std::time::Instant::now();
+    let result = execute_workflow(&workflow, store, &SleepRunner).unwrap();
+    let elapsed = started.elapsed();
+
+    assert_eq!(result.plan.task_order.len(), 8);
+    // Serial would be ~400ms; require comfortably below that.
+    assert!(
+        elapsed < std::time::Duration::from_millis(300),
+        "expected parallel execution, took {elapsed:?}"
     );
 }
 
@@ -3093,9 +3139,9 @@ fn execute_workflow_enforces_total_input_size_limit() {
     let mut store = ArtifactStore::new();
     store.insert(artifact_ref("first"), Artifact::bytes(b"12345"));
     store.insert(artifact_ref("second"), Artifact::bytes(b"67890"));
-    let mut runner = RecordingRunner::default();
+    let runner = RecordingRunner::default();
 
-    let err = execute_workflow(&workflow, store, &mut runner).unwrap_err();
+    let err = execute_workflow(&workflow, store, &runner).unwrap_err();
 
     assert_eq!(
         err,
@@ -3103,7 +3149,7 @@ fn execute_workflow_enforces_total_input_size_limit() {
             limit: "max_total_input_bytes".to_owned()
         }
     );
-    assert!(runner.executed.is_empty());
+    assert!(runner.executed().is_empty());
 }
 
 #[test]
@@ -4236,16 +4282,33 @@ fn simple_svg() -> &'static [u8] {
 
 #[derive(Default)]
 struct RecordingRunner {
-    executed: Vec<String>,
+    executed: std::sync::Mutex<Vec<String>>,
     fail_on: Option<&'static str>,
-    error: Option<OxideError>,
+    error: std::sync::Mutex<Option<OxideError>>,
+}
+
+impl RecordingRunner {
+    fn with_failure(fail_on: &'static str, error: OxideError) -> Self {
+        Self {
+            executed: std::sync::Mutex::new(Vec::new()),
+            fail_on: Some(fail_on),
+            error: std::sync::Mutex::new(Some(error)),
+        }
+    }
+
+    fn executed(&self) -> Vec<String> {
+        self.executed.lock().unwrap().clone()
+    }
 }
 
 impl OperatorRunner for RecordingRunner {
-    fn run(&mut self, task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
-        self.executed.push(task.id.as_str().to_owned());
+    fn run(&self, task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
+        self.executed
+            .lock()
+            .unwrap()
+            .push(task.id.as_str().to_owned());
         if self.fail_on == Some(task.id.as_str()) {
-            return Err(self.error.take().unwrap());
+            return Err(self.error.lock().unwrap().take().unwrap());
         }
 
         Ok(Artifact::bytes(task.id.as_str().as_bytes()))
@@ -4255,7 +4318,7 @@ impl OperatorRunner for RecordingRunner {
 struct SlowRunner;
 
 impl OperatorRunner for SlowRunner {
-    fn run(&mut self, _task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
+    fn run(&self, _task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
         std::thread::sleep(std::time::Duration::from_millis(5));
         Ok(Artifact::bytes(b"finished"))
     }

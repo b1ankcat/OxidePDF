@@ -11,6 +11,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use rayon::prelude::*;
+
 /// Current workflow schema version.
 pub const WORKFLOW_SCHEMA_VERSION: u16 = 1;
 
@@ -474,10 +476,13 @@ pub struct ExecutionResult {
     pub store: ArtifactStore,
 }
 
-/// Operator implementation boundary used by the serial executor.
-pub trait OperatorRunner {
+/// Operator implementation boundary used by the executor.
+///
+/// `run` takes `&self` and the trait requires `Sync` so the executor can invoke
+/// it concurrently across the tasks of a single dependency layer.
+pub trait OperatorRunner: Sync {
     /// Runs a task against resolved input artifacts.
-    fn run(&mut self, task: &TaskSpec, inputs: &[Artifact]) -> Result<Artifact, OxideError>;
+    fn run(&self, task: &TaskSpec, inputs: &[Artifact]) -> Result<Artifact, OxideError>;
 }
 
 /// Operator runner for object-level PDF page editing.
@@ -494,7 +499,7 @@ impl PdfOperatorRunner {
 }
 
 impl OperatorRunner for PdfOperatorRunner {
-    fn run(&mut self, task: &TaskSpec, inputs: &[Artifact]) -> Result<Artifact, OxideError> {
+    fn run(&self, task: &TaskSpec, inputs: &[Artifact]) -> Result<Artifact, OxideError> {
         let artifact = match &task.op {
             OperatorSpec::PdfEdit(options) => run_pdf_edit(options, inputs, &self.limits),
             OperatorSpec::PdfInspect(options) => run_pdf_inspect(options, inputs, &self.limits),
@@ -549,42 +554,66 @@ pub fn validate_workflow(workflow: &Workflow) -> Result<ExecutionPlan, OxideErro
     })
 }
 
-/// Executes a workflow serially.
+/// Executes a workflow, running independent tasks of each dependency layer in
+/// parallel.
+///
+/// Tasks are grouped into layers by dependency depth. Within a layer every task
+/// is independent, so they run concurrently on a rayon thread pool, each reading
+/// the shared store immutably and cloning its inputs (an `Arc` refcount bump).
+/// The layer acts as a barrier: once all its tasks finish, results are written
+/// back to the store serially and consumed artifacts are evicted. This keeps the
+/// store lock-free — parallel tasks never mutate it.
 pub fn execute_workflow(
     workflow: &Workflow,
     mut store: ArtifactStore,
-    runner: &mut impl OperatorRunner,
+    runner: &impl OperatorRunner,
 ) -> Result<ExecutionResult, OxideError> {
     let plan = validate_workflow(workflow)?;
     enforce_workflow_input_limits(workflow, &store)?;
     let started_at = Instant::now();
     let timeout = workflow.limits.timeout_ms.map(Duration::from_millis);
+    let layers = execution_layers(workflow, &plan)?;
 
-    for task_id in &plan.task_order {
+    for layer in &layers {
         enforce_timeout(started_at, timeout)?;
-        let index = plan.task_index.get(task_id).copied().ok_or_else(|| {
-            invalid_workflow(format!(
-                "task '{}' disappeared after validation",
-                task_id.as_str()
-            ))
-        })?;
-        let task = &workflow.tasks[index];
-        let inputs = task
-            .inputs
+
+        // Resolve every task's inputs against the read-only store first, so the
+        // parallel section borrows nothing mutable.
+        let resolved = layer
             .iter()
-            .map(|input| {
-                store.get(input).cloned().ok_or_else(|| {
-                    invalid_workflow(format!(
-                        "artifact '{}' is missing at execution time",
-                        input.as_str()
-                    ))
-                })
+            .map(|&index| {
+                let task = &workflow.tasks[index];
+                let inputs = task
+                    .inputs
+                    .iter()
+                    .map(|input| {
+                        store.get(input).cloned().ok_or_else(|| {
+                            invalid_workflow(format!(
+                                "artifact '{}' is missing at execution time",
+                                input.as_str()
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok((task, inputs))
             })
-            .collect::<Result<Vec<_>, _>>()?;
-        let artifact = runner.run(task, &inputs)?;
+            .collect::<Result<Vec<_>, OxideError>>()?;
+
+        // Run the layer's tasks concurrently; the first error short-circuits.
+        let outputs = resolved
+            .par_iter()
+            .map(|(task, inputs)| runner.run(task, inputs).map(|artifact| (*task, artifact)))
+            .collect::<Result<Vec<_>, OxideError>>()?;
+
         enforce_timeout(started_at, timeout)?;
-        store.insert(ArtifactRef::new(task.id.as_str()), artifact);
-        evict_consumed_artifacts(&mut store, &plan, task);
+
+        // Barrier passed: commit results and evict consumed artifacts serially.
+        for (task, artifact) in outputs {
+            store.insert(ArtifactRef::new(task.id.as_str()), artifact);
+        }
+        for &index in layer {
+            evict_consumed_artifacts(&mut store, &plan, &workflow.tasks[index]);
+        }
     }
 
     Ok(ExecutionResult { plan, store })
@@ -602,6 +631,73 @@ fn evict_consumed_artifacts(store: &mut ArtifactStore, plan: &ExecutionPlan, tas
             store.remove(input);
         }
     }
+}
+
+/// Groups task indices into dependency layers for parallel execution.
+///
+/// Layer 0 holds every task whose inputs are all external (no task dependency);
+/// each subsequent layer holds tasks whose task-dependencies are all satisfied
+/// by earlier layers. Tasks in the same layer are mutually independent and may
+/// run concurrently. Returns the same set of tasks as `task_order`, partitioned.
+fn execution_layers(
+    workflow: &Workflow,
+    plan: &ExecutionPlan,
+) -> Result<Vec<Vec<usize>>, OxideError> {
+    let task_ids = workflow
+        .tasks
+        .iter()
+        .map(|task| task.id.clone())
+        .collect::<BTreeSet<_>>();
+
+    // Count, per task, how many of its inputs are produced by other tasks.
+    let mut remaining_deps = vec![0usize; workflow.tasks.len()];
+    let mut dependents: BTreeMap<TaskId, Vec<usize>> = BTreeMap::new();
+    for (index, task) in workflow.tasks.iter().enumerate() {
+        for input in &task.inputs {
+            let dependency = TaskId::new(input.as_str());
+            if task_ids.contains(&dependency) {
+                remaining_deps[index] += 1;
+                dependents.entry(dependency).or_default().push(index);
+            }
+        }
+    }
+
+    let mut current = remaining_deps
+        .iter()
+        .enumerate()
+        .filter_map(|(index, count)| (*count == 0).then_some(index))
+        .collect::<Vec<_>>();
+
+    let mut layers = Vec::new();
+    let mut emitted = 0usize;
+    while !current.is_empty() {
+        let mut next = Vec::new();
+        for &index in &current {
+            if let Some(children) = dependents.get(&workflow.tasks[index].id) {
+                for &child in children {
+                    remaining_deps[child] -= 1;
+                    if remaining_deps[child] == 0 {
+                        next.push(child);
+                    }
+                }
+            }
+        }
+        emitted += current.len();
+        layers.push(current);
+        current = next;
+    }
+
+    if emitted != workflow.tasks.len() {
+        // topological_sort already rejects cycles; this is a defensive guard.
+        return Err(invalid_workflow("workflow task graph contains a cycle"));
+    }
+    debug_assert_eq!(
+        emitted,
+        plan.task_order.len(),
+        "layered execution must cover the topological order"
+    );
+
+    Ok(layers)
 }
 
 fn enforce_workflow_input_limits(

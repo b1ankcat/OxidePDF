@@ -22,6 +22,7 @@ pdf-extract.workspace = true
 pdf-writer.workspace = true
 pem-rfc7468.workspace = true
 rand.workspace = true
+rayon.workspace = true
 rsa.workspace = true
 resvg.workspace = true
 serde.workspace = true
