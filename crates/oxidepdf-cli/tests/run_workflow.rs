@@ -152,7 +152,7 @@ fn reorder_command_writes_parseable_pdf() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "edit",
+            "pdf_edit",
             "reorder-pages",
             fixture_pdf().to_str().unwrap(),
             "--pages",
@@ -176,7 +176,7 @@ fn img2pdf_command_writes_parseable_pdf() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "edit",
+            "pdf_edit",
             "img2pdf",
             fixture_jpg().to_str().unwrap(),
             "-o",
@@ -206,7 +206,7 @@ fn svg2pdf_command_writes_parseable_pdf() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "edit",
+            "pdf_edit",
             "svg2pdf",
             input.to_str().unwrap(),
             "-o",
@@ -228,7 +228,7 @@ fn compress_command_writes_parseable_pdf() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "edit",
+            "pdf_edit",
             "compress",
             fixture_pdf().to_str().unwrap(),
             "-o",
@@ -252,7 +252,7 @@ fn compress_command_accepts_explicit_lossy_options() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "edit",
+            "pdf_edit",
             "compress",
             input.to_str().unwrap(),
             "-o",
@@ -279,6 +279,7 @@ fn encrypt_and_decrypt_commands_round_trip_pdf() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
+            "pdf_security",
             "encrypt",
             fixture_pdf().to_str().unwrap(),
             "-o",
@@ -300,6 +301,7 @@ fn encrypt_and_decrypt_commands_round_trip_pdf() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
+            "pdf_security",
             "decrypt",
             encrypted.to_str().unwrap(),
             "-o",
@@ -324,6 +326,7 @@ fn decrypt_command_rejects_wrong_password_without_output_or_secret_leak() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
+            "pdf_security",
             "encrypt",
             fixture_pdf().to_str().unwrap(),
             "-o",
@@ -339,6 +342,7 @@ fn decrypt_command_rejects_wrong_password_without_output_or_secret_leak() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
+            "pdf_security",
             "decrypt",
             encrypted.to_str().unwrap(),
             "-o",
@@ -367,6 +371,7 @@ fn permissions_get_and_set_commands_write_expected_policy() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
+            "pdf_security",
             "encrypt",
             fixture_pdf().to_str().unwrap(),
             "-o",
@@ -384,6 +389,7 @@ fn permissions_get_and_set_commands_write_expected_policy() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
+            "pdf_security",
             "permissions",
             "get",
             encrypted.to_str().unwrap(),
@@ -406,6 +412,7 @@ fn permissions_get_and_set_commands_write_expected_policy() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
+            "pdf_security",
             "permissions",
             "set",
             encrypted.to_str().unwrap(),
@@ -432,7 +439,7 @@ fn render_command_writes_png() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "inspect",
+            "pdf_inspect",
             "render",
             fixture_pdf().to_str().unwrap(),
             "--page",
@@ -458,7 +465,7 @@ fn extract_text_command_writes_plain_text() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "inspect",
+            "pdf_inspect",
             "extract-text",
             fixture_pdf().to_str().unwrap(),
             "-o",
@@ -480,7 +487,8 @@ fn compare_command_writes_json_report() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "compare",
+            "pdf_compare",
+            "report",
             fixture_pdf().to_str().unwrap(),
             fixture_pdf().to_str().unwrap(),
             "-o",
@@ -504,10 +512,10 @@ fn compare_command_writes_visual_diff_png() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "compare",
+            "pdf_compare",
+            "visual-diff",
             fixture_pdf().to_str().unwrap(),
             fixture_pdf().to_str().unwrap(),
-            "--visual-diff",
             "--page",
             "1",
             "-o",
@@ -573,7 +581,7 @@ fn watermark_text_command_writes_parseable_pdf() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "edit",
+            "pdf_edit",
             "watermark",
             fixture_pdf().to_str().unwrap(),
             "--kind",
@@ -604,7 +612,7 @@ fn sign_appearance_command_writes_parseable_pdf() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "sign",
+            "pdf_sign",
             "appearance",
             fixture_pdf().to_str().unwrap(),
             "--text",
@@ -682,7 +690,7 @@ fn render_command_rejects_out_of_range_page() {
     Command::cargo_bin("oxidepdf")
         .unwrap()
         .args([
-            "inspect",
+            "pdf_inspect",
             "render",
             fixture_pdf().to_str().unwrap(),
             "--page",

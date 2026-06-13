@@ -11,9 +11,9 @@
   Pass --force to overwrite an existing output file.
 
 Common examples:
-  oxidepdf edit merge a.pdf b.pdf -o merged.pdf
-  oxidepdf inspect extract-text input.pdf -o text.txt
-  oxidepdf sign verify signed.pdf -o report.json
+  oxidepdf pdf_edit merge a.pdf b.pdf -o merged.pdf
+  oxidepdf pdf_inspect extract-text input.pdf -o text.txt
+  oxidepdf pdf_sign verify signed.pdf -o report.json
   source <(oxidepdf completion bash)
   oxidepdf completion bash -o oxidepdf.bash --force"
 )]
@@ -27,59 +27,29 @@ enum Commands {
     /// Run a workflow document.
     Run(RunArgs),
     /// Edit or create PDF files.
-    #[command(name = "edit")]
+    #[command(name = "pdf_edit")]
     #[command(subcommand)]
-    Edit(PdfEditCommand),
+    PdfEdit(PdfEditCommand),
     /// Inspect or render PDF files.
-    #[command(name = "inspect")]
+    #[command(name = "pdf_inspect")]
     #[command(subcommand)]
-    Inspect(PdfInspectCommand),
+    PdfInspect(PdfInspectCommand),
+    /// Encrypt, decrypt, or manage PDF password permissions.
+    #[command(name = "pdf_security")]
+    #[command(subcommand)]
+    PdfSecurity(PdfSecurityCommand),
     /// Compare PDF files.
-    Compare(CompareArgs),
-    /// List or verify PDF digital signatures.
+    #[command(name = "pdf_compare")]
     #[command(subcommand)]
-    Sign(SignCommand),
-    /// Add document timestamp material.
+    PdfCompare(PdfCompareCommand),
+    /// Sign, list, verify, or timestamp PDF signatures.
+    #[command(name = "pdf_sign")]
     #[command(subcommand)]
-    Timestamp(TimestampCommand),
-    /// Inspect, set, delete, or validate document metadata.
+    PdfSign(PdfSignCommand),
+    /// Advanced metadata, outline, attachment, annotation, form, and image operations.
+    #[command(name = "pdf_adv")]
     #[command(subcommand)]
-    Metadata(MetadataCommand),
-    /// Inspect, set, or delete document outlines.
-    #[command(subcommand)]
-    Outline(OutlineCommand),
-    /// Add, list, extract, or delete embedded file attachments.
-    #[command(name = "attach")]
-    #[command(subcommand)]
-    Attach(AttachCommand),
-    /// List, add, or delete annotations.
-    #[command(name = "annot")]
-    #[command(subcommand)]
-    Annot(AnnotCommand),
-    /// Fill, unlock, inspect, or remove interactive forms.
-    #[command(subcommand)]
-    Form(FormCommand),
-    /// Remove selected interactive document elements.
-    #[command(subcommand)]
-    Interactive(InteractiveCommand),
-    /// Add a text stamp to a PDF.
-    Stamp(StampArgs),
-    /// Overlay one PDF page onto another PDF.
-    #[command(name = "overlay-pdf")]
-    OverlayPdf(OverlayPdfArgs),
-    /// Inspect or edit image XObject resources.
-    #[command(subcommand)]
-    Image(ImageCommand),
-    /// Edit simple page colors.
-    #[command(subcommand)]
-    Color(ColorCommand),
-    /// Encrypt a PDF with owner and user passwords.
-    Encrypt(SecurityEncryptArgs),
-    /// Decrypt a password-protected PDF.
-    Decrypt(SecurityDecryptArgs),
-    /// Inspect or change password permission policy.
-    #[command(subcommand)]
-    Permissions(PermissionsCommand),
+    PdfAdv(PdfAdvCommand),
     /// Generate shell completion scripts.
     #[command(subcommand)]
     Completion(CompletionCommand),
@@ -135,6 +105,17 @@ enum PdfEditCommand {
     Watermark(WatermarkArgs),
     /// Compress and optimize a PDF.
     Compress(CompressArgs),
+    /// Add a text stamp to a PDF.
+    Stamp(StampArgs),
+    /// Overlay one PDF page onto another PDF.
+    #[command(name = "overlay-pdf")]
+    OverlayPdf(OverlayPdfArgs),
+    /// Edit simple page colors.
+    #[command(subcommand)]
+    Color(ColorCommand),
+    /// Remove selected interactive document elements.
+    #[command(name = "interactive-remove")]
+    InteractiveRemove(InteractiveRemoveArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -147,7 +128,27 @@ enum PdfInspectCommand {
 }
 
 #[derive(Debug, Subcommand)]
-enum SignCommand {
+enum PdfSecurityCommand {
+    /// Encrypt a PDF with owner and user passwords.
+    Encrypt(SecurityEncryptArgs),
+    /// Decrypt a password-protected PDF.
+    Decrypt(SecurityDecryptArgs),
+    /// Inspect or change password permission policy.
+    #[command(subcommand)]
+    Permissions(PermissionsCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum PdfCompareCommand {
+    /// Compare two PDFs and write a JSON difference report.
+    Report(CompareReportArgs),
+    /// Render a visual diff PNG between two PDFs.
+    #[command(name = "visual-diff")]
+    VisualDiff(CompareVisualDiffArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum PdfSignCommand {
     /// Add a PDF digital signature.
     Add(SignAddArgs),
     /// List PDF signatures.
@@ -159,12 +160,30 @@ enum SignCommand {
     DeleteField(SignDeleteFieldArgs),
     /// Add visual signature appearance only.
     Appearance(SignatureAppearanceArgs),
+    /// Add or inspect explicit timestamp material.
+    Timestamp(TimestampAddArgs),
 }
 
 #[derive(Debug, Subcommand)]
-enum TimestampCommand {
-    /// Add or inspect explicit timestamp material.
-    Add(TimestampAddArgs),
+enum PdfAdvCommand {
+    /// Inspect, set, delete, or validate document metadata.
+    #[command(subcommand)]
+    Metadata(MetadataCommand),
+    /// Inspect, set, or delete document outlines.
+    #[command(subcommand)]
+    Outline(OutlineCommand),
+    /// Add, list, extract, or delete embedded file attachments.
+    #[command(subcommand)]
+    Attach(AttachCommand),
+    /// List, add, or delete annotations.
+    #[command(subcommand)]
+    Annot(AnnotCommand),
+    /// Fill, unlock, inspect, or remove interactive forms.
+    #[command(subcommand)]
+    Form(FormCommand),
+    /// Inspect or edit image XObject resources.
+    #[command(subcommand)]
+    Image(ImageCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -222,12 +241,6 @@ enum FormCommand {
     UnlockReadonly(EditOutputArgs),
     /// Remove interactive form fields.
     Remove(EditOutputArgs),
-}
-
-#[derive(Debug, Subcommand)]
-enum InteractiveCommand {
-    /// Remove selected interactive document elements.
-    Remove(InteractiveRemoveArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -931,7 +944,7 @@ struct PermissionArgs {
 }
 
 #[derive(Debug, Parser)]
-struct CompareArgs {
+struct CompareReportArgs {
     /// Left input PDF file.
     left: PathBuf,
 
@@ -942,9 +955,22 @@ struct CompareArgs {
     #[arg(short, long)]
     output: PathBuf,
 
-    /// Write a rendered visual diff PNG instead of a JSON report.
+    /// Overwrite output files when they already exist.
     #[arg(long)]
-    visual_diff: bool,
+    force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct CompareVisualDiffArgs {
+    /// Left input PDF file.
+    left: PathBuf,
+
+    /// Right input PDF file.
+    right: PathBuf,
+
+    /// Output PNG file, or `-` to write to stdout.
+    #[arg(short, long)]
+    output: PathBuf,
 
     /// One-based page for visual diff output.
     #[arg(long, default_value_t = 1)]

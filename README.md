@@ -4,7 +4,7 @@ OxidePDF is a pure Rust PDF toolkit with a modular CLI and workflow engine. It f
 
 ## Highlights ✨
 
-- 🧩 **Modular commands**: `edit`, `inspect`, `sign`, `metadata`, `outline`, `attach`, `annot`, `form`, `image`, `color`, `permissions`, and more.
+- 🧩 **Modular commands**: `pdf_edit`, `pdf_inspect`, `pdf_security`, `pdf_compare`, `pdf_sign`, and `pdf_adv` (metadata, outline, attach, annot, form, image), mirroring the workflow operator families.
 - 🛠️ **PDF editing**: merge, page selection, reorder, rotate, delete, crop, scale, n-up, booklet, page numbers, image-to-PDF, SVG-to-PDF, watermarks, and compression.
 - 🔍 **Inspection**: render pages to PNG and extract text.
 - 🔐 **Security and signatures**: encrypt, decrypt, inspect/set permissions, add/list/verify/delete signature fields, add visual signature appearances, and attach explicit timestamp material.
@@ -25,8 +25,8 @@ Run help:
 
 ```sh
 target/debug/oxidepdf --help
-target/debug/oxidepdf edit --help
-target/debug/oxidepdf sign verify --help
+target/debug/oxidepdf pdf_edit --help
+target/debug/oxidepdf pdf_sign verify --help
 ```
 
 Every command and argument is documented in `-h` output.
@@ -36,31 +36,31 @@ Every command and argument is documented in `-h` output.
 Merge PDFs:
 
 ```sh
-oxidepdf edit merge a.pdf b.pdf -o merged.pdf
+oxidepdf pdf_edit merge a.pdf b.pdf -o merged.pdf
 ```
 
 Extract text:
 
 ```sh
-oxidepdf inspect extract-text input.pdf -o text.txt
+oxidepdf pdf_inspect extract-text input.pdf -o text.txt
 ```
 
 Render a page:
 
 ```sh
-oxidepdf inspect render input.pdf --page 1 -o page.png
+oxidepdf pdf_inspect render input.pdf --page 1 -o page.png
 ```
 
 Compress losslessly:
 
 ```sh
-oxidepdf edit compress input.pdf -o compressed.pdf
+oxidepdf pdf_edit compress input.pdf -o compressed.pdf
 ```
 
 Verify signatures:
 
 ```sh
-oxidepdf sign verify signed.pdf -o signature-report.json
+oxidepdf pdf_sign verify signed.pdf -o signature-report.json
 ```
 
 Generate bash completion:
@@ -180,15 +180,13 @@ tasks:
     op:
       pdf_edit:
         compression:
-          compress_images: true
-          compress_streams: true
-          lossless: true
+          mode: lossless
     inputs: [source]
 ```
 
 ### Multi-Step Pipeline Example
 
-This workflow merges two PDFs, rotates every page, and renders the result to PNG — all in one pass:
+This workflow merges two PDFs, rotates the first two pages, and renders the result to PNG — all in one pass:
 
 ```yaml
 version: 1
@@ -205,22 +203,21 @@ tasks:
   - id: merged
     op:
       pdf_edit:
-        merge:
-          inputs: [cover, body]
+        merge: {}
     inputs: [cover, body]
   - id: rotated
     op:
       pdf_edit:
-        rotate:
-          rotation: 90
-          page_selector: all
+        rotate_pages:
+          pages: "1-2"
+          degrees: 90
     inputs: [merged]
   - id: rendered
     op:
       pdf_inspect:
         render:
           page: 1
-          dpi: 150
+          scale: 2.0
     inputs: [rotated]
 ```
 
@@ -229,10 +226,12 @@ tasks:
 | Family | Examples |
 |---|---|
 | `pdf_edit` | merge, rotate, crop, scale, n-up, booklet, watermark, page-numbers, img2pdf, svg2pdf, compression |
-| `pdf_inspect` | render, extract-text, metadata inspect, outline inspect, forms, images |
+| `pdf_inspect` | render, extract-text |
 | `pdf_sign` | add, list, verify, delete-field, timestamp |
-| `pdf_security` | encrypt, decrypt, permissions-get, permissions-set |
+| `pdf_security` | encrypt, decrypt, permissions |
 | `pdf_compare` | report, visual-diff |
+
+The CLI groups commands under the same families: `pdf_edit`, `pdf_inspect`, `pdf_security`, `pdf_compare`, `pdf_sign`, plus `pdf_adv` for metadata, outline, attachment, annotation, form, and image operations.
 
 Each task specifies exactly one operator. The engine validates references, detects cycles, and enforces limits before any work begins.
 
@@ -258,7 +257,7 @@ let mut runner = PdfOperatorRunner::default();
 let result = execute_workflow(&workflow, store, &mut runner)?;
 ```
 
-Individual CLI commands (`edit merge`, `inspect render`, etc.) are implemented as single-task workflows internally, so the same validation and execution path serves both interactive use and workflow documents.
+Individual CLI commands (`pdf_edit merge`, `pdf_inspect render`, etc.) are implemented as single-task workflows internally, so the same validation and execution path serves both interactive use and workflow documents.
 
 ## Milestones 🗺️
 

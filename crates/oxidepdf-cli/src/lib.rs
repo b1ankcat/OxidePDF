@@ -124,24 +124,12 @@ where
 fn cli_reads_stdin(cli: &Cli) -> bool {
     match &cli.command {
         Some(Commands::Run(args)) => is_stdio(&args.workflow),
-        Some(Commands::Edit(command)) => pdf_edit_reads_stdin(command),
-        Some(Commands::Inspect(command)) => pdf_inspect_reads_stdin(command),
-        Some(Commands::Compare(args)) => is_stdio(&args.left) || is_stdio(&args.right),
-        Some(Commands::Sign(command)) => sign_reads_stdin(command),
-        Some(Commands::Timestamp(command)) => timestamp_reads_stdin(command),
-        Some(Commands::Metadata(command)) => metadata_reads_stdin(command),
-        Some(Commands::Outline(command)) => outline_reads_stdin(command),
-        Some(Commands::Attach(command)) => attach_reads_stdin(command),
-        Some(Commands::Annot(command)) => annot_reads_stdin(command),
-        Some(Commands::Form(command)) => form_reads_stdin(command),
-        Some(Commands::Interactive(command)) => interactive_reads_stdin(command),
-        Some(Commands::Stamp(args)) => is_stdio(&args.input),
-        Some(Commands::OverlayPdf(args)) => is_stdio(&args.input) || is_stdio(&args.overlay),
-        Some(Commands::Image(command)) => image_reads_stdin(command),
-        Some(Commands::Color(command)) => color_reads_stdin(command),
-        Some(Commands::Encrypt(args)) => is_stdio(&args.input),
-        Some(Commands::Decrypt(args)) => is_stdio(&args.input),
-        Some(Commands::Permissions(command)) => permissions_reads_stdin(command),
+        Some(Commands::PdfEdit(command)) => pdf_edit_reads_stdin(command),
+        Some(Commands::PdfInspect(command)) => pdf_inspect_reads_stdin(command),
+        Some(Commands::PdfSecurity(command)) => pdf_security_reads_stdin(command),
+        Some(Commands::PdfCompare(command)) => pdf_compare_reads_stdin(command),
+        Some(Commands::PdfSign(command)) => sign_reads_stdin(command),
+        Some(Commands::PdfAdv(command)) => pdf_adv_reads_stdin(command),
         Some(Commands::Completion(_)) => false,
         None => false,
     }
@@ -168,6 +156,10 @@ fn pdf_edit_reads_stdin(command: &PdfEditCommand) -> bool {
             is_stdio(&args.input) || args.watermark.as_ref().is_some_and(|path| is_stdio(path))
         }
         PdfEditCommand::Compress(args) => is_stdio(&args.input),
+        PdfEditCommand::Stamp(args) => is_stdio(&args.input),
+        PdfEditCommand::OverlayPdf(args) => is_stdio(&args.input) || is_stdio(&args.overlay),
+        PdfEditCommand::Color(command) => color_reads_stdin(command),
+        PdfEditCommand::InteractiveRemove(args) => is_stdio(&args.input),
     }
 }
 
@@ -178,19 +170,40 @@ fn pdf_inspect_reads_stdin(command: &PdfInspectCommand) -> bool {
     }
 }
 
-fn sign_reads_stdin(command: &SignCommand) -> bool {
+fn pdf_security_reads_stdin(command: &PdfSecurityCommand) -> bool {
     match command {
-        SignCommand::Add(args) => is_stdio(&args.input),
-        SignCommand::List(args) => is_stdio(&args.input),
-        SignCommand::Verify(args) => is_stdio(&args.input),
-        SignCommand::DeleteField(args) => is_stdio(&args.input),
-        SignCommand::Appearance(args) => is_stdio(&args.input),
+        PdfSecurityCommand::Encrypt(args) => is_stdio(&args.input),
+        PdfSecurityCommand::Decrypt(args) => is_stdio(&args.input),
+        PdfSecurityCommand::Permissions(command) => permissions_reads_stdin(command),
     }
 }
 
-fn timestamp_reads_stdin(command: &TimestampCommand) -> bool {
+fn pdf_compare_reads_stdin(command: &PdfCompareCommand) -> bool {
     match command {
-        TimestampCommand::Add(args) => is_stdio(&args.input),
+        PdfCompareCommand::Report(args) => is_stdio(&args.left) || is_stdio(&args.right),
+        PdfCompareCommand::VisualDiff(args) => is_stdio(&args.left) || is_stdio(&args.right),
+    }
+}
+
+fn pdf_adv_reads_stdin(command: &PdfAdvCommand) -> bool {
+    match command {
+        PdfAdvCommand::Metadata(command) => metadata_reads_stdin(command),
+        PdfAdvCommand::Outline(command) => outline_reads_stdin(command),
+        PdfAdvCommand::Attach(command) => attach_reads_stdin(command),
+        PdfAdvCommand::Annot(command) => annot_reads_stdin(command),
+        PdfAdvCommand::Form(command) => form_reads_stdin(command),
+        PdfAdvCommand::Image(command) => image_reads_stdin(command),
+    }
+}
+
+fn sign_reads_stdin(command: &PdfSignCommand) -> bool {
+    match command {
+        PdfSignCommand::Add(args) => is_stdio(&args.input),
+        PdfSignCommand::List(args) => is_stdio(&args.input),
+        PdfSignCommand::Verify(args) => is_stdio(&args.input),
+        PdfSignCommand::DeleteField(args) => is_stdio(&args.input),
+        PdfSignCommand::Appearance(args) => is_stdio(&args.input),
+        PdfSignCommand::Timestamp(args) => is_stdio(&args.input),
     }
 }
 
@@ -235,12 +248,6 @@ fn form_reads_stdin(command: &FormCommand) -> bool {
     }
 }
 
-fn interactive_reads_stdin(command: &InteractiveCommand) -> bool {
-    match command {
-        InteractiveCommand::Remove(args) => is_stdio(&args.input),
-    }
-}
-
 fn image_reads_stdin(command: &ImageCommand) -> bool {
     match command {
         ImageCommand::List(args) => is_stdio(&args.input),
@@ -274,24 +281,12 @@ where
     let cli = Cli::try_parse_from(args).map_err(CliError::Arguments)?;
     match cli.command {
         Some(Commands::Run(args)) => run_workflow(args, stdin, stdout),
-        Some(Commands::Edit(command)) => run_pdf_edit(command, stdin, stdout),
-        Some(Commands::Inspect(command)) => run_pdf_inspect(command, stdin, stdout),
-        Some(Commands::Compare(args)) => run_compare(args, stdin, stdout),
-        Some(Commands::Sign(command)) => run_sign(command, stdin, stdout),
-        Some(Commands::Timestamp(command)) => run_timestamp(command, stdin, stdout),
-        Some(Commands::Metadata(command)) => run_metadata(command, stdin, stdout),
-        Some(Commands::Outline(command)) => run_outline(command, stdin, stdout),
-        Some(Commands::Attach(command)) => run_attach(command, stdin, stdout),
-        Some(Commands::Annot(command)) => run_annot(command, stdin, stdout),
-        Some(Commands::Form(command)) => run_form(command, stdin, stdout),
-        Some(Commands::Interactive(command)) => run_interactive(command, stdin, stdout),
-        Some(Commands::Stamp(args)) => run_stamp(args, stdin, stdout),
-        Some(Commands::OverlayPdf(args)) => run_overlay_pdf(args, stdin, stdout),
-        Some(Commands::Image(command)) => run_image(command, stdin, stdout),
-        Some(Commands::Color(command)) => run_color(command, stdin, stdout),
-        Some(Commands::Encrypt(args)) => run_encrypt(args, stdin, stdout),
-        Some(Commands::Decrypt(args)) => run_decrypt(args, stdin, stdout),
-        Some(Commands::Permissions(command)) => run_permissions(command, stdin, stdout),
+        Some(Commands::PdfEdit(command)) => run_pdf_edit(command, stdin, stdout),
+        Some(Commands::PdfInspect(command)) => run_pdf_inspect(command, stdin, stdout),
+        Some(Commands::PdfSecurity(command)) => run_pdf_security(command, stdin, stdout),
+        Some(Commands::PdfCompare(command)) => run_compare(command, stdin, stdout),
+        Some(Commands::PdfSign(command)) => run_sign(command, stdin, stdout),
+        Some(Commands::PdfAdv(command)) => run_pdf_adv(command, stdin, stdout),
         Some(Commands::Completion(command)) => run_completion(command, stdout),
         None => Ok(()),
     }
@@ -362,6 +357,10 @@ fn run_pdf_edit(
         PdfEditCommand::Svg2pdf(args) => run_svg2pdf(args, stdin, stdout),
         PdfEditCommand::Watermark(args) => run_watermark(args, stdin, stdout),
         PdfEditCommand::Compress(args) => run_compress(args, stdin, stdout),
+        PdfEditCommand::Stamp(args) => run_stamp(args, stdin, stdout),
+        PdfEditCommand::OverlayPdf(args) => run_overlay_pdf(args, stdin, stdout),
+        PdfEditCommand::Color(command) => run_color(command, stdin, stdout),
+        PdfEditCommand::InteractiveRemove(args) => run_interactive_remove(args, stdin, stdout),
     }
 }
 
@@ -376,23 +375,45 @@ fn run_pdf_inspect(
     }
 }
 
-fn run_sign(command: SignCommand, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError> {
-    match command {
-        SignCommand::Add(args) => run_add_signature(args, stdin, stdout),
-        SignCommand::List(args) => run_list_signatures(args, stdin, stdout),
-        SignCommand::Verify(args) => run_verify_signatures(args, stdin, stdout),
-        SignCommand::DeleteField(args) => run_delete_signature_field(args, stdin, stdout),
-        SignCommand::Appearance(args) => run_signature_appearance(args, stdin, stdout),
-    }
-}
-
-fn run_timestamp(
-    command: TimestampCommand,
+fn run_sign(
+    command: PdfSignCommand,
     stdin: &[u8],
     stdout: &mut impl Write,
 ) -> Result<(), CliError> {
     match command {
-        TimestampCommand::Add(args) => run_add_timestamp(args, stdin, stdout),
+        PdfSignCommand::Add(args) => run_add_signature(args, stdin, stdout),
+        PdfSignCommand::List(args) => run_list_signatures(args, stdin, stdout),
+        PdfSignCommand::Verify(args) => run_verify_signatures(args, stdin, stdout),
+        PdfSignCommand::DeleteField(args) => run_delete_signature_field(args, stdin, stdout),
+        PdfSignCommand::Appearance(args) => run_signature_appearance(args, stdin, stdout),
+        PdfSignCommand::Timestamp(args) => run_add_timestamp(args, stdin, stdout),
+    }
+}
+
+fn run_pdf_security(
+    command: PdfSecurityCommand,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    match command {
+        PdfSecurityCommand::Encrypt(args) => run_encrypt(args, stdin, stdout),
+        PdfSecurityCommand::Decrypt(args) => run_decrypt(args, stdin, stdout),
+        PdfSecurityCommand::Permissions(command) => run_permissions(command, stdin, stdout),
+    }
+}
+
+fn run_pdf_adv(
+    command: PdfAdvCommand,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    match command {
+        PdfAdvCommand::Metadata(command) => run_metadata(command, stdin, stdout),
+        PdfAdvCommand::Outline(command) => run_outline(command, stdin, stdout),
+        PdfAdvCommand::Attach(command) => run_attach(command, stdin, stdout),
+        PdfAdvCommand::Annot(command) => run_annot(command, stdin, stdout),
+        PdfAdvCommand::Form(command) => run_form(command, stdin, stdout),
+        PdfAdvCommand::Image(command) => run_image(command, stdin, stdout),
     }
 }
 
@@ -968,25 +989,40 @@ fn permission_policy(args: &PermissionArgs) -> PermissionPolicy {
     }
 }
 
-fn run_compare(args: CompareArgs, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError> {
-    let operator = if args.visual_diff {
-        PdfCompareOptions::VisualDiff(VisualDiffOptions {
-            page: args.page,
-            scale: args.scale,
-        })
-    } else {
-        PdfCompareOptions::Report(CompareOptions::default())
+fn run_compare(
+    command: PdfCompareCommand,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError> {
+    let (left, right, output, force, operator) = match command {
+        PdfCompareCommand::Report(args) => (
+            args.left,
+            args.right,
+            args.output,
+            args.force,
+            PdfCompareOptions::Report(CompareOptions::default()),
+        ),
+        PdfCompareCommand::VisualDiff(args) => (
+            args.left,
+            args.right,
+            args.output,
+            args.force,
+            PdfCompareOptions::VisualDiff(VisualDiffOptions {
+                page: args.page,
+                scale: args.scale,
+            }),
+        ),
     };
     let workflow = Workflow {
         version: WorkflowVersion::V1,
         inputs: vec![
             oxidepdf_core::InputSpec {
                 id: ArtifactRef::new("left"),
-                path: args.left,
+                path: left,
             },
             oxidepdf_core::InputSpec {
                 id: ArtifactRef::new("right"),
-                path: args.right,
+                path: right,
             },
         ],
         tasks: vec![TaskSpec {
@@ -997,13 +1033,13 @@ fn run_compare(args: CompareArgs, stdin: &[u8], stdout: &mut impl Write) -> Resu
         outputs: vec![oxidepdf_core::OutputSpec {
             id: ArtifactRef::new("output"),
             from: ArtifactRef::new("compare"),
-            path: args.output,
+            path: output,
         }],
         limits: Default::default(),
         metadata: WorkflowMetadata::default(),
     };
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, force, stdout)
 }
 
 fn run_metadata(
@@ -1307,32 +1343,30 @@ fn run_form(command: FormCommand, stdin: &[u8], stdout: &mut impl Write) -> Resu
     }
 }
 
-fn run_interactive(
-    command: InteractiveCommand,
+fn run_interactive_remove(
+    args: InteractiveRemoveArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
 ) -> Result<(), CliError> {
-    match command {
-        InteractiveCommand::Remove(args) => execute_and_write_workflow(
-            one_input_workflow(
-                args.input,
-                args.output,
-                "interactive_remove",
-                OperatorSpec::PdfEdit(PdfEditOptions::InteractiveRemove(
-                    InteractiveRemovalOptions {
-                        annotations: args.annotations,
-                        forms: args.forms,
-                        actions: args.actions,
-                        javascript: args.javascript,
-                        embedded_files: args.embedded_files,
-                    },
-                )),
-            ),
-            stdin,
-            args.force,
-            stdout,
+    execute_and_write_workflow(
+        one_input_workflow(
+            args.input,
+            args.output,
+            "interactive_remove",
+            OperatorSpec::PdfEdit(PdfEditOptions::InteractiveRemove(
+                InteractiveRemovalOptions {
+                    annotations: args.annotations,
+                    forms: args.forms,
+                    actions: args.actions,
+                    javascript: args.javascript,
+                    embedded_files: args.embedded_files,
+                },
+            )),
         ),
-    }
+        stdin,
+        args.force,
+        stdout,
+    )
 }
 
 fn run_stamp(args: StampArgs, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError> {
@@ -2002,7 +2036,7 @@ mod tests {
         assert_eq!(stderr, b"");
         assert!(completion.contains("_oxidepdf()"));
         assert!(completion.contains("complete -F _oxidepdf"));
-        assert!(completion.contains("oxidepdf__subcmd__sign"));
+        assert!(completion.contains("oxidepdf__subcmd__pdf_sign"));
     }
 
     #[test]
@@ -2113,6 +2147,24 @@ mod tests {
             "pdf-edit",
             "pdf-inspect",
             "signature-appearance",
+            "edit",
+            "inspect",
+            "compare",
+            "sign",
+            "timestamp",
+            "metadata",
+            "outline",
+            "attach",
+            "annot",
+            "form",
+            "interactive",
+            "stamp",
+            "overlay-pdf",
+            "image",
+            "color",
+            "encrypt",
+            "decrypt",
+            "permissions",
         ] {
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
@@ -2139,7 +2191,7 @@ mod tests {
     fn render_file_input_does_not_require_stdin() {
         let stdin = stdin_for_args([
             "oxidepdf",
-            "inspect",
+            "pdf_inspect",
             "render",
             "input.pdf",
             "--page",
@@ -2156,7 +2208,7 @@ mod tests {
     fn render_stdio_input_requires_stdin() {
         let cli = Cli::try_parse_from([
             "oxidepdf",
-            "inspect",
+            "pdf_inspect",
             "render",
             "-",
             "--page",
@@ -2173,7 +2225,7 @@ mod tests {
     fn extract_text_stdio_input_requires_stdin() {
         let cli = Cli::try_parse_from([
             "oxidepdf",
-            "inspect",
+            "pdf_inspect",
             "extract-text",
             "-",
             "-o",
@@ -2186,9 +2238,16 @@ mod tests {
 
     #[test]
     fn compare_stdio_input_requires_stdin() {
-        let cli =
-            Cli::try_parse_from(["oxidepdf", "compare", "-", "right.pdf", "-o", "report.json"])
-                .unwrap();
+        let cli = Cli::try_parse_from([
+            "oxidepdf",
+            "pdf_compare",
+            "report",
+            "-",
+            "right.pdf",
+            "-o",
+            "report.json",
+        ])
+        .unwrap();
 
         assert!(cli_reads_stdin(&cli));
     }
@@ -2495,7 +2554,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "edit",
+                "pdf_edit",
                 "merge",
                 input.to_str().unwrap(),
                 input.to_str().unwrap(),
@@ -2523,7 +2582,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "edit",
+                "pdf_edit",
                 "keep-pages",
                 fixture_pdf().to_str().unwrap(),
                 "--pages",
@@ -2552,7 +2611,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "edit",
+                "pdf_edit",
                 "rotate-pages",
                 fixture_pdf().to_str().unwrap(),
                 "--pages",
@@ -2583,7 +2642,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "edit",
+                "pdf_edit",
                 "delete-pages",
                 fixture_pdf().to_str().unwrap(),
                 "--pages",
@@ -2612,7 +2671,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "edit",
+                "pdf_edit",
                 "extract-pages",
                 fixture_pdf().to_str().unwrap(),
                 "--pages",
@@ -2641,7 +2700,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "edit",
+                "pdf_edit",
                 "crop-pages",
                 fixture_pdf().to_str().unwrap(),
                 "--pages",
@@ -2681,7 +2740,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "edit",
+                "pdf_edit",
                 "scale-pages",
                 fixture_pdf().to_str().unwrap(),
                 "--pages",
@@ -2715,7 +2774,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "edit",
+                "pdf_edit",
                 "delete-blank-pages",
                 input.to_str().unwrap(),
                 "-o",
@@ -2742,7 +2801,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "edit",
+                "pdf_edit",
                 "single-page",
                 fixture_pdf().to_str().unwrap(),
                 "-o",
@@ -2770,7 +2829,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "edit",
+                "pdf_edit",
                 "nup",
                 fixture_pdf().to_str().unwrap(),
                 "--columns",
@@ -2802,7 +2861,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "edit",
+                "pdf_edit",
                 "booklet",
                 fixture_pdf().to_str().unwrap(),
                 "-o",
@@ -2830,7 +2889,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "edit",
+                "pdf_edit",
                 "page-numbers",
                 fixture_pdf().to_str().unwrap(),
                 "--pages",
@@ -2867,7 +2926,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "edit",
+                "pdf_edit",
                 "img2pdf",
                 fixture_jpg().to_str().unwrap(),
                 "-o",
@@ -2896,7 +2955,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "edit",
+                "pdf_edit",
                 "svg2pdf",
                 input.to_str().unwrap(),
                 "-o",
@@ -2923,7 +2982,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "inspect",
+                "pdf_inspect",
                 "extract-text",
                 fixture_pdf().to_str().unwrap(),
                 "-o",
@@ -2952,7 +3011,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "inspect",
+                "pdf_inspect",
                 "extract-text",
                 input.to_str().unwrap(),
                 "-o",
@@ -2981,7 +3040,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "edit",
+                "pdf_edit",
                 "watermark",
                 fixture_pdf().to_str().unwrap(),
                 "--kind",
@@ -3017,7 +3076,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "edit",
+                "pdf_edit",
                 "watermark",
                 fixture_pdf().to_str().unwrap(),
                 "--kind",
@@ -3052,7 +3111,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "edit",
+                "pdf_edit",
                 "watermark",
                 fixture_pdf().to_str().unwrap(),
                 "--kind",
@@ -3087,7 +3146,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "edit",
+                "pdf_edit",
                 "watermark",
                 fixture_pdf().to_str().unwrap(),
                 "--kind",
@@ -3122,7 +3181,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "sign",
+                "pdf_sign",
                 "verify",
                 input.to_str().unwrap(),
                 "--trust-anchors",
@@ -3160,7 +3219,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "sign",
+                "pdf_sign",
                 "list",
                 input.to_str().unwrap(),
                 "-o",
@@ -3191,7 +3250,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "sign",
+                "pdf_sign",
                 "verify",
                 input.to_str().unwrap(),
                 "-o",
@@ -3222,7 +3281,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "sign",
+                "pdf_sign",
                 "delete-field",
                 input.to_str().unwrap(),
                 "--field-name",
@@ -3253,7 +3312,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "sign",
+                "pdf_sign",
                 "delete-field",
                 input.to_str().unwrap(),
                 "--field-name",
@@ -3274,7 +3333,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "sign",
+                "pdf_sign",
                 "verify",
                 output.to_str().unwrap(),
                 "-o",
@@ -3302,8 +3361,8 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_sign",
                 "timestamp",
-                "add",
                 input.to_str().unwrap(),
                 "-o",
                 output.to_str().unwrap(),
@@ -3331,7 +3390,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "sign",
+                "pdf_sign",
                 "add",
                 input.to_str().unwrap(),
                 "--field-name",
@@ -3357,7 +3416,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "sign",
+                "pdf_sign",
                 "verify",
                 output.to_str().unwrap(),
                 "--trust-anchors",
@@ -3396,6 +3455,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "metadata",
                 "set",
                 input.to_str().unwrap(),
@@ -3416,6 +3476,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "metadata",
                 "get",
                 edited.to_str().unwrap(),
@@ -3450,6 +3511,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "attach",
                 "add",
                 input.to_str().unwrap(),
@@ -3469,6 +3531,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "attach",
                 "list",
                 attached.to_str().unwrap(),
@@ -3487,6 +3550,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "attach",
                 "extract",
                 attached.to_str().unwrap(),
@@ -3505,6 +3569,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "attach",
                 "delete",
                 attached.to_str().unwrap(),
@@ -3532,6 +3597,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "outline",
                 "set",
                 "-",
@@ -3555,6 +3621,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "attach",
                 "add",
                 "-",
@@ -3590,6 +3657,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "annot",
                 "add",
                 input.to_str().unwrap(),
@@ -3611,6 +3679,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "annot",
                 "list",
                 annotated.to_str().unwrap(),
@@ -3629,8 +3698,8 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "interactive",
-                "remove",
+                "pdf_edit",
+                "interactive-remove",
                 annotated.to_str().unwrap(),
                 "--annotations",
                 "-o",
@@ -3644,6 +3713,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "annot",
                 "list",
                 removed.to_str().unwrap(),
@@ -3676,6 +3746,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "form",
                 "fill",
                 input.to_str().unwrap(),
@@ -3693,6 +3764,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "form",
                 "inspect",
                 filled.to_str().unwrap(),
@@ -3712,6 +3784,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "form",
                 "unlock-readonly",
                 filled.to_str().unwrap(),
@@ -3727,6 +3800,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "form",
                 "remove",
                 unlocked.to_str().unwrap(),
@@ -3741,6 +3815,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "form",
                 "inspect",
                 removed.to_str().unwrap(),
@@ -3777,6 +3852,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_edit",
                 "stamp",
                 input.to_str().unwrap(),
                 "--text",
@@ -3796,6 +3872,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_edit",
                 "overlay-pdf",
                 stamped.to_str().unwrap(),
                 overlay.to_str().unwrap(),
@@ -3814,6 +3891,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "image",
                 "list",
                 overlaid.to_str().unwrap(),
@@ -3832,6 +3910,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "image",
                 "add",
                 overlaid.to_str().unwrap(),
@@ -3852,6 +3931,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "image",
                 "extract",
                 image_added.to_str().unwrap(),
@@ -3870,6 +3950,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_adv",
                 "image",
                 "delete",
                 image_added.to_str().unwrap(),
@@ -3889,6 +3970,7 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
+                "pdf_edit",
                 "color",
                 "invert",
                 color_input.to_str().unwrap(),
@@ -4005,7 +4087,8 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "compare",
+                "pdf_compare",
+                "report",
                 fixture_pdf().to_str().unwrap(),
                 fixture_pdf().to_str().unwrap(),
                 "-o",
@@ -4039,10 +4122,10 @@ mod tests {
         let code = run_with_io(
             [
                 "oxidepdf",
-                "compare",
+                "pdf_compare",
+                "visual-diff",
                 left.to_str().unwrap(),
                 right.to_str().unwrap(),
-                "--visual-diff",
                 "--page",
                 "1",
                 "-o",
