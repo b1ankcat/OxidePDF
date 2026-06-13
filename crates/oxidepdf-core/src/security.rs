@@ -583,17 +583,9 @@ fn load_decrypted_document(
     let mut document = encrypted_document.clone();
     document.objects.clear();
 
-    if encrypted_document
-        .reference_table
-        .entries
-        .values()
-        .any(|entry| matches!(entry, XrefEntry::Compressed { .. }))
-    {
-        return Err(OxideError::UnsupportedPdfFeature {
-            feature: "encrypted compressed object streams".to_owned(),
-        });
-    }
-
+    // Decrypt every directly-addressed (uncompressed) object first. Object
+    // stream containers are themselves Normal stream objects, so this also
+    // decrypts the containers we need below.
     for (object_id, offset, generation) in normal_object_offsets(encrypted_document) {
         if Some(object_id) == encryption_object_id {
             continue;
@@ -607,9 +599,50 @@ fn load_decrypted_document(
         document.objects.insert(object_id, object);
     }
 
+    // Now expand any compressed objects. Per PDF spec, objects inside an object
+    // stream are not individually encrypted — the encryption applies to the
+    // container stream as a whole, which the loop above already decrypted. So we
+    // decode each container in place and lift its objects into the document.
+    decode_compressed_objects(encrypted_document, &mut document)?;
+
     document.trailer.remove(b"Encrypt");
     document.encryption_state = None;
     Ok(document)
+}
+
+/// Lifts objects stored in object streams (`XrefEntry::Compressed`) into the
+/// document by decoding each already-decrypted container stream.
+pub(crate) fn decode_compressed_objects(
+    encrypted_document: &Document,
+    document: &mut Document,
+) -> Result<(), OxideError> {
+    use std::collections::BTreeSet;
+
+    // Collect the container object numbers referenced by compressed entries.
+    let containers = encrypted_document
+        .reference_table
+        .entries
+        .values()
+        .filter_map(|entry| match entry {
+            XrefEntry::Compressed { container, .. } => Some(*container),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+
+    for container in containers {
+        let container_id = (container, 0);
+        let Some(object) = document.objects.get_mut(&container_id) else {
+            // Container missing from the decrypted set; nothing to expand.
+            continue;
+        };
+        let stream = object.as_stream_mut().map_err(|_| OxideError::ParsePdf)?;
+        let object_stream = lopdf::ObjectStream::new(stream).map_err(|_| OxideError::ParsePdf)?;
+        for (id, decoded) in object_stream.objects {
+            document.objects.entry(id).or_insert(decoded);
+        }
+    }
+
+    Ok(())
 }
 
 fn normal_object_offsets(document: &Document) -> Vec<(lopdf::ObjectId, usize, u16)> {
