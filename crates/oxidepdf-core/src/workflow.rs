@@ -438,6 +438,15 @@ impl ArtifactStore {
     pub fn get(&self, id: &ArtifactRef) -> Option<&Artifact> {
         self.artifacts.get(id)
     }
+
+    /// Removes an artifact, returning it if present.
+    ///
+    /// The executor calls this to evict an artifact once its last consumer has
+    /// run and no output references it, keeping peak memory close to the working
+    /// set rather than the full set of every artifact ever produced.
+    pub fn remove(&mut self, id: &ArtifactRef) -> Option<Artifact> {
+        self.artifacts.remove(id)
+    }
 }
 
 /// Validated workflow execution plan.
@@ -445,6 +454,15 @@ impl ArtifactStore {
 pub struct ExecutionPlan {
     /// Task ids in topological execution order.
     pub task_order: Vec<TaskId>,
+    /// Index of each task id into `workflow.tasks`, precomputed during
+    /// validation so execution does not rebuild a lookup map on every run.
+    pub task_index: BTreeMap<TaskId, usize>,
+    /// For each artifact, the last task in `task_order` that consumes it as an
+    /// input. After that task runs, the artifact can be evicted unless an output
+    /// references it.
+    pub last_consumer: BTreeMap<ArtifactRef, TaskId>,
+    /// Artifacts referenced by an output spec; these are never evicted.
+    pub output_refs: BTreeSet<ArtifactRef>,
 }
 
 /// Result of a successful workflow execution.
@@ -497,7 +515,38 @@ pub fn validate_workflow(workflow: &Workflow) -> Result<ExecutionPlan, OxideErro
     validate_output_references(workflow, &ids)?;
     let task_order = topological_sort(workflow)?;
 
-    Ok(ExecutionPlan { task_order })
+    let task_index = workflow
+        .tasks
+        .iter()
+        .enumerate()
+        .map(|(index, task)| (task.id.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+
+    let output_refs = workflow
+        .outputs
+        .iter()
+        .map(|output| output.from.clone())
+        .collect::<BTreeSet<_>>();
+
+    // Walk tasks in execution order so the last write wins: the final entry for
+    // each artifact names the task after which it is safe to evict.
+    let mut last_consumer = BTreeMap::new();
+    for task_id in &task_order {
+        let index = task_index
+            .get(task_id)
+            .copied()
+            .ok_or_else(|| invalid_workflow(format!("task '{}' is missing", task_id.as_str())))?;
+        for input in &workflow.tasks[index].inputs {
+            last_consumer.insert(input.clone(), task_id.clone());
+        }
+    }
+
+    Ok(ExecutionPlan {
+        task_order,
+        task_index,
+        last_consumer,
+        output_refs,
+    })
 }
 
 /// Executes a workflow serially.
@@ -510,20 +559,16 @@ pub fn execute_workflow(
     enforce_workflow_input_limits(workflow, &store)?;
     let started_at = Instant::now();
     let timeout = workflow.limits.timeout_ms.map(Duration::from_millis);
-    let tasks_by_id = workflow
-        .tasks
-        .iter()
-        .map(|task| (task.id.clone(), task))
-        .collect::<BTreeMap<_, _>>();
 
     for task_id in &plan.task_order {
         enforce_timeout(started_at, timeout)?;
-        let task = tasks_by_id.get(task_id).ok_or_else(|| {
+        let index = plan.task_index.get(task_id).copied().ok_or_else(|| {
             invalid_workflow(format!(
                 "task '{}' disappeared after validation",
                 task_id.as_str()
             ))
         })?;
+        let task = &workflow.tasks[index];
         let inputs = task
             .inputs
             .iter()
@@ -539,9 +584,24 @@ pub fn execute_workflow(
         let artifact = runner.run(task, &inputs)?;
         enforce_timeout(started_at, timeout)?;
         store.insert(ArtifactRef::new(task.id.as_str()), artifact);
+        evict_consumed_artifacts(&mut store, &plan, task);
     }
 
     Ok(ExecutionResult { plan, store })
+}
+
+/// Evicts any input artifact whose last consumer is the task that just ran,
+/// unless an output references it. This bounds peak memory to the live working
+/// set instead of accumulating every artifact for the whole run.
+fn evict_consumed_artifacts(store: &mut ArtifactStore, plan: &ExecutionPlan, task: &TaskSpec) {
+    for input in &task.inputs {
+        if plan.output_refs.contains(input) {
+            continue;
+        }
+        if plan.last_consumer.get(input) == Some(&task.id) {
+            store.remove(input);
+        }
+    }
 }
 
 fn enforce_workflow_input_limits(

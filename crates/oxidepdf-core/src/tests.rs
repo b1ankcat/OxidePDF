@@ -451,6 +451,106 @@ fn linear_workflow_executes_tasks_in_dependency_order() {
 }
 
 #[test]
+fn execution_plan_exposes_task_index() {
+    let workflow = workflow_from_json(
+        r#"
+            {
+              "version": 1,
+              "inputs": [{ "id": "source", "path": "input.pdf" }],
+              "tasks": [
+                {
+                  "id": "rotate",
+                  "op": { "pdf_edit": { "rotate_pages": { "pages": "1", "degrees": 90 } } },
+                  "inputs": ["source"]
+                }
+              ],
+              "outputs": [{ "id": "final", "from": "rotate", "path": "out.pdf" }]
+            }
+            "#,
+    );
+
+    let plan = validate_workflow(&workflow).unwrap();
+
+    // The index maps each task id to its slot in workflow.tasks, so execution
+    // does not rebuild a lookup map on every run.
+    let index = plan.task_index.get(&TaskId::new("rotate")).copied();
+    assert_eq!(index, Some(0));
+}
+
+#[test]
+fn intermediate_artifact_evicted_after_last_consumer() {
+    let workflow = workflow_from_json(
+        r#"
+            {
+              "version": 1,
+              "inputs": [{ "id": "source", "path": "input.pdf" }],
+              "tasks": [
+                {
+                  "id": "rotate",
+                  "op": { "pdf_edit": { "rotate_pages": { "pages": "1", "degrees": 90 } } },
+                  "inputs": ["source"]
+                },
+                {
+                  "id": "render",
+                  "op": { "pdf_inspect": { "render": { "page": 1, "format": "png", "scale": 1.0 } } },
+                  "inputs": ["rotate"]
+                }
+              ],
+              "outputs": [{ "id": "final", "from": "render", "path": "out.png" }]
+            }
+            "#,
+    );
+    let mut store = ArtifactStore::new();
+    store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
+    let mut runner = RecordingRunner::default();
+
+    let result = execute_workflow(&workflow, store, &mut runner).unwrap();
+
+    // "source" and "rotate" are fully consumed and not referenced by any
+    // output, so they must be evicted; only the output artifact survives.
+    assert_eq!(result.store.get(&artifact_ref("source")), None);
+    assert_eq!(result.store.get(&artifact_ref("rotate")), None);
+    assert!(result.store.get(&artifact_ref("render")).is_some());
+}
+
+#[test]
+fn output_referenced_artifact_is_not_evicted() {
+    let workflow = workflow_from_json(
+        r#"
+            {
+              "version": 1,
+              "inputs": [{ "id": "source", "path": "input.pdf" }],
+              "tasks": [
+                {
+                  "id": "rotate",
+                  "op": { "pdf_edit": { "rotate_pages": { "pages": "1", "degrees": 90 } } },
+                  "inputs": ["source"]
+                },
+                {
+                  "id": "render",
+                  "op": { "pdf_inspect": { "render": { "page": 1, "format": "png", "scale": 1.0 } } },
+                  "inputs": ["rotate"]
+                }
+              ],
+              "outputs": [
+                { "id": "rotated", "from": "rotate", "path": "rotated.pdf" },
+                { "id": "final", "from": "render", "path": "out.png" }
+              ]
+            }
+            "#,
+    );
+    let mut store = ArtifactStore::new();
+    store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
+    let mut runner = RecordingRunner::default();
+
+    let result = execute_workflow(&workflow, store, &mut runner).unwrap();
+
+    // "rotate" is consumed by "render" but is also an output, so it must stay.
+    assert!(result.store.get(&artifact_ref("rotate")).is_some());
+    assert!(result.store.get(&artifact_ref("render")).is_some());
+}
+
+#[test]
 fn dag_workflow_topologically_sorts_before_execution() {
     let workflow = workflow_from_json(
         r#"
