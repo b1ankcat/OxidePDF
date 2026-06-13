@@ -4274,6 +4274,33 @@ fn text_artifact_size_includes_diagnostics() {
     assert!(crate::workflow::artifact_size(&Artifact::Text(text)) > "abc".len());
 }
 
+#[test]
+fn small_artifact_stays_inline() {
+    let bytes = ArtifactBytes::from(vec![9u8; 1024]);
+    assert!(!bytes.is_spilled());
+    assert_eq!(bytes.len(), 1024);
+}
+
+#[test]
+fn large_artifact_spills_to_disk_and_reads_back() {
+    // Exceed the 64 MiB spill threshold by a little; the payload must move to a
+    // memory-mapped temp file yet still expose identical bytes.
+    let size = 64 * 1024 * 1024 + 4096;
+    let mut payload = vec![0u8; size];
+    payload[0] = 1;
+    payload[size - 1] = 2;
+    let bytes = ArtifactBytes::from(payload);
+
+    assert!(bytes.is_spilled());
+    assert_eq!(bytes.len(), size);
+    assert_eq!(bytes.as_slice()[0], 1);
+    assert_eq!(bytes.as_slice()[size - 1], 2);
+
+    // Cloning a spilled payload shares the mapping; both views read the same data.
+    let cloned = bytes.clone();
+    assert_eq!(cloned.as_slice(), bytes.as_slice());
+}
+
 fn simple_svg() -> &'static [u8] {
     br##"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
             <rect x="10" y="10" width="100" height="60" fill="#16a34a"/>

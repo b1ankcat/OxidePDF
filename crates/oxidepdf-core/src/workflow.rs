@@ -307,60 +307,144 @@ impl Artifact {
     }
 }
 
+/// Artifacts larger than this are spilled to a memory-mapped temp file instead
+/// of being held on the heap. 64 MiB keeps typical PDFs inline while capping the
+/// resident heap footprint of very large inputs and outputs.
+const SPILL_THRESHOLD_BYTES: usize = 64 * 1024 * 1024;
+
 /// Reference-counted artifact payload.
 ///
 /// Cloning an `ArtifactBytes` only bumps an atomic reference count; no bytes are
 /// copied. This lets the executor hand the same large PDF to several tasks, and
 /// keep inputs in the store, without duplicating multi-hundred-megabyte buffers.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Payloads above [`SPILL_THRESHOLD_BYTES`] are spilled to a memory-mapped temp
+/// file so they do not occupy heap; smaller payloads stay inline. Both forms
+/// expose the same `&[u8]` view, so consumers never observe the difference.
+#[derive(Clone)]
 pub struct ArtifactBytes {
-    bytes: Arc<[u8]>,
+    storage: Storage,
+}
+
+#[derive(Clone)]
+enum Storage {
+    /// Heap-resident payload.
+    Inline(Arc<[u8]>),
+    /// Payload backed by a memory-mapped temporary file.
+    Mapped(Arc<MappedTemp>),
+}
+
+/// A temp file plus its read-only memory mapping. The file is kept alive
+/// alongside the mapping and removed when the last reference is dropped.
+struct MappedTemp {
+    // Held so the backing file outlives the mapping and is cleaned up on drop.
+    _file: tempfile::NamedTempFile,
+    mmap: tiverse_mmap::Mmap<tiverse_mmap::ReadOnly>,
+}
+
+impl MappedTemp {
+    fn as_slice(&self) -> &[u8] {
+        &self.mmap
+    }
 }
 
 impl ArtifactBytes {
     /// Returns the payload length in bytes.
     pub fn len(&self) -> usize {
-        self.bytes.len()
+        self.as_slice().len()
     }
 
     /// Returns whether the payload is empty.
     pub fn is_empty(&self) -> bool {
-        self.bytes.is_empty()
+        self.as_slice().is_empty()
     }
 
     /// Returns the payload as a byte slice.
     pub fn as_slice(&self) -> &[u8] {
-        &self.bytes
+        match &self.storage {
+            Storage::Inline(bytes) => bytes,
+            Storage::Mapped(mapped) => mapped.as_slice(),
+        }
+    }
+
+    /// Returns whether the payload is currently spilled to a temp file.
+    /// Primarily intended for tests and diagnostics.
+    pub fn is_spilled(&self) -> bool {
+        matches!(self.storage, Storage::Mapped(_))
+    }
+
+    /// Builds a payload from owned bytes, spilling to a memory-mapped temp file
+    /// when the size exceeds the spill threshold. Spilling is best-effort: if a
+    /// temp file cannot be created or mapped, the payload stays inline.
+    fn from_vec(bytes: Vec<u8>) -> Self {
+        if bytes.len() > SPILL_THRESHOLD_BYTES {
+            if let Some(mapped) = spill_to_mmap(&bytes) {
+                return Self {
+                    storage: Storage::Mapped(Arc::new(mapped)),
+                };
+            }
+        }
+        Self {
+            storage: Storage::Inline(Arc::from(bytes.into_boxed_slice())),
+        }
     }
 }
+
+/// Writes `bytes` to a temp file and maps it read-only. Returns `None` on any IO
+/// or mapping failure so the caller can fall back to an inline payload.
+fn spill_to_mmap(bytes: &[u8]) -> Option<MappedTemp> {
+    use std::io::Write;
+
+    let mut file = tempfile::NamedTempFile::new().ok()?;
+    file.write_all(bytes).ok()?;
+    file.flush().ok()?;
+    let mmap = tiverse_mmap::MmapOptions::new()
+        .path(file.path())
+        .map_readonly()
+        .ok()?;
+    Some(MappedTemp { _file: file, mmap })
+}
+
+impl std::fmt::Debug for ArtifactBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ArtifactBytes")
+            .field("len", &self.len())
+            .field("spilled", &self.is_spilled())
+            .finish()
+    }
+}
+
+impl PartialEq for ArtifactBytes {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl Eq for ArtifactBytes {}
 
 impl std::ops::Deref for ArtifactBytes {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        &self.bytes
+        self.as_slice()
     }
 }
 
 impl AsRef<[u8]> for ArtifactBytes {
     fn as_ref(&self) -> &[u8] {
-        &self.bytes
+        self.as_slice()
     }
 }
 
 impl From<Vec<u8>> for ArtifactBytes {
     fn from(bytes: Vec<u8>) -> Self {
-        Self {
-            bytes: Arc::from(bytes.into_boxed_slice()),
-        }
+        Self::from_vec(bytes)
     }
 }
 
 impl From<&[u8]> for ArtifactBytes {
     fn from(bytes: &[u8]) -> Self {
-        Self {
-            bytes: Arc::from(bytes),
-        }
+        Self::from_vec(bytes.to_vec())
     }
 }
 
