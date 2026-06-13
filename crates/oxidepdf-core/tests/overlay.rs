@@ -98,7 +98,7 @@ fn image_resources_list_add_replace_delete_and_extract() {
     assert!(!extracted.bytes.is_empty());
 
     let added = edit_pdf_images_artifacts(
-        &[Artifact::pdf(&empty_page_pdf()), Artifact::image(image)],
+        &[Artifact::pdf(empty_page_pdf()), Artifact::image(image)],
         &ImageEditOptions {
             action: ImageEditAction::Add,
             name: Some("Logo".to_owned()),

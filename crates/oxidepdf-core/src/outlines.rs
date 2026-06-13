@@ -237,7 +237,7 @@ fn read_outline_item_page(
         .map_err(|_| OxideError::UnsupportedPdfFeature {
             feature: "outline destinations without page references are not supported".to_owned(),
         })?;
-    page_number_for_id(document, page_id).ok_or_else(|| OxideError::ParsePdf)
+    page_number_for_id(document, page_id).ok_or(OxideError::ParsePdf)
 }
 
 fn page_id_for_number(

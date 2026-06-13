@@ -8,13 +8,13 @@ pub(crate) fn run_pdf_edit(
     match command {
         PdfEditCommand::Merge(args) => run_merge(args, stdin, stdout),
         PdfEditCommand::KeepPages(args) => {
-            run_page_selection(args, stdin, stdout, PageCommand::KeepPages)
+            run_page_selection(args, stdin, stdout, PageCommand::Keep)
         }
         PdfEditCommand::ExtractPages(args) => {
-            run_page_selection(args, stdin, stdout, PageCommand::ExtractPages)
+            run_page_selection(args, stdin, stdout, PageCommand::Extract)
         }
         PdfEditCommand::ReorderPages(args) => {
-            run_page_selection(args, stdin, stdout, PageCommand::ReorderPages)
+            run_page_selection(args, stdin, stdout, PageCommand::Reorder)
         }
         PdfEditCommand::RotatePages(args) => run_rotate(args, stdin, stdout),
         PdfEditCommand::DeletePages(args) => run_delete_pages(args, stdin, stdout),
@@ -78,20 +78,20 @@ pub(crate) fn run_page_selection(
     command: PageCommand,
 ) -> Result<(), CliError> {
     let task_id = match command {
-        PageCommand::KeepPages => "keep_pages",
-        PageCommand::ExtractPages => "extract_pages",
-        PageCommand::ReorderPages => "reorder_pages",
+        PageCommand::Keep => "keep_pages",
+        PageCommand::Extract => "extract_pages",
+        PageCommand::Reorder => "reorder_pages",
     };
     let op = match command {
-        PageCommand::KeepPages => OperatorSpec::PdfEdit(PdfEditOptions::KeepPages(SplitOptions {
+        PageCommand::Keep => OperatorSpec::PdfEdit(PdfEditOptions::KeepPages(SplitOptions {
             pages: args.pages,
         })),
-        PageCommand::ExtractPages => {
+        PageCommand::Extract => {
             OperatorSpec::PdfEdit(PdfEditOptions::ExtractPages(PageSelectionOptions {
                 pages: args.pages,
             }))
         }
-        PageCommand::ReorderPages => {
+        PageCommand::Reorder => {
             OperatorSpec::PdfEdit(PdfEditOptions::ReorderPages(ReorderOptions {
                 pages: args.pages,
             }))
@@ -421,7 +421,7 @@ pub(crate) fn parse_watermark_kind(value: &str) -> Result<WatermarkKind, CliErro
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum PageCommand {
-    KeepPages,
-    ExtractPages,
-    ReorderPages,
+    Keep,
+    Extract,
+    Reorder,
 }

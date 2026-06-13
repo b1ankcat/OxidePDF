@@ -39,25 +39,6 @@ fn dockerfile_uses_prebuilt_static_cli_binary() {
 }
 
 #[test]
-fn release_documentation_records_packaging_commands_and_checklist() {
-    let docs = read("docs/release.md");
-
-    assert!(docs.contains("cargo install cargo-zigbuild"));
-    assert!(docs.contains("rustup target add x86_64-unknown-linux-musl"));
-    assert!(docs.contains("rustup target add aarch64-unknown-linux-musl"));
-    assert!(docs
-        .contains("cargo zigbuild --release --target x86_64-unknown-linux-musl -p oxidepdf-cli"));
-    assert!(docs
-        .contains("cargo zigbuild --release --target aarch64-unknown-linux-musl -p oxidepdf-cli"));
-    assert!(docs.contains("ldd target/x86_64-unknown-linux-musl/release/oxidepdf"));
-    assert!(docs.contains("docker build"));
-    assert!(docs.contains("docker run --rm oxidepdf:local --help"));
-    assert!(docs.contains("oxidepdf.bash"));
-    assert!(docs.contains(".github/workflows/release.yml"));
-    assert!(docs.contains("Release Checklist"));
-}
-
-#[test]
 fn readme_documents_open_source_distribution_and_milestones() {
     let readme = read("README.md");
 

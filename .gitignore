@@ -1,6 +1,7 @@
 # Project planning notes kept outside version control for now.
 /plan.md
 /stage.md
+/.claude/
 
 # Rust build output.
 /target/

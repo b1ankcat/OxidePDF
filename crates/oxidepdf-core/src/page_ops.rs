@@ -949,35 +949,39 @@ fn prepend_page_transform(
     page_id: lopdf::ObjectId,
     factor: f32,
 ) -> Result<(), OxideError> {
-    let transform = lopdf::content::Content {
-        operations: vec![
-            lopdf::content::Operation::new("q", vec![]),
-            lopdf::content::Operation::new(
-                "cm",
-                vec![
-                    Object::Real(factor),
-                    Object::Real(0.0),
-                    Object::Real(0.0),
-                    Object::Real(factor),
-                    Object::Real(0.0),
-                    Object::Real(0.0),
-                ],
-            ),
-        ],
-    }
-    .encode()
-    .map_err(|_| OxideError::WritePdf)?;
-    let restore = lopdf::content::Content {
-        operations: vec![lopdf::content::Operation::new("Q", vec![])],
-    }
-    .encode()
-    .map_err(|_| OxideError::WritePdf)?;
-    document
-        .add_page_contents(page_id, transform)
+    let existing = document
+        .get_page_content(page_id)
+        .map_err(|_| OxideError::ParsePdf)?;
+    let mut operations = vec![
+        lopdf::content::Operation::new("q", vec![]),
+        lopdf::content::Operation::new(
+            "cm",
+            vec![
+                Object::Real(factor),
+                Object::Real(0.0),
+                Object::Real(0.0),
+                Object::Real(factor),
+                Object::Real(0.0),
+                Object::Real(0.0),
+            ],
+        ),
+    ];
+    operations.extend(
+        lopdf::content::Content::decode(&existing)
+            .map_err(|_| OxideError::ParsePdf)?
+            .operations,
+    );
+    operations.push(lopdf::content::Operation::new("Q", vec![]));
+
+    let content = lopdf::content::Content { operations }
+        .encode()
         .map_err(|_| OxideError::WritePdf)?;
-    document
-        .add_page_contents(page_id, restore)
-        .map_err(|_| OxideError::WritePdf)?;
+    let content_id = document.add_object(Stream::new(Dictionary::new(), content));
+    let page = document
+        .get_object_mut(page_id)
+        .and_then(Object::as_dict_mut)
+        .map_err(|_| OxideError::ParsePdf)?;
+    page.set("Contents", Object::Reference(content_id));
     Ok(())
 }
 

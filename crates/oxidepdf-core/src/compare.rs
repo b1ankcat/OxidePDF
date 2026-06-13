@@ -481,8 +481,8 @@ fn push_difference(
     left: impl Serialize,
     right: impl Serialize,
 ) {
-    let left = serde_json::to_value(left).unwrap_or_else(|_| json!(null));
-    let right = serde_json::to_value(right).unwrap_or_else(|_| json!(null));
+    let left = serde_json::to_value(left).unwrap_or(json!(null));
+    let right = serde_json::to_value(right).unwrap_or(json!(null));
     if left != right {
         differences.push(CompareDifference {
             code,
