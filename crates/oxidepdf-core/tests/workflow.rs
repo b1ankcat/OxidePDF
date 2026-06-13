@@ -595,6 +595,19 @@ fn dag_workflow_topologically_sorts_before_execution() {
 
     assert!(left < join);
     assert!(right < join);
+
+    // The plan also exposes parallel layers: the two independent rotations sit
+    // in the first layer, and the merge that depends on both sits alone in the
+    // second.
+    assert_eq!(plan.layers.len(), 2);
+    assert_eq!(plan.layers[0].len(), 2);
+    assert_eq!(plan.layers[1].len(), 1);
+    let join_index = plan
+        .task_index
+        .get(&oxidepdf_core::TaskId::new("join"))
+        .copied()
+        .unwrap();
+    assert_eq!(plan.layers[1][0], join_index);
 }
 
 #[test]
@@ -884,7 +897,11 @@ fn pdf_operator_runner_handles_page_editing_tasks() {
         )
         .unwrap();
 
-    assert!(matches!(merged, Artifact::Pdf(_)));
+    // Object-level operators emit a parsed document; it must serialize back to
+    // a valid PDF at the output boundary.
+    assert!(matches!(merged, Artifact::PdfObject(_)));
+    let bytes = merged.output_bytes().unwrap();
+    assert!(bytes.starts_with(b"%PDF-"));
 }
 
 #[test]
@@ -914,6 +931,44 @@ fn pdf_operator_runner_enforces_output_size_limit() {
             limit: "max_output_bytes".to_owned()
         }
     );
+}
+
+#[test]
+fn object_level_operator_emits_parsed_pdf_object() {
+    // A migrated page operator returns a parsed object tree, not serialized
+    // bytes, so a downstream operator can consume it without re-parsing.
+    let pdf = include_bytes!("../../../tests/test.pdf");
+    let runner = PdfOperatorRunner::default();
+
+    let artifact = runner
+        .run(
+            &TaskSpec {
+                id: TaskId::new("keep"),
+                op: OperatorSpec::PdfEdit(PdfEditOptions::KeepPages(SplitOptions {
+                    pages: "1".to_owned(),
+                })),
+                inputs: vec![artifact_ref("source")],
+            },
+            &[Artifact::pdf(pdf)],
+        )
+        .unwrap();
+
+    assert!(matches!(artifact, Artifact::PdfObject(_)));
+
+    // The object artifact feeds straight into another object-level operator.
+    let chained = runner
+        .run(
+            &TaskSpec {
+                id: TaskId::new("extract"),
+                op: OperatorSpec::PdfEdit(PdfEditOptions::ExtractPages(PageSelectionOptions {
+                    pages: "1".to_owned(),
+                })),
+                inputs: vec![artifact_ref("keep")],
+            },
+            &[artifact],
+        )
+        .unwrap();
+    assert!(matches!(chained, Artifact::PdfObject(_)));
 }
 
 #[test]
@@ -1153,6 +1208,30 @@ fn artifact_bytes_clone_is_zero_copy() {
 }
 
 #[test]
+fn from_arc_is_zero_copy() {
+    let arc: std::sync::Arc<[u8]> = std::sync::Arc::from(vec![5u8; 4096].into_boxed_slice());
+    let arc_ptr = arc.as_ptr();
+
+    let bytes = ArtifactBytes::from_arc(arc);
+
+    // Adopting an existing Arc must not reallocate or copy; the payload points
+    // at the same address the Arc already owned.
+    assert_eq!(bytes.as_ptr(), arc_ptr);
+    assert!(!bytes.is_spilled());
+    assert_eq!(bytes.len(), 4096);
+}
+
+#[test]
+fn from_arc_clone_shares_buffer() {
+    let arc: std::sync::Arc<[u8]> = std::sync::Arc::from(vec![1u8; 1024].into_boxed_slice());
+    let bytes = ArtifactBytes::from(arc);
+    let cloned = bytes.clone();
+
+    assert_eq!(bytes.as_ptr(), cloned.as_ptr());
+    assert_eq!(bytes.as_slice(), cloned.as_slice());
+}
+
+#[test]
 fn artifact_clone_shares_pdf_payload() {
     let artifact = Artifact::pdf(vec![1u8; 1024]);
     let cloned = artifact.clone();
@@ -1188,4 +1267,98 @@ fn large_artifact_spills_to_disk_and_reads_back() {
     // Cloning a spilled payload shares the mapping; both views read the same data.
     let cloned = bytes.clone();
     assert_eq!(cloned.as_slice(), bytes.as_slice());
+}
+
+#[test]
+fn spilled_payload_roundtrip_is_byte_exact() {
+    // A spilled payload must read back byte-for-byte, not just at the endpoints.
+    // Fill with a position-dependent pattern so any truncation, offset, or
+    // partial write would surface.
+    let size = 64 * 1024 * 1024 + 7919;
+    let mut payload = vec![0u8; size];
+    for (index, byte) in payload.iter_mut().enumerate() {
+        *byte = (index % 251) as u8;
+    }
+    let bytes = ArtifactBytes::from(payload.clone());
+
+    assert!(bytes.is_spilled());
+    assert_eq!(bytes.as_slice(), payload.as_slice());
+}
+
+#[test]
+fn workflow_spill_threshold_forces_small_output_to_spill() {
+    // A zero spill threshold means "spill every non-empty payload". The task
+    // emits a tiny output that would normally stay inline; the workflow's
+    // threshold must push it to a memory-mapped temp file.
+    let workflow = workflow_from_json(
+        r#"
+            {
+              "version": 1,
+              "inputs": [{ "id": "source", "path": "input.bin" }],
+              "tasks": [
+                {
+                  "id": "echo",
+                  "op": { "pdf_edit": { "rotate_pages": { "pages": "1", "degrees": 90 } } },
+                  "inputs": ["source"]
+                }
+              ],
+              "outputs": [{ "id": "final", "from": "echo", "path": "out.bin" }],
+              "limits": { "spill_threshold_bytes": 0 }
+            }
+            "#,
+    );
+    let mut store = ArtifactStore::new();
+    store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
+
+    struct EchoRunner;
+    impl OperatorRunner for EchoRunner {
+        fn run(&self, _task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
+            Ok(Artifact::pdf(b"tiny"))
+        }
+    }
+
+    let result = execute_workflow(&workflow, store, &EchoRunner).unwrap();
+    let Some(Artifact::Pdf(pdf)) = result.store.get(&artifact_ref("echo")) else {
+        panic!("expected a PDF artifact");
+    };
+    assert!(pdf.bytes.is_spilled());
+}
+
+#[test]
+fn workflow_spill_threshold_keeps_large_output_inline_when_high() {
+    // A high threshold keeps an otherwise-spillable payload inline.
+    let workflow = workflow_from_json(
+        r#"
+            {
+              "version": 1,
+              "inputs": [{ "id": "source", "path": "input.bin" }],
+              "tasks": [
+                {
+                  "id": "echo",
+                  "op": { "pdf_edit": { "rotate_pages": { "pages": "1", "degrees": 90 } } },
+                  "inputs": ["source"]
+                }
+              ],
+              "outputs": [{ "id": "final", "from": "echo", "path": "out.bin" }],
+              "limits": { "spill_threshold_bytes": 1073741824 }
+            }
+            "#,
+    );
+    let mut store = ArtifactStore::new();
+    store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
+
+    struct BigRunner;
+    impl OperatorRunner for BigRunner {
+        fn run(&self, _task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
+            // Larger than the default 64 MiB threshold, smaller than the 1 GiB
+            // workflow threshold, so only the workflow threshold decides.
+            Ok(Artifact::pdf(vec![0u8; 64 * 1024 * 1024 + 4096]))
+        }
+    }
+
+    let result = execute_workflow(&workflow, store, &BigRunner).unwrap();
+    let Some(Artifact::Pdf(pdf)) = result.store.get(&artifact_ref("echo")) else {
+        panic!("expected a PDF artifact");
+    };
+    assert!(!pdf.bytes.is_spilled());
 }

@@ -109,10 +109,10 @@ pub fn extract_pdf_attachment(
 ) -> Result<BytesArtifact, OxideError> {
     enforce_input_bytes(input.len(), limits)?;
     let document = load_pdf(input)?;
-    let attachment = find_attachment_stream(&document, name)?;
+    let attachment = find_attachment_stream(&document, name, limits)?;
     enforce_output_bytes(attachment.len(), limits)?;
     Ok(BytesArtifact {
-        bytes: attachment.to_vec().into(),
+        bytes: attachment.into(),
     })
 }
 
@@ -217,18 +217,22 @@ fn read_attachment_reports(
         let name = pdf_string(&pair[0])?;
         let file_spec = deref_dict(document, &pair[1])?;
         let description = file_spec.get(b"Desc").ok().map(pdf_string).transpose()?;
-        let data = attachment_bytes(document, file_spec)?;
+        let size = attachment_reported_size(document, file_spec)?;
         reports.push(AttachmentEntryReport {
             name,
             description,
-            size: data.len(),
+            size,
         });
     }
     reports.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(reports)
 }
 
-fn find_attachment_stream(document: &lopdf::Document, name: &str) -> Result<Vec<u8>, OxideError> {
+fn find_attachment_stream(
+    document: &lopdf::Document,
+    name: &str,
+    limits: &ResourceLimits,
+) -> Result<Vec<u8>, OxideError> {
     let Some(entries) = embedded_file_entries(document)? else {
         return Err(OxideError::InvalidInput {
             reason: format!("attachment '{name}' not found"),
@@ -240,7 +244,15 @@ fn find_attachment_stream(document: &lopdf::Document, name: &str) -> Result<Vec<
         }
         if matches_pdf_string(&pair[0], name) {
             let file_spec = deref_dict(document, &pair[1])?;
-            return attachment_bytes(document, file_spec);
+            // Reject oversized attachments by their declared size before
+            // decompressing, so a decompression bomb cannot allocate past the
+            // output limit while being read.
+            if let Some(declared) = attachment_declared_size(document, file_spec)? {
+                enforce_output_bytes(declared, limits)?;
+            }
+            let bytes = attachment_bytes(document, file_spec)?;
+            enforce_output_bytes(bytes.len(), limits)?;
+            return Ok(bytes);
         }
     }
     Err(OxideError::InvalidInput {
@@ -248,10 +260,49 @@ fn find_attachment_stream(document: &lopdf::Document, name: &str) -> Result<Vec<
     })
 }
 
+/// Reports an attachment's size for inspection without decompressing the
+/// stream. Falls back to the decompressed length only when no declared size is
+/// available.
+fn attachment_reported_size(
+    document: &lopdf::Document,
+    file_spec: &Dictionary,
+) -> Result<usize, OxideError> {
+    if let Some(size) = attachment_declared_size(document, file_spec)? {
+        return Ok(size);
+    }
+    Ok(attachment_bytes(document, file_spec)?.len())
+}
+
+/// Returns the embedded file's declared size from `/Params /Size` when present,
+/// without touching the (possibly compressed) stream body.
+fn attachment_declared_size(
+    document: &lopdf::Document,
+    file_spec: &Dictionary,
+) -> Result<Option<usize>, OxideError> {
+    let stream = embedded_file_stream(document, file_spec)?;
+    let Ok(params) = stream.dict.get(b"Params").and_then(Object::as_dict) else {
+        return Ok(None);
+    };
+    match params.get(b"Size").and_then(Object::as_i64) {
+        Ok(size) if size >= 0 => Ok(Some(size as usize)),
+        _ => Ok(None),
+    }
+}
+
 fn attachment_bytes(
     document: &lopdf::Document,
     file_spec: &Dictionary,
 ) -> Result<Vec<u8>, OxideError> {
+    embedded_file_stream(document, file_spec)?
+        .get_plain_content()
+        .map_err(|_| OxideError::ParsePdf)
+}
+
+/// Resolves a Filespec's embedded file stream by following `/EF /F`.
+fn embedded_file_stream<'a>(
+    document: &'a lopdf::Document,
+    file_spec: &Dictionary,
+) -> Result<&'a Stream, OxideError> {
     let ef = file_spec
         .get(b"EF")
         .and_then(Object::as_dict)
@@ -260,11 +311,10 @@ fn attachment_bytes(
         .get(b"F")
         .and_then(Object::as_reference)
         .map_err(|_| OxideError::ParsePdf)?;
-    let stream = document
+    document
         .get_object(stream_id)
         .and_then(Object::as_stream)
-        .map_err(|_| OxideError::ParsePdf)?;
-    stream.get_plain_content().map_err(|_| OxideError::ParsePdf)
+        .map_err(|_| OxideError::ParsePdf)
 }
 
 fn embedded_file_entries(document: &lopdf::Document) -> Result<Option<Vec<Object>>, OxideError> {
@@ -327,6 +377,9 @@ fn raw_bytes(artifact: &Artifact) -> &[u8] {
         Artifact::Image(image) => &image.bytes,
         Artifact::Svg(svg) => &svg.bytes,
         Artifact::Text(text) => text.text.as_bytes(),
+        // A parsed object tree has no inline byte view; an attachment payload is
+        // always raw file content, never an in-flight parsed document.
+        Artifact::PdfObject(_) => &[],
     }
 }
 

@@ -22,27 +22,37 @@ pub fn remove_pdf_interactive_elements(
 ) -> Result<PdfArtifact, OxideError> {
     enforce_input_bytes(input.len(), limits)?;
     let mut document = load_pdf(input)?;
-    enforce_max_pages(document.get_pages().len(), limits)?;
-    if options.annotations {
-        remove_annotations(&mut document)?;
-    }
-    if options.forms {
-        remove_acroform(&mut document)?;
-    }
-    if options.actions {
-        remove_actions(&mut document)?;
-    }
-    if options.javascript {
-        remove_javascript(&mut document)?;
-    }
-    if options.embedded_files {
-        remove_embedded_files(&mut document)?;
-    }
+    remove_interactive_on_document(&mut document, options, limits)?;
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
     Ok(PdfArtifact {
         bytes: bytes.into(),
     })
+}
+
+/// Removes selected interactive elements from an already-parsed document.
+pub(crate) fn remove_interactive_on_document(
+    document: &mut lopdf::Document,
+    options: &InteractiveRemovalOptions,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
+    enforce_max_pages(document.get_pages().len(), limits)?;
+    if options.annotations {
+        remove_annotations(document)?;
+    }
+    if options.forms {
+        remove_acroform(document)?;
+    }
+    if options.actions {
+        remove_actions(document)?;
+    }
+    if options.javascript {
+        remove_javascript(document)?;
+    }
+    if options.embedded_files {
+        remove_embedded_files(document)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn remove_annotations(document: &mut lopdf::Document) -> Result<(), OxideError> {

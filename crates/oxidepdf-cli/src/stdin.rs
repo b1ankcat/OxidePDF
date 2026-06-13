@@ -20,7 +20,7 @@ where
 
 pub(crate) fn cli_reads_stdin(cli: &Cli) -> bool {
     match &cli.command {
-        Some(Commands::Run(args)) => is_stdio(&args.workflow),
+        Some(Commands::Run(args)) => run_reads_stdin(args),
         Some(Commands::PdfEdit(command)) => pdf_edit_reads_stdin(command),
         Some(Commands::PdfInspect(command)) => pdf_inspect_reads_stdin(command),
         Some(Commands::PdfSecurity(command)) => pdf_security_reads_stdin(command),
@@ -30,6 +30,25 @@ pub(crate) fn cli_reads_stdin(cli: &Cli) -> bool {
         Some(Commands::Completion(_)) => false,
         None => false,
     }
+}
+
+/// Decides whether `run` needs stdin. The workflow file itself may be `-`, or
+/// the workflow (when read from disk) may declare an input with `path: "-"`.
+/// Stdin can feed at most one consumer, so the file taking precedence here
+/// matches `run_workflow`, which reads the workflow from stdin first.
+fn run_reads_stdin(args: &RunArgs) -> bool {
+    if is_stdio(&args.workflow) {
+        return true;
+    }
+    let Ok(bytes) = std::fs::read(&args.workflow) else {
+        // The file is unreadable; defer the error to run_workflow rather than
+        // speculatively consuming stdin here.
+        return false;
+    };
+    let Ok(workflow) = parse_workflow(&bytes, &args.workflow) else {
+        return false;
+    };
+    workflow.inputs.iter().any(|input| is_stdio(&input.path))
 }
 
 pub(crate) fn pdf_edit_reads_stdin(command: &PdfEditCommand) -> bool {

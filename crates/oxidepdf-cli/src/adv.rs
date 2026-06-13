@@ -512,15 +512,20 @@ pub(crate) fn run_color_edit(
 }
 
 pub(crate) fn parse_rgb(value: &str) -> Result<[f32; 3], CliError> {
+    let value = value.trim();
+    if let Some(hex) = value.strip_prefix('#') {
+        return parse_hex_rgb(hex);
+    }
     let parts = value.split(',').collect::<Vec<_>>();
     if parts.len() != 3 {
         return Err(CliError::Workflow(
-            "RGB color must use r,g,b components".to_owned(),
+            "RGB color must be #RRGGBB or three comma-separated components".to_owned(),
         ));
     }
     let mut rgb = [0.0; 3];
     for (index, part) in parts.iter().enumerate() {
         let component = part
+            .trim()
             .parse::<f32>()
             .map_err(|_| CliError::Workflow("RGB color components must be numbers".to_owned()))?;
         if !(0.0..=1.0).contains(&component) {
@@ -529,6 +534,22 @@ pub(crate) fn parse_rgb(value: &str) -> Result<[f32; 3], CliError> {
             ));
         }
         rgb[index] = component;
+    }
+    Ok(rgb)
+}
+
+fn parse_hex_rgb(hex: &str) -> Result<[f32; 3], CliError> {
+    if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(CliError::Workflow(
+            "hex RGB color must be #RRGGBB".to_owned(),
+        ));
+    }
+    let mut rgb = [0.0; 3];
+    for (index, slot) in rgb.iter_mut().enumerate() {
+        let start = index * 2;
+        let component = u8::from_str_radix(&hex[start..start + 2], 16)
+            .map_err(|_| CliError::Workflow("hex RGB color must be #RRGGBB".to_owned()))?;
+        *slot = f32::from(component) / 255.0;
     }
     Ok(rgb)
 }
@@ -551,4 +572,31 @@ pub(crate) fn parse_form_fields(fields: Vec<String>) -> Result<Vec<FormFieldValu
             Ok(FormFieldValue { name, value })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_rgb;
+
+    #[test]
+    fn parse_rgb_accepts_hex() {
+        assert_eq!(parse_rgb("#000000").unwrap(), [0.0, 0.0, 0.0]);
+        assert_eq!(parse_rgb("#ffffff").unwrap(), [1.0, 1.0, 1.0]);
+        let red = parse_rgb("#FF0000").unwrap();
+        assert_eq!(red, [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn parse_rgb_accepts_comma_components() {
+        assert_eq!(parse_rgb("0,0.5,1").unwrap(), [0.0, 0.5, 1.0]);
+        assert_eq!(parse_rgb(" 1 , 0 , 0 ").unwrap(), [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn parse_rgb_rejects_malformed_values() {
+        assert!(parse_rgb("#fff").is_err());
+        assert!(parse_rgb("#gggggg").is_err());
+        assert!(parse_rgb("1,2,3").is_err());
+        assert!(parse_rgb("0,0").is_err());
+    }
 }

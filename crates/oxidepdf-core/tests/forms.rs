@@ -21,6 +21,19 @@ fn form_inspection_reports_malformed_acroform() {
 }
 
 #[test]
+fn form_inspection_reports_checkbox_name_value() {
+    let report = inspect_pdf_forms(
+        &pdf_with_checkbox_form_field(),
+        &FormInspectOptions::default(),
+    )
+    .unwrap()
+    .text;
+    let report: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(report["fields"][0]["name"], "subscribe");
+    assert_eq!(report["fields"][0]["value"], "Yes");
+}
+
+#[test]
 fn forms_fill_unlock_and_remove_without_appearance_fallback() {
     let pdf = pdf_with_text_form_field(true);
     let filled = fill_pdf_form(
@@ -41,6 +54,21 @@ fn forms_fill_unlock_and_remove_without_appearance_fallback() {
     assert_eq!(report["fields"][0]["name"], "customer");
     assert_eq!(report["fields"][0]["value"], "Ada");
     assert_eq!(report["fields"][0]["readonly"], true);
+
+    // Filling clears each field's appearance stream, so the AcroForm must ask
+    // viewers to regenerate appearances or the value renders blank.
+    let filled_document = lopdf::Document::load_mem(&filled.bytes).unwrap();
+    let acroform = filled_document
+        .catalog()
+        .unwrap()
+        .get(b"AcroForm")
+        .and_then(|object| filled_document.dereference(object))
+        .and_then(|(_, object)| object.as_dict())
+        .unwrap();
+    assert!(acroform
+        .get(b"NeedAppearances")
+        .and_then(lopdf::Object::as_bool)
+        .unwrap());
 
     let unlocked = unlock_pdf_form_readonly(&filled.bytes, &ResourceLimits::default()).unwrap();
     let report = inspect_pdf_forms(&unlocked.bytes, &FormInspectOptions::default())

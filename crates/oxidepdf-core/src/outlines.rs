@@ -4,6 +4,11 @@ use crate::{
 };
 use lopdf::{dictionary, Dictionary, Object};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+
+/// Maximum outline nesting depth accepted when reading an existing document.
+/// Guards against stack overflow from maliciously deep `First` chains.
+const MAX_OUTLINE_DEPTH: usize = 64;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -58,6 +63,20 @@ pub fn edit_pdf_outline(
 ) -> Result<PdfArtifact, OxideError> {
     enforce_input_bytes(input.len(), limits)?;
     let mut document = load_pdf(input)?;
+    edit_outline_on_document(&mut document, options, limits)?;
+    let bytes = save_pdf(document)?;
+    enforce_output_bytes(bytes.len(), limits)?;
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
+}
+
+/// Applies an outline edit to an already-parsed document.
+pub(crate) fn edit_outline_on_document(
+    document: &mut lopdf::Document,
+    options: &OutlineEditOptions,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
     enforce_max_pages(document.get_pages().len(), limits)?;
     match options.action {
         OutlineEditAction::Set => {
@@ -67,16 +86,12 @@ pub fn edit_pdf_outline(
                 .ok_or_else(|| OxideError::InvalidInput {
                     reason: "outline set requires a tree".to_owned(),
                 })?;
-            validate_outline_tree(&document, tree)?;
-            write_outline_tree(&mut document, tree)?;
+            validate_outline_tree(document, tree)?;
+            write_outline_tree(document, tree)?;
         }
-        OutlineEditAction::Delete => delete_outline_tree(&mut document)?,
+        OutlineEditAction::Delete => delete_outline_tree(document)?,
     }
-    let bytes = save_pdf(document)?;
-    enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact {
-        bytes: bytes.into(),
-    })
+    Ok(())
 }
 
 fn read_outline_tree(document: &lopdf::Document) -> Result<OutlineTree, OxideError> {
@@ -92,16 +107,26 @@ fn read_outline_tree(document: &lopdf::Document) -> Result<OutlineTree, OxideErr
         return Ok(OutlineTree::default());
     };
     Ok(OutlineTree {
-        items: read_outline_siblings(document, first_id)?,
+        items: read_outline_siblings(document, first_id, &mut HashSet::new(), 0)?,
     })
 }
 
 fn read_outline_siblings(
     document: &lopdf::Document,
     mut current_id: lopdf::ObjectId,
+    visited: &mut HashSet<lopdf::ObjectId>,
+    depth: usize,
 ) -> Result<Vec<OutlineItem>, OxideError> {
+    if depth >= MAX_OUTLINE_DEPTH {
+        return Err(OxideError::ParsePdf);
+    }
     let mut items = Vec::new();
     loop {
+        if !visited.insert(current_id) {
+            // A `Next`/`First` reference pointing back to an already-visited
+            // node would otherwise loop forever or recurse without bound.
+            return Err(OxideError::ParsePdf);
+        }
         let item = document
             .get_object(current_id)
             .and_then(Object::as_dict)
@@ -114,7 +139,7 @@ fn read_outline_siblings(
             .unwrap_or_default();
         let page = read_outline_item_page(document, item)?;
         let children = match item.get(b"First").and_then(Object::as_reference) {
-            Ok(child_id) => read_outline_siblings(document, child_id)?,
+            Ok(child_id) => read_outline_siblings(document, child_id, visited, depth + 1)?,
             Err(_) => Vec::new(),
         };
         items.push(OutlineItem {

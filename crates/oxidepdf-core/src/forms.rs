@@ -58,21 +58,39 @@ pub fn fill_pdf_form(
 ) -> Result<PdfArtifact, OxideError> {
     enforce_input_bytes(input.len(), limits)?;
     let mut document = load_pdf(input)?;
+    fill_form_on_document(&mut document, options, limits)?;
+    let bytes = save_pdf(document)?;
+    enforce_output_bytes(bytes.len(), limits)?;
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
+}
+
+/// Fills form fields of an already-parsed document.
+pub(crate) fn fill_form_on_document(
+    document: &mut lopdf::Document,
+    options: &FormFillOptions,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
     enforce_max_pages(document.get_pages().len(), limits)?;
-    reject_xfa(&document)?;
+    reject_xfa(document)?;
+    let mut filled_text_field = false;
     for field in &options.fields {
         if field.name.is_empty() {
             return Err(OxideError::InvalidInput {
                 reason: "form field name must not be empty".to_owned(),
             });
         }
-        fill_field(&mut document, field)?;
+        fill_field(document, field)?;
+        filled_text_field = true;
     }
-    let bytes = save_pdf(document)?;
-    enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact {
-        bytes: bytes.into(),
-    })
+    if filled_text_field {
+        // Removing each field's appearance stream forces viewers to regenerate
+        // it, which only happens when the AcroForm requests it. Without this,
+        // filled values render blank in many viewers.
+        set_need_appearances(document)?;
+    }
+    Ok(())
 }
 
 pub fn unlock_pdf_form_readonly(
@@ -81,12 +99,7 @@ pub fn unlock_pdf_form_readonly(
 ) -> Result<PdfArtifact, OxideError> {
     enforce_input_bytes(input.len(), limits)?;
     let mut document = load_pdf(input)?;
-    enforce_max_pages(document.get_pages().len(), limits)?;
-    reject_xfa(&document)?;
-    let field_ids = acroform_field_ids(&document)?;
-    for field_id in field_ids {
-        unlock_field_readonly(&mut document, field_id)?;
-    }
+    unlock_form_readonly_on_document(&mut document, limits)?;
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
     Ok(PdfArtifact {
@@ -94,16 +107,38 @@ pub fn unlock_pdf_form_readonly(
     })
 }
 
+/// Clears the read-only flag on all form fields of an already-parsed document.
+pub(crate) fn unlock_form_readonly_on_document(
+    document: &mut lopdf::Document,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
+    enforce_max_pages(document.get_pages().len(), limits)?;
+    reject_xfa(document)?;
+    let field_ids = acroform_field_ids(document)?;
+    for field_id in field_ids {
+        unlock_field_readonly(document, field_id)?;
+    }
+    Ok(())
+}
+
 pub fn remove_pdf_forms(input: &[u8], limits: &ResourceLimits) -> Result<PdfArtifact, OxideError> {
     enforce_input_bytes(input.len(), limits)?;
     let mut document = load_pdf(input)?;
-    enforce_max_pages(document.get_pages().len(), limits)?;
-    remove_acroform(&mut document)?;
+    remove_forms_on_document(&mut document, limits)?;
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
     Ok(PdfArtifact {
         bytes: bytes.into(),
     })
+}
+
+/// Removes the AcroForm from an already-parsed document.
+pub(crate) fn remove_forms_on_document(
+    document: &mut lopdf::Document,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
+    enforce_max_pages(document.get_pages().len(), limits)?;
+    remove_acroform(document)
 }
 
 fn collect_form_fields(document: &lopdf::Document) -> Result<Vec<FormFieldReport>, OxideError> {
@@ -116,7 +151,7 @@ fn collect_form_fields(document: &lopdf::Document) -> Result<Vec<FormFieldReport
         let Some(name) = field.get(b"T").ok().map(pdf_string).transpose()? else {
             continue;
         };
-        let value = field.get(b"V").ok().map(pdf_string).transpose()?;
+        let value = field.get(b"V").ok().and_then(display_value);
         let flags = field.get(b"Ff").and_then(Object::as_i64).unwrap_or(0);
         fields.push(FormFieldReport {
             name,
@@ -226,4 +261,40 @@ fn pdf_string(object: &Object) -> Result<String, OxideError> {
         .as_str()
         .map(|value| String::from_utf8_lossy(value).into_owned())
         .map_err(|_| OxideError::ParsePdf)
+}
+
+/// Renders a field value for reporting. String values are decoded; name values
+/// (used by checkboxes and radio buttons, e.g. `/Yes`, `/Off`) are rendered as
+/// their name text. Other object kinds are reported as having no value rather
+/// than failing the whole inspection.
+fn display_value(object: &Object) -> Option<String> {
+    match object {
+        Object::String(bytes, _) => Some(String::from_utf8_lossy(bytes).into_owned()),
+        Object::Name(name) => Some(String::from_utf8_lossy(name).into_owned()),
+        _ => None,
+    }
+}
+
+/// Sets `/NeedAppearances true` on the AcroForm dictionary so viewers
+/// regenerate appearance streams for the values written during a fill.
+fn set_need_appearances(document: &mut lopdf::Document) -> Result<(), OxideError> {
+    let catalog = document.catalog().map_err(|_| OxideError::ParsePdf)?;
+    // The AcroForm may be an indirect reference or an inline dictionary; both
+    // are valid and need the flag. Resolve to whichever dictionary applies.
+    let acroform = match catalog.get(b"AcroForm") {
+        Ok(Object::Reference(id)) => {
+            let id = *id;
+            document.get_object_mut(id).and_then(Object::as_dict_mut)
+        }
+        Ok(Object::Dictionary(_)) => document
+            .catalog_mut()
+            .and_then(|catalog| catalog.get_mut(b"AcroForm"))
+            .and_then(Object::as_dict_mut),
+        // No AcroForm present: nothing to flag.
+        _ => return Ok(()),
+    };
+    acroform
+        .map_err(|_| OxideError::ParsePdf)?
+        .set("NeedAppearances", Object::Boolean(true));
+    Ok(())
 }

@@ -1,18 +1,12 @@
 use crate::workflow::ResourceLimits;
 use crate::{
-    add_pdf_page_numbers_with_limits, add_pdf_signature, add_pdf_timestamp,
-    booklet_pdf_pages_with_limits, compare_pdf_report, compare_pdf_visual_diff, compress_pdf,
-    crop_pdf_pages_with_limits, decrypt_pdf, delete_blank_pdf_pages_with_limits,
-    delete_pdf_pages_with_limits, delete_pdf_signature_field, edit_pdf_annotations,
-    edit_pdf_attachment_artifacts, edit_pdf_colors, edit_pdf_images_artifacts, edit_pdf_metadata,
-    edit_pdf_outline, encrypt_pdf, extract_pdf_attachment, extract_pdf_image,
-    extract_pdf_pages_with_limits, extract_text_from_pdf, fill_pdf_form, image_artifacts_to_pdf,
-    inspect_pdf_annotations, inspect_pdf_attachments, inspect_pdf_forms, inspect_pdf_images,
-    inspect_pdf_metadata, inspect_pdf_outline, inspect_pdf_permissions,
-    merge_pdf_artifacts_with_limits, nup_pdf_pages_with_limits, overlay_pdf_artifacts, pdf_bytes,
-    pdf_to_single_page_with_limits, remove_pdf_forms, remove_pdf_interactive_elements,
-    render_pdf_page, reorder_pdf_with_limits, rotate_pdf_with_limits, scale_pdf_pages_with_limits,
-    set_pdf_permissions, split_pdf_with_limits, svg_to_pdf, unlock_pdf_form_readonly,
+    add_pdf_signature, add_pdf_timestamp, booklet_pdf_pages_with_limits, compare_pdf_report,
+    compare_pdf_visual_diff, decrypt_pdf, delete_pdf_signature_field,
+    edit_pdf_attachment_artifacts, edit_pdf_images_artifacts, encrypt_pdf, extract_pdf_attachment,
+    extract_pdf_image, extract_text_from_pdf, image_artifacts_to_pdf, inspect_pdf_annotations,
+    inspect_pdf_attachments, inspect_pdf_forms, inspect_pdf_images, inspect_pdf_metadata,
+    inspect_pdf_outline, inspect_pdf_permissions, load_pdf, nup_pdf_pages_with_limits,
+    overlay_pdf_artifacts, pdf_bytes, render_pdf_page, set_pdf_permissions, svg_to_pdf,
     verify_pdf_signatures, watermark_pdf_artifacts, AnnotationEditOptions,
     AnnotationInspectOptions, Artifact, AttachmentEditOptions, AttachmentExtractOptions,
     AttachmentInspectOptions, BookletOptions, ColorEditOptions, CompressionOptions,
@@ -577,7 +571,8 @@ impl TryFrom<PdfSignOptionsDef> for PdfSignOptions {
             options.mode = SignatureMode::List;
             return Ok(Self::List(options));
         }
-        if let Some(options) = value.verify {
+        if let Some(mut options) = value.verify {
+            options.mode = SignatureMode::Verify;
             return Ok(Self::Verify(options));
         }
         if let Some(options) = value.delete_field {
@@ -625,56 +620,72 @@ pub(crate) fn run_pdf_edit(
 ) -> Result<Artifact, OxideError> {
     match options {
         PdfEditOptions::Merge(_) => {
-            merge_pdf_artifacts_with_limits(inputs, limits).map(Artifact::Pdf)
+            let document = crate::page_ops::merge_artifacts_to_document(inputs, limits)?;
+            Ok(Artifact::pdf_object(document))
         }
         PdfEditOptions::KeepPages(options) => {
-            let input = single_pdf_input(inputs)?;
-            split_pdf_with_limits(input, &options.pages, limits).map(Artifact::Pdf)
+            let mut document = single_pdf_document(inputs)?;
+            crate::page_ops::split_on_document(&mut document, &options.pages, limits)?;
+            Ok(Artifact::pdf_object(document))
         }
         PdfEditOptions::ExtractPages(options) => {
-            let input = single_pdf_input(inputs)?;
-            extract_pdf_pages_with_limits(input, &options.pages, limits).map(Artifact::Pdf)
+            let mut document = single_pdf_document(inputs)?;
+            crate::page_ops::split_on_document(&mut document, &options.pages, limits)?;
+            Ok(Artifact::pdf_object(document))
         }
         PdfEditOptions::ReorderPages(options) => {
-            let input = single_pdf_input(inputs)?;
-            reorder_pdf_with_limits(input, &options.pages, limits).map(Artifact::Pdf)
+            // Reorder reuses the order-preserving page selection primitive.
+            let mut document = single_pdf_document(inputs)?;
+            crate::page_ops::split_on_document(&mut document, &options.pages, limits)?;
+            Ok(Artifact::pdf_object(document))
         }
         PdfEditOptions::RotatePages(options) => {
-            let input = single_pdf_input(inputs)?;
-            rotate_pdf_with_limits(input, &options.pages, options.degrees, limits)
-                .map(Artifact::Pdf)
+            let mut document = single_pdf_document(inputs)?;
+            crate::page_ops::rotate_on_document(
+                &mut document,
+                &options.pages,
+                options.degrees,
+                limits,
+            )?;
+            Ok(Artifact::pdf_object(document))
         }
         PdfEditOptions::DeletePages(options) => {
-            let input = single_pdf_input(inputs)?;
-            delete_pdf_pages_with_limits(input, &options.pages, limits).map(Artifact::Pdf)
+            let mut document = single_pdf_document(inputs)?;
+            crate::page_ops::delete_pages_on_document(&mut document, &options.pages, limits)?;
+            Ok(Artifact::pdf_object(document))
         }
         PdfEditOptions::DeleteBlankPages(options) => {
-            let input = single_pdf_input(inputs)?;
-            delete_blank_pdf_pages_with_limits(input, options, limits).map(Artifact::Pdf)
+            let mut document = single_pdf_document(inputs)?;
+            crate::page_ops::delete_blank_pages_on_document(&mut document, options, limits)?;
+            Ok(Artifact::pdf_object(document))
         }
         PdfEditOptions::CropPages(options) => {
-            let input = single_pdf_input(inputs)?;
-            crop_pdf_pages_with_limits(input, options, limits).map(Artifact::Pdf)
+            let mut document = single_pdf_document(inputs)?;
+            crate::page_ops::crop_pages_on_document(&mut document, options, limits)?;
+            Ok(Artifact::pdf_object(document))
         }
         PdfEditOptions::ScalePages(options) => {
-            let input = single_pdf_input(inputs)?;
-            scale_pdf_pages_with_limits(input, options, limits).map(Artifact::Pdf)
+            let mut document = single_pdf_document(inputs)?;
+            crate::page_ops::scale_pages_on_document(&mut document, options, limits)?;
+            Ok(Artifact::pdf_object(document))
         }
         PdfEditOptions::SinglePage(options) => {
-            let input = single_pdf_input(inputs)?;
-            pdf_to_single_page_with_limits(input, options, limits).map(Artifact::Pdf)
+            let mut document = single_pdf_document(inputs)?;
+            crate::page_ops::single_page_on_document(&mut document, options, limits)?;
+            Ok(Artifact::pdf_object(document))
         }
         PdfEditOptions::NUp(options) => {
-            let input = single_pdf_input(inputs)?;
-            nup_pdf_pages_with_limits(input, options, limits).map(Artifact::Pdf)
+            let input = single_pdf_input_bytes(inputs)?;
+            nup_pdf_pages_with_limits(&input, options, limits).map(Artifact::Pdf)
         }
         PdfEditOptions::Booklet(options) => {
-            let input = single_pdf_input(inputs)?;
-            booklet_pdf_pages_with_limits(input, options, limits).map(Artifact::Pdf)
+            let input = single_pdf_input_bytes(inputs)?;
+            booklet_pdf_pages_with_limits(&input, options, limits).map(Artifact::Pdf)
         }
         PdfEditOptions::PageNumbers(options) => {
-            let input = single_pdf_input(inputs)?;
-            add_pdf_page_numbers_with_limits(input, options, limits).map(Artifact::Pdf)
+            let mut document = single_pdf_document(inputs)?;
+            crate::page_ops::add_page_numbers_on_document(&mut document, options, limits)?;
+            Ok(Artifact::pdf_object(document))
         }
         PdfEditOptions::ImageToPdf(options) => {
             image_artifacts_to_pdf(inputs, options, limits).map(Artifact::Pdf)
@@ -684,52 +695,65 @@ pub(crate) fn run_pdf_edit(
             svg_to_pdf(input, options, limits).map(Artifact::Pdf)
         }
         PdfEditOptions::Watermark(options) => {
-            watermark_pdf_artifacts(inputs, options, limits).map(Artifact::Pdf)
+            let inputs = materialize_object_inputs(inputs)?;
+            watermark_pdf_artifacts(&inputs, options, limits).map(Artifact::Pdf)
         }
         PdfEditOptions::Overlay(options) => {
-            overlay_pdf_artifacts(inputs, options, limits).map(Artifact::Pdf)
+            let inputs = materialize_object_inputs(inputs)?;
+            overlay_pdf_artifacts(&inputs, options, limits).map(Artifact::Pdf)
         }
         PdfEditOptions::ImageEdit(options) => {
-            edit_pdf_images_artifacts(inputs, options, limits).map(Artifact::Pdf)
+            let inputs = materialize_object_inputs(inputs)?;
+            edit_pdf_images_artifacts(&inputs, options, limits).map(Artifact::Pdf)
         }
         PdfEditOptions::Color(options) => {
-            let input = single_pdf_input(inputs)?;
-            edit_pdf_colors(input, options, limits).map(Artifact::Pdf)
+            let mut document = single_pdf_document(inputs)?;
+            crate::overlay::edit_colors_on_document(&mut document, options, limits)?;
+            Ok(Artifact::pdf_object(document))
         }
         PdfEditOptions::Metadata(options) => {
-            let input = single_pdf_input(inputs)?;
-            edit_pdf_metadata(input, options, limits).map(Artifact::Pdf)
+            let mut document = single_pdf_document(inputs)?;
+            crate::metadata::edit_metadata_on_document(&mut document, options, limits)?;
+            Ok(Artifact::pdf_object(document))
         }
         PdfEditOptions::Outline(options) => {
-            let input = single_pdf_input(inputs)?;
-            edit_pdf_outline(input, options, limits).map(Artifact::Pdf)
+            let mut document = single_pdf_document(inputs)?;
+            crate::outlines::edit_outline_on_document(&mut document, options, limits)?;
+            Ok(Artifact::pdf_object(document))
         }
         PdfEditOptions::Attachment(options) => {
-            edit_pdf_attachment_artifacts(inputs, options, limits).map(Artifact::Pdf)
+            let inputs = materialize_object_inputs(inputs)?;
+            edit_pdf_attachment_artifacts(&inputs, options, limits).map(Artifact::Pdf)
         }
         PdfEditOptions::Annotation(options) => {
-            let input = single_pdf_input(inputs)?;
-            edit_pdf_annotations(input, options, limits).map(Artifact::Pdf)
+            let mut document = single_pdf_document(inputs)?;
+            crate::annotations::edit_annotations_on_document(&mut document, options, limits)?;
+            Ok(Artifact::pdf_object(document))
         }
         PdfEditOptions::FormFill(options) => {
-            let input = single_pdf_input(inputs)?;
-            fill_pdf_form(input, options, limits).map(Artifact::Pdf)
+            let mut document = single_pdf_document(inputs)?;
+            crate::forms::fill_form_on_document(&mut document, options, limits)?;
+            Ok(Artifact::pdf_object(document))
         }
         PdfEditOptions::FormUnlockReadonly => {
-            let input = single_pdf_input(inputs)?;
-            unlock_pdf_form_readonly(input, limits).map(Artifact::Pdf)
+            let mut document = single_pdf_document(inputs)?;
+            crate::forms::unlock_form_readonly_on_document(&mut document, limits)?;
+            Ok(Artifact::pdf_object(document))
         }
         PdfEditOptions::FormRemove => {
-            let input = single_pdf_input(inputs)?;
-            remove_pdf_forms(input, limits).map(Artifact::Pdf)
+            let mut document = single_pdf_document(inputs)?;
+            crate::forms::remove_forms_on_document(&mut document, limits)?;
+            Ok(Artifact::pdf_object(document))
         }
         PdfEditOptions::InteractiveRemove(options) => {
-            let input = single_pdf_input(inputs)?;
-            remove_pdf_interactive_elements(input, options, limits).map(Artifact::Pdf)
+            let mut document = single_pdf_document(inputs)?;
+            crate::interactive::remove_interactive_on_document(&mut document, options, limits)?;
+            Ok(Artifact::pdf_object(document))
         }
         PdfEditOptions::Compression(options) => {
-            let input = single_pdf_input(inputs)?;
-            compress_pdf(input, options, limits).map(Artifact::Pdf)
+            let mut document = single_pdf_document(inputs)?;
+            crate::compression::compress_on_document(&mut document, options, limits)?;
+            Ok(Artifact::pdf_object(document))
         }
     }
 }
@@ -741,44 +765,44 @@ pub(crate) fn run_pdf_inspect(
 ) -> Result<Artifact, OxideError> {
     match options {
         PdfInspectOptions::Render(options) => {
-            let input = single_pdf_input(inputs)?;
-            render_pdf_page(input, options, limits).map(Artifact::Image)
+            let input = single_pdf_input_bytes(inputs)?;
+            render_pdf_page(&input, options, limits).map(Artifact::Image)
         }
         PdfInspectOptions::ExtractText(options) => {
-            let input = single_pdf_input(inputs)?;
-            extract_text_from_pdf(input, options, limits).map(Artifact::Text)
+            let input = single_pdf_input_bytes(inputs)?;
+            extract_text_from_pdf(&input, options, limits).map(Artifact::Text)
         }
         PdfInspectOptions::Metadata(options) => {
-            let input = single_pdf_input(inputs)?;
-            inspect_pdf_metadata(input, options).map(Artifact::Text)
+            let input = single_pdf_input_bytes(inputs)?;
+            inspect_pdf_metadata(&input, options).map(Artifact::Text)
         }
         PdfInspectOptions::Outline(options) => {
-            let input = single_pdf_input(inputs)?;
-            inspect_pdf_outline(input, options).map(Artifact::Text)
+            let input = single_pdf_input_bytes(inputs)?;
+            inspect_pdf_outline(&input, options).map(Artifact::Text)
         }
         PdfInspectOptions::Attachments(options) => {
-            let input = single_pdf_input(inputs)?;
-            inspect_pdf_attachments(input, options).map(Artifact::Text)
+            let input = single_pdf_input_bytes(inputs)?;
+            inspect_pdf_attachments(&input, options).map(Artifact::Text)
         }
         PdfInspectOptions::AttachmentExtract(options) => {
-            let input = single_pdf_input(inputs)?;
-            extract_pdf_attachment(input, &options.name, limits).map(Artifact::Bytes)
+            let input = single_pdf_input_bytes(inputs)?;
+            extract_pdf_attachment(&input, &options.name, limits).map(Artifact::Bytes)
         }
         PdfInspectOptions::Annotations(options) => {
-            let input = single_pdf_input(inputs)?;
-            inspect_pdf_annotations(input, options).map(Artifact::Text)
+            let input = single_pdf_input_bytes(inputs)?;
+            inspect_pdf_annotations(&input, options).map(Artifact::Text)
         }
         PdfInspectOptions::Forms(options) => {
-            let input = single_pdf_input(inputs)?;
-            inspect_pdf_forms(input, options).map(Artifact::Text)
+            let input = single_pdf_input_bytes(inputs)?;
+            inspect_pdf_forms(&input, options).map(Artifact::Text)
         }
         PdfInspectOptions::Images(options) => {
-            let input = single_pdf_input(inputs)?;
-            inspect_pdf_images(input, options).map(Artifact::Text)
+            let input = single_pdf_input_bytes(inputs)?;
+            inspect_pdf_images(&input, options).map(Artifact::Text)
         }
         PdfInspectOptions::ImageExtract(options) => {
-            let input = single_pdf_input(inputs)?;
-            extract_pdf_image(input, options, limits).map(Artifact::Bytes)
+            let input = single_pdf_input_bytes(inputs)?;
+            extract_pdf_image(&input, options, limits).map(Artifact::Bytes)
         }
     }
 }
@@ -788,19 +812,19 @@ pub(crate) fn run_pdf_security(
     inputs: &[Artifact],
     limits: &ResourceLimits,
 ) -> Result<Artifact, OxideError> {
-    let input = single_pdf_input(inputs)?;
+    let input = single_pdf_input_bytes(inputs)?;
     match options {
         PdfSecurityOptions::Encrypt(options) => {
-            encrypt_pdf(input, options, limits).map(Artifact::Pdf)
+            encrypt_pdf(&input, options, limits).map(Artifact::Pdf)
         }
         PdfSecurityOptions::Decrypt(options) => {
-            decrypt_pdf(input, options, limits).map(Artifact::Pdf)
+            decrypt_pdf(&input, options, limits).map(Artifact::Pdf)
         }
         PdfSecurityOptions::PermissionsGet(options) => {
-            inspect_pdf_permissions(input, options, limits).map(Artifact::Text)
+            inspect_pdf_permissions(&input, options, limits).map(Artifact::Text)
         }
         PdfSecurityOptions::PermissionsSet(options) => {
-            set_pdf_permissions(input, options, limits).map(Artifact::Pdf)
+            set_pdf_permissions(&input, options, limits).map(Artifact::Pdf)
         }
     }
 }
@@ -810,7 +834,8 @@ pub(crate) fn run_pdf_compare(
     inputs: &[Artifact],
     limits: &ResourceLimits,
 ) -> Result<Artifact, OxideError> {
-    let (left, right) = two_pdf_inputs(inputs)?;
+    let inputs = materialize_object_inputs(inputs)?;
+    let (left, right) = two_pdf_inputs(&inputs)?;
     match options {
         PdfCompareOptions::Report(options) => {
             compare_pdf_report(left, right, options, limits).map(Artifact::Text)
@@ -828,36 +853,89 @@ pub(crate) fn run_pdf_sign(
 ) -> Result<Artifact, OxideError> {
     match options {
         PdfSignOptions::Add(options) => {
-            let input = single_pdf_input(inputs)?;
-            add_pdf_signature(input, options, limits).map(|bytes| Artifact::pdf(&bytes))
+            let input = single_pdf_input_bytes(inputs)?;
+            add_pdf_signature(&input, options, limits).map(|bytes| Artifact::pdf(&bytes))
         }
         PdfSignOptions::List(options) => {
-            let input = single_pdf_input(inputs)?;
-            verify_pdf_signatures(input, options, limits).map(Artifact::Text)
+            let input = single_pdf_input_bytes(inputs)?;
+            verify_pdf_signatures(&input, options, limits).map(Artifact::Text)
         }
         PdfSignOptions::Verify(options) => {
-            let input = single_pdf_input(inputs)?;
-            verify_pdf_signatures(input, options, limits).map(Artifact::Text)
+            let input = single_pdf_input_bytes(inputs)?;
+            verify_pdf_signatures(&input, options, limits).map(Artifact::Text)
         }
         PdfSignOptions::DeleteField(options) => {
-            let input = single_pdf_input(inputs)?;
-            delete_pdf_signature_field(input, options, limits).map(|bytes| Artifact::pdf(&bytes))
+            let input = single_pdf_input_bytes(inputs)?;
+            delete_pdf_signature_field(&input, options, limits).map(|bytes| Artifact::pdf(&bytes))
         }
         PdfSignOptions::Timestamp(options) => {
-            let input = single_pdf_input(inputs)?;
-            add_pdf_timestamp(input, options, limits).map(Artifact::Text)
+            let input = single_pdf_input_bytes(inputs)?;
+            add_pdf_timestamp(&input, options, limits).map(Artifact::Text)
         }
     }
 }
 
-fn single_pdf_input(inputs: &[Artifact]) -> Result<&[u8], OxideError> {
+/// Resolves a single PDF input to owned bytes, serializing an upstream parsed
+/// object artifact when necessary.
+///
+/// Byte-consuming operators (inspect, render, security, compare, sign) read the
+/// PDF as bytes. When a prior object-level operator hands them a parsed
+/// document, it is serialized here so the chain keeps working; byte inputs are
+/// returned without copying beyond the borrow.
+fn single_pdf_input_bytes(inputs: &[Artifact]) -> Result<std::borrow::Cow<'_, [u8]>, OxideError> {
     if inputs.len() != 1 {
         return Err(OxideError::InvalidInput {
             reason: "operator requires exactly one PDF input".to_owned(),
         });
     }
+    match &inputs[0] {
+        Artifact::PdfObject(_) => Ok(std::borrow::Cow::Owned(
+            inputs[0].output_bytes()?.into_owned(),
+        )),
+        _ => Ok(std::borrow::Cow::Borrowed(pdf_bytes(&inputs[0])?)),
+    }
+}
 
-    pdf_bytes(&inputs[0])
+/// Materializes any parsed-object PDF inputs to serialized byte artifacts.
+///
+/// Multi-input or byte-producing operators (overlay, image edit, attachment,
+/// imposition) consume their PDF input as bytes. When an upstream object-level
+/// operator hands them a parsed document, it is serialized here — the one
+/// defined serialization point for these operators — so they keep working in a
+/// chain. Non-object artifacts are passed through by clone.
+fn materialize_object_inputs(inputs: &[Artifact]) -> Result<Vec<Artifact>, OxideError> {
+    inputs
+        .iter()
+        .map(|artifact| match artifact {
+            Artifact::PdfObject(_) => Ok(Artifact::pdf(artifact.output_bytes()?)),
+            other => Ok(other.clone()),
+        })
+        .collect()
+}
+
+/// Resolves a single PDF input to an owned, parsed document for an object-level
+/// operator.
+///
+/// An upstream object artifact is reused without re-parsing: its parsed document
+/// is cloned from the shared `Arc` (the executor keeps the artifact in the store
+/// during the layer, so the `Arc` is shared and cannot be moved out). A
+/// byte-backed input is parsed once. Any other artifact kind is rejected. This
+/// avoids the serialize-then-reparse roundtrip that a byte-only pipeline pays
+/// between every chained PDF operator.
+fn single_pdf_document(inputs: &[Artifact]) -> Result<lopdf::Document, OxideError> {
+    if inputs.len() != 1 {
+        return Err(OxideError::InvalidInput {
+            reason: "operator requires exactly one PDF input".to_owned(),
+        });
+    }
+    match &inputs[0] {
+        Artifact::PdfObject(artifact) => Ok((*artifact.document).clone()),
+        Artifact::Pdf(pdf) => load_pdf(pdf.bytes.as_slice()),
+        Artifact::Bytes(bytes) => load_pdf(bytes.bytes.as_slice()),
+        _ => Err(OxideError::InvalidInput {
+            reason: "expected PDF input artifact".to_owned(),
+        }),
+    }
 }
 
 fn two_pdf_inputs(inputs: &[Artifact]) -> Result<(&[u8], &[u8]), OxideError> {

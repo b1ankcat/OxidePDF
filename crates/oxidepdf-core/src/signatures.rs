@@ -11,11 +11,13 @@ use cms::{
     content_info::ContentInfo,
     signed_data::{SignedAttributes, SignedData, SignerIdentifier},
 };
+use const_oid::AssociatedOid;
 use der::{Decode as DerDecode, Encode};
 use lopdf::{dictionary, Dictionary};
 use p256::pkcs8::DecodePrivateKey;
 use sha2::Digest;
 use spki::AlgorithmIdentifierOwned;
+use x509_cert::ext::pkix::{BasicConstraints, KeyUsage};
 use x509_cert::Certificate;
 
 /// Options for adding a digital signature.
@@ -744,7 +746,7 @@ fn load_signing_certificate(path: &std::path::Path) -> Result<Certificate, Oxide
 }
 
 fn load_p256_signing_key(path: &std::path::Path) -> Result<p256::ecdsa::SigningKey, OxideError> {
-    let pem = std::fs::read_to_string(path).map_err(|_| OxideError::Io)?;
+    let pem = zeroize::Zeroizing::new(std::fs::read_to_string(path).map_err(|_| OxideError::Io)?);
     p256::ecdsa::SigningKey::from_pkcs8_pem(&pem).map_err(|_| OxideError::InvalidInput {
         reason: "private key file must contain an unencrypted P-256 PKCS#8 PEM key".to_owned(),
     })
@@ -1447,6 +1449,10 @@ fn cms_certificate_chain_status(
             SignatureCheckState::Indeterminate,
             "certificate chain does not reach an explicit trust anchor",
         ),
+        CertificatePathStatus::UntrustedIssuer => signature_check(
+            SignatureCheckState::Failed,
+            "certificate chain relies on an issuer that is not a valid CA",
+        ),
     }
 }
 
@@ -1455,6 +1461,7 @@ enum CertificatePathStatus {
     InvalidSignature,
     UnsupportedAlgorithm(const_oid::ObjectIdentifier),
     NoIssuer,
+    UntrustedIssuer,
 }
 
 fn verify_certificate_path(
@@ -1463,12 +1470,20 @@ fn verify_certificate_path(
     trust_anchors: &TrustAnchors,
 ) -> CertificatePathStatus {
     let mut current = signer_certificate;
+    // Number of intermediate CA certificates traversed so far, used to enforce
+    // each issuer's pathLenConstraint.
+    let mut intermediates_seen = 0u32;
     for _ in 0..=certificates.0.len() {
         if let Some(anchor) = trust_anchors
             .certificates
             .iter()
             .find(|anchor| current.tbs_certificate.issuer == anchor.tbs_certificate.subject)
         {
+            // A trust anchor signing `current` must itself be a usable CA, and
+            // its pathLenConstraint must allow the intermediates below it.
+            if !issuer_is_valid_ca(anchor, intermediates_seen) {
+                return CertificatePathStatus::UntrustedIssuer;
+            }
             return match verify_certificate_signature(current, anchor) {
                 SignatureCheckState::Passed => CertificatePathStatus::ChainsToTrustAnchor,
                 SignatureCheckState::Failed => CertificatePathStatus::InvalidSignature,
@@ -1493,8 +1508,18 @@ fn verify_certificate_path(
         {
             return CertificatePathStatus::NoIssuer;
         }
+        // An embedded certificate may only act as an issuer if it is a CA whose
+        // basicConstraints/keyUsage/pathLenConstraint permit signing `current`.
+        // This blocks using an end-entity (e.g. TLS leaf) certificate to forge
+        // a child certificate.
+        if !issuer_is_valid_ca(issuer, intermediates_seen) {
+            return CertificatePathStatus::UntrustedIssuer;
+        }
         match verify_certificate_signature(current, issuer) {
-            SignatureCheckState::Passed => current = issuer,
+            SignatureCheckState::Passed => {
+                current = issuer;
+                intermediates_seen = intermediates_seen.saturating_add(1);
+            }
             SignatureCheckState::Failed => return CertificatePathStatus::InvalidSignature,
             SignatureCheckState::Unsupported => {
                 return CertificatePathStatus::UnsupportedAlgorithm(current.signature_algorithm.oid)
@@ -1504,6 +1529,44 @@ fn verify_certificate_path(
     }
 
     CertificatePathStatus::NoIssuer
+}
+
+/// Returns true if `issuer` may sign certificates for a path with
+/// `intermediates_below` intermediate CAs beneath it. Requires basicConstraints
+/// `cA = true`; if a keyUsage extension is present it must allow `keyCertSign`;
+/// and any pathLenConstraint must accommodate the intermediates below.
+fn issuer_is_valid_ca(issuer: &Certificate, intermediates_below: u32) -> bool {
+    let Some(extensions) = issuer.tbs_certificate.extensions.as_ref() else {
+        // Without basicConstraints we cannot confirm CA status; reject rather
+        // than assume authority.
+        return false;
+    };
+
+    let mut is_ca = false;
+    let mut path_len: Option<u8> = None;
+    let mut key_cert_sign_ok = true;
+    for extension in extensions {
+        if extension.extn_id == BasicConstraints::OID {
+            let Ok(basic) = BasicConstraints::from_der(extension.extn_value.as_bytes()) else {
+                return false;
+            };
+            is_ca = basic.ca;
+            path_len = basic.path_len_constraint;
+        } else if extension.extn_id == KeyUsage::OID {
+            match KeyUsage::from_der(extension.extn_value.as_bytes()) {
+                Ok(key_usage) => key_cert_sign_ok = key_usage.key_cert_sign(),
+                Err(_) => return false,
+            }
+        }
+    }
+
+    if !is_ca || !key_cert_sign_ok {
+        return false;
+    }
+    match path_len {
+        Some(max) => u32::from(max) >= intermediates_below,
+        None => true,
+    }
 }
 
 fn verify_certificate_signature(
@@ -1598,9 +1661,14 @@ fn verify_ecdsa_p256_signature(
     message: &[u8],
     signature: &[u8],
 ) -> SignatureCheckStatus {
-    if *signature_algorithm_oid != const_oid::db::rfc5912::ECDSA_WITH_SHA_256
-        && *digest_algorithm_oid != const_oid::db::rfc5912::ID_SHA_256
-    {
+    // The signature algorithm must be ECDSA-with-SHA-256. The digest OID is the
+    // bare id-sha256 when called from the CMS signed-attributes path, but the
+    // combined ecdsa-with-SHA-256 OID when called from certificate-chain
+    // verification (RFC 5280 ties tbsCertificate.signature to signatureAlgorithm).
+    // Reject any other declared digest, e.g. SHA-384.
+    let digest_is_sha256 = *digest_algorithm_oid == const_oid::db::rfc5912::ID_SHA_256
+        || *digest_algorithm_oid == const_oid::db::rfc5912::ECDSA_WITH_SHA_256;
+    if *signature_algorithm_oid != const_oid::db::rfc5912::ECDSA_WITH_SHA_256 || !digest_is_sha256 {
         return signature_check(
             SignatureCheckState::Unsupported,
             format!(
@@ -1930,6 +1998,14 @@ fn overall_signature_verdict(
             || signature.timestamp_status.status == SignatureCheckState::Unsupported
     }) {
         return SignatureVerdict::Unsupported;
+    }
+    // All signatures passed digest, signature, and chain-to-anchor checks.
+    if signatures.iter().all(|signature| {
+        signature.digest_status.status == SignatureCheckState::Passed
+            && signature.signature_status.status == SignatureCheckState::Passed
+            && signature.certificate_chain_status.status == SignatureCheckState::Passed
+    }) {
+        return SignatureVerdict::Trusted;
     }
 
     SignatureVerdict::Indeterminate

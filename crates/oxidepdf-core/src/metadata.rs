@@ -64,33 +64,43 @@ pub fn edit_pdf_metadata(
 ) -> Result<PdfArtifact, OxideError> {
     enforce_input_bytes(input.len(), limits)?;
     let mut document = load_pdf(input)?;
-    enforce_max_pages(document.get_pages().len(), limits)?;
-    match options.action {
-        MetadataEditAction::Set => {
-            let mut entries = read_metadata_entries(&document)?;
-            for entry in &options.entries {
-                validate_metadata_key(&entry.key)?;
-                entries.insert(normalized_metadata_key(&entry.key), entry.value.clone());
-            }
-            write_metadata_entries(&mut document, &entries);
-        }
-        MetadataEditAction::Delete => {
-            let mut entries = read_metadata_entries(&document)?;
-            for key in &options.keys {
-                validate_metadata_key(key)?;
-                entries.remove(&normalized_metadata_key(key));
-            }
-            write_metadata_entries(&mut document, &entries);
-        }
-        MetadataEditAction::Validate => {
-            read_metadata_entries(&document)?;
-        }
-    }
+    edit_metadata_on_document(&mut document, options, limits)?;
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
     Ok(PdfArtifact {
         bytes: bytes.into(),
     })
+}
+
+/// Applies a metadata edit to an already-parsed document.
+pub(crate) fn edit_metadata_on_document(
+    document: &mut lopdf::Document,
+    options: &MetadataEditOptions,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
+    enforce_max_pages(document.get_pages().len(), limits)?;
+    match options.action {
+        MetadataEditAction::Set => {
+            let mut entries = read_metadata_entries(document)?;
+            for entry in &options.entries {
+                validate_metadata_key(&entry.key)?;
+                entries.insert(normalized_metadata_key(&entry.key), entry.value.clone());
+            }
+            write_metadata_entries(document, &entries);
+        }
+        MetadataEditAction::Delete => {
+            let mut entries = read_metadata_entries(document)?;
+            for key in &options.keys {
+                validate_metadata_key(key)?;
+                entries.remove(&normalized_metadata_key(key));
+            }
+            write_metadata_entries(document, &entries);
+        }
+        MetadataEditAction::Validate => {
+            read_metadata_entries(document)?;
+        }
+    }
+    Ok(())
 }
 
 fn read_metadata_entries(
@@ -103,9 +113,12 @@ fn read_metadata_entries(
             .and_then(Object::as_dict)
             .map_err(|_| OxideError::ParsePdf)?;
         for (key, value) in info.iter() {
+            let Some(rendered) = metadata_value(value) else {
+                continue;
+            };
             entries.insert(
                 normalized_metadata_key(&String::from_utf8_lossy(key)),
-                pdf_string(value)?,
+                rendered,
             );
         }
     }
@@ -159,4 +172,16 @@ fn pdf_string(object: &Object) -> Result<String, OxideError> {
         .as_str()
         .map(|value| String::from_utf8_lossy(value).into_owned())
         .map_err(|_| OxideError::ParsePdf)
+}
+
+/// Renders an Info-dictionary value for reporting. Text strings are decoded and
+/// names (e.g. `/Trapped` → `True`/`False`/`Unknown`) are rendered as their
+/// name text. Other object kinds are skipped rather than failing the whole
+/// document.
+fn metadata_value(object: &Object) -> Option<String> {
+    match object {
+        Object::String(..) => pdf_string(object).ok(),
+        Object::Name(name) => Some(String::from_utf8_lossy(name).into_owned()),
+        _ => None,
+    }
 }

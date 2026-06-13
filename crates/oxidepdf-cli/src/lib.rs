@@ -272,10 +272,10 @@ fn write_outputs(
                 ),
             })
         })?;
-        let bytes = artifact_bytes(artifact)?;
+        let bytes = artifact.output_bytes().map_err(CliError::Core)?;
         enforce_cli_output_limit(bytes.len(), &workflow.limits)?;
         if is_stdio(&output.path) {
-            stdout.write_all(bytes).map_err(CliError::Io)?;
+            stdout.write_all(&bytes).map_err(CliError::Io)?;
         } else {
             if output.path.exists() && !force {
                 return Err(CliError::Workflow(format!(
@@ -283,21 +283,11 @@ fn write_outputs(
                     output.path.display()
                 )));
             }
-            fs::write(&output.path, bytes).map_err(CliError::Io)?;
+            fs::write(&output.path, &bytes).map_err(CliError::Io)?;
         }
     }
 
     Ok(())
-}
-
-fn artifact_bytes(artifact: &Artifact) -> Result<&[u8], CliError> {
-    match artifact {
-        Artifact::Bytes(bytes) => Ok(&bytes.bytes),
-        Artifact::Pdf(pdf) => Ok(&pdf.bytes),
-        Artifact::Image(image) => Ok(&image.bytes),
-        Artifact::Svg(svg) => Ok(&svg.bytes),
-        Artifact::Text(text) => Ok(text.text.as_bytes()),
-    }
 }
 
 fn read_path_or_stdin(path: &Path, stdin: &[u8]) -> io::Result<Vec<u8>> {

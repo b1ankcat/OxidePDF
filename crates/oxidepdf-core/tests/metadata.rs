@@ -58,3 +58,15 @@ fn metadata_set_delete_validate_and_report_are_deterministic() {
             .text
     );
 }
+
+#[test]
+fn metadata_inspection_reports_name_valued_trapped_entry() {
+    let report = inspect_pdf_metadata(
+        &pdf_with_named_info_value(),
+        &MetadataInspectOptions::default(),
+    )
+    .unwrap();
+    let report: serde_json::Value = serde_json::from_str(&report.text).unwrap();
+    assert_eq!(report["entries"]["title"], "Sample");
+    assert_eq!(report["entries"]["trapped"], "True");
+}

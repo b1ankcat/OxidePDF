@@ -10,7 +10,7 @@ resolver = "2"
 # license because they differ. The core library is Apache-2.0; the CLI and web
 # front ends are GPL-3.0-or-later.
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.80"
 

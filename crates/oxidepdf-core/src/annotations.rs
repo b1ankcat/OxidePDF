@@ -100,16 +100,26 @@ pub fn edit_pdf_annotations(
 ) -> Result<PdfArtifact, OxideError> {
     enforce_input_bytes(input.len(), limits)?;
     let mut document = load_pdf(input)?;
-    enforce_max_pages(document.get_pages().len(), limits)?;
-    match options.action {
-        AnnotationEditAction::AddText => add_text_annotation(&mut document, options)?,
-        AnnotationEditAction::Delete => delete_annotation(&mut document, options)?,
-    }
+    edit_annotations_on_document(&mut document, options, limits)?;
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
     Ok(PdfArtifact {
         bytes: bytes.into(),
     })
+}
+
+/// Applies an annotation edit to an already-parsed document.
+pub(crate) fn edit_annotations_on_document(
+    document: &mut lopdf::Document,
+    options: &AnnotationEditOptions,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
+    enforce_max_pages(document.get_pages().len(), limits)?;
+    match options.action {
+        AnnotationEditAction::AddText => add_text_annotation(document, options)?,
+        AnnotationEditAction::Delete => delete_annotation(document, options)?,
+    }
+    Ok(())
 }
 
 fn add_text_annotation(

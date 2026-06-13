@@ -152,6 +152,23 @@ pub fn merge_pdf_artifacts_with_limits(
     inputs: &[Artifact],
     limits: &ResourceLimits,
 ) -> Result<PdfArtifact, OxideError> {
+    let merged = merge_artifacts_to_document(inputs, limits)?;
+    let bytes = save_pdf(merged)?;
+    enforce_output_bytes(bytes.len(), limits)?;
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
+}
+
+/// Merges two or more PDF input artifacts into one parsed document.
+///
+/// Each input is reused as a parsed document when it is already an object
+/// artifact, or parsed once from bytes otherwise, so a merge can sit mid-chain
+/// without a serialize/reparse roundtrip on either side.
+pub(crate) fn merge_artifacts_to_document(
+    inputs: &[Artifact],
+    limits: &ResourceLimits,
+) -> Result<lopdf::Document, OxideError> {
     if inputs.len() < 2 {
         return Err(OxideError::InvalidInput {
             reason: "merge requires at least two PDF inputs".to_owned(),
@@ -161,9 +178,7 @@ pub fn merge_pdf_artifacts_with_limits(
     let mut documents = Vec::with_capacity(inputs.len());
     let mut total_pages = 0usize;
     for input in inputs {
-        let bytes = pdf_bytes(input)?;
-        enforce_input_bytes(bytes.len(), limits)?;
-        let document = load_pdf(bytes)?;
+        let document = pdf_document_from_artifact(input, limits)?;
         total_pages = total_pages
             .checked_add(document.get_pages().len())
             .ok_or_else(|| resource_limit("max_pages"))?;
@@ -171,11 +186,27 @@ pub fn merge_pdf_artifacts_with_limits(
         documents.push(document);
     }
 
-    let bytes = merge_documents(documents)?;
-    enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact {
-        bytes: bytes.into(),
-    })
+    merge_documents(documents)
+}
+
+/// Resolves a PDF-bearing artifact to an owned parsed document: an object
+/// artifact is cloned from its shared tree, byte artifacts are parsed once
+/// (after an input-size check). Other artifact kinds are rejected.
+pub(crate) fn pdf_document_from_artifact(
+    artifact: &Artifact,
+    limits: &ResourceLimits,
+) -> Result<lopdf::Document, OxideError> {
+    match artifact {
+        Artifact::PdfObject(object) => Ok((*object.document).clone()),
+        Artifact::Pdf(_) | Artifact::Bytes(_) => {
+            let bytes = pdf_bytes(artifact)?;
+            enforce_input_bytes(bytes.len(), limits)?;
+            load_pdf(bytes)
+        }
+        _ => Err(OxideError::InvalidInput {
+            reason: "expected PDF input artifact".to_owned(),
+        }),
+    }
 }
 
 /// Splits a PDF by keeping the specified one-based pages.
@@ -191,14 +222,24 @@ pub fn split_pdf_with_limits(
 ) -> Result<PdfArtifact, OxideError> {
     enforce_input_bytes(input.len(), limits)?;
     let mut document = load_pdf(input)?;
-    enforce_max_pages(document.get_pages().len(), limits)?;
-    let selected_pages = parse_page_range(pages, document.get_pages().len() as u32)?;
-    keep_pages(&mut document, &selected_pages)?;
+    split_on_document(&mut document, pages, limits)?;
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
     Ok(PdfArtifact {
         bytes: bytes.into(),
     })
+}
+
+/// Keeps the specified one-based pages of an already-parsed document. Shared by
+/// the byte-level entry point and the object-level operator path.
+pub(crate) fn split_on_document(
+    document: &mut lopdf::Document,
+    pages: &str,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
+    enforce_max_pages(document.get_pages().len(), limits)?;
+    let selected_pages = parse_page_range(pages, document.get_pages().len() as u32)?;
+    keep_pages(document, &selected_pages)
 }
 
 /// Extracts selected PDF pages.
@@ -228,9 +269,9 @@ pub fn reorder_pdf_with_limits(
 ) -> Result<PdfArtifact, OxideError> {
     enforce_input_bytes(input.len(), limits)?;
     let mut document = load_pdf(input)?;
-    enforce_max_pages(document.get_pages().len(), limits)?;
-    let selected_pages = parse_page_range(pages, document.get_pages().len() as u32)?;
-    keep_pages(&mut document, &selected_pages)?;
+    // Reorder and split share the same primitive: select pages in the given
+    // order. `keep_pages` preserves input order, so this reorders too.
+    split_on_document(&mut document, pages, limits)?;
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
     Ok(PdfArtifact {
@@ -252,6 +293,21 @@ pub fn rotate_pdf_with_limits(
 ) -> Result<PdfArtifact, OxideError> {
     enforce_input_bytes(input.len(), limits)?;
     let mut document = load_pdf(input)?;
+    rotate_on_document(&mut document, pages, degrees, limits)?;
+    let bytes = save_pdf(document)?;
+    enforce_output_bytes(bytes.len(), limits)?;
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
+}
+
+/// Rotates selected pages of an already-parsed document.
+pub(crate) fn rotate_on_document(
+    document: &mut lopdf::Document,
+    pages: &str,
+    degrees: i16,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
     enforce_max_pages(document.get_pages().len(), limits)?;
     let selected_pages = parse_page_range(pages, document.get_pages().len() as u32)?;
     let degrees = normalize_rotation(degrees)?;
@@ -277,11 +333,7 @@ pub fn rotate_pdf_with_limits(
         );
     }
 
-    let bytes = save_pdf(document)?;
-    enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact {
-        bytes: bytes.into(),
-    })
+    Ok(())
 }
 
 /// Deletes selected PDF pages.
@@ -297,6 +349,20 @@ pub fn delete_pdf_pages_with_limits(
 ) -> Result<PdfArtifact, OxideError> {
     enforce_input_bytes(input.len(), limits)?;
     let mut document = load_pdf(input)?;
+    delete_pages_on_document(&mut document, pages, limits)?;
+    let bytes = save_pdf(document)?;
+    enforce_output_bytes(bytes.len(), limits)?;
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
+}
+
+/// Deletes selected pages of an already-parsed document.
+pub(crate) fn delete_pages_on_document(
+    document: &mut lopdf::Document,
+    pages: &str,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
     let page_count = document.get_pages().len() as u32;
     enforce_max_pages(page_count as usize, limits)?;
     let deleted_pages = parse_page_range(pages, page_count)?;
@@ -308,12 +374,7 @@ pub fn delete_pdf_pages_with_limits(
     let kept_pages = (1..=page_count)
         .filter(|page| !deleted_pages.contains(page))
         .collect::<Vec<_>>();
-    keep_pages(&mut document, &kept_pages)?;
-    let bytes = save_pdf(document)?;
-    enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact {
-        bytes: bytes.into(),
-    })
+    keep_pages(document, &kept_pages)
 }
 
 /// Deletes structurally blank pages.
@@ -327,17 +388,31 @@ pub fn delete_blank_pdf_pages(
 /// Deletes structurally blank pages while enforcing resource limits.
 pub fn delete_blank_pdf_pages_with_limits(
     input: &[u8],
-    _options: &DeleteBlankPagesOptions,
+    options: &DeleteBlankPagesOptions,
     limits: &ResourceLimits,
 ) -> Result<PdfArtifact, OxideError> {
     enforce_input_bytes(input.len(), limits)?;
     let mut document = load_pdf(input)?;
+    delete_blank_pages_on_document(&mut document, options, limits)?;
+    let bytes = save_pdf(document)?;
+    enforce_output_bytes(bytes.len(), limits)?;
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
+}
+
+/// Deletes structurally blank pages of an already-parsed document.
+pub(crate) fn delete_blank_pages_on_document(
+    document: &mut lopdf::Document,
+    _options: &DeleteBlankPagesOptions,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
     let page_count = document.get_pages().len() as u32;
     enforce_max_pages(page_count as usize, limits)?;
     let page_map = document.get_pages();
     let mut blank_pages = Vec::new();
     for (page_number, page_id) in page_map {
-        if page_is_structurally_blank(&document, page_id)? {
+        if page_is_structurally_blank(document, page_id)? {
             blank_pages.push(page_number);
         }
     }
@@ -354,12 +429,7 @@ pub fn delete_blank_pdf_pages_with_limits(
     let kept_pages = (1..=page_count)
         .filter(|page| !blank_pages.contains(page))
         .collect::<Vec<_>>();
-    keep_pages(&mut document, &kept_pages)?;
-    let bytes = save_pdf(document)?;
-    enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact {
-        bytes: bytes.into(),
-    })
+    keep_pages(document, &kept_pages)
 }
 
 /// Crops selected PDF pages.
@@ -373,9 +443,23 @@ pub fn crop_pdf_pages_with_limits(
     options: &CropPagesOptions,
     limits: &ResourceLimits,
 ) -> Result<PdfArtifact, OxideError> {
-    let crop_box = validated_rect(options.left, options.bottom, options.right, options.top)?;
     enforce_input_bytes(input.len(), limits)?;
     let mut document = load_pdf(input)?;
+    crop_pages_on_document(&mut document, options, limits)?;
+    let bytes = save_pdf(document)?;
+    enforce_output_bytes(bytes.len(), limits)?;
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
+}
+
+/// Crops selected pages of an already-parsed document.
+pub(crate) fn crop_pages_on_document(
+    document: &mut lopdf::Document,
+    options: &CropPagesOptions,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
+    let crop_box = validated_rect(options.left, options.bottom, options.right, options.top)?;
     let page_count = document.get_pages().len() as u32;
     enforce_max_pages(page_count as usize, limits)?;
     let selected_pages = selected_or_all_pages(options.pages.as_deref(), page_count)?;
@@ -393,11 +477,7 @@ pub fn crop_pdf_pages_with_limits(
             .map_err(|_| OxideError::ParsePdf)?;
         page.set("CropBox", crop_box_object(crop_box));
     }
-    let bytes = save_pdf(document)?;
-    enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact {
-        bytes: bytes.into(),
-    })
+    Ok(())
 }
 
 /// Scales selected PDF pages.
@@ -414,13 +494,27 @@ pub fn scale_pdf_pages_with_limits(
     options: &ScalePagesOptions,
     limits: &ResourceLimits,
 ) -> Result<PdfArtifact, OxideError> {
+    enforce_input_bytes(input.len(), limits)?;
+    let mut document = load_pdf(input)?;
+    scale_pages_on_document(&mut document, options, limits)?;
+    let bytes = save_pdf(document)?;
+    enforce_output_bytes(bytes.len(), limits)?;
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
+}
+
+/// Scales selected pages of an already-parsed document.
+pub(crate) fn scale_pages_on_document(
+    document: &mut lopdf::Document,
+    options: &ScalePagesOptions,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
     if !options.factor.is_finite() || options.factor <= 0.0 {
         return Err(OxideError::InvalidInput {
             reason: "scale factor must be greater than zero".to_owned(),
         });
     }
-    enforce_input_bytes(input.len(), limits)?;
-    let mut document = load_pdf(input)?;
     let page_count = document.get_pages().len() as u32;
     enforce_max_pages(page_count as usize, limits)?;
     let selected_pages = selected_or_all_pages(options.pages.as_deref(), page_count)?;
@@ -432,14 +526,10 @@ pub fn scale_pdf_pages_with_limits(
             .ok_or_else(|| OxideError::InvalidInput {
                 reason: format!("page {page_number} is out of range"),
             })?;
-        scale_page_boxes(&mut document, page_id, options.factor)?;
-        prepend_page_transform(&mut document, page_id, options.factor)?;
+        scale_page_boxes(document, page_id, options.factor)?;
+        prepend_page_transform(document, page_id, options.factor)?;
     }
-    let bytes = save_pdf(document)?;
-    enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact {
-        bytes: bytes.into(),
-    })
+    Ok(())
 }
 
 /// Combines all pages into one tall page.
@@ -453,11 +543,25 @@ pub fn pdf_to_single_page(
 /// Combines all pages into one tall page while enforcing resource limits.
 pub fn pdf_to_single_page_with_limits(
     input: &[u8],
-    _options: &SinglePageOptions,
+    options: &SinglePageOptions,
     limits: &ResourceLimits,
 ) -> Result<PdfArtifact, OxideError> {
     enforce_input_bytes(input.len(), limits)?;
     let mut document = load_pdf(input)?;
+    single_page_on_document(&mut document, options, limits)?;
+    let bytes = save_pdf(document)?;
+    enforce_output_bytes(bytes.len(), limits)?;
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
+}
+
+/// Combines all pages of an already-parsed document into one tall page.
+pub(crate) fn single_page_on_document(
+    document: &mut lopdf::Document,
+    _options: &SinglePageOptions,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
     let page_ids = document.get_pages().into_values().collect::<Vec<_>>();
     enforce_max_pages(page_ids.len(), limits)?;
     if page_ids.len() == 1 {
@@ -470,7 +574,7 @@ pub fn pdf_to_single_page_with_limits(
     let mut total_height = 0.0f32;
     let mut page_sizes = Vec::with_capacity(page_ids.len());
     for page_id in &page_ids {
-        let (width, height) = page_size(&document, *page_id)?;
+        let (width, height) = page_size(document, *page_id)?;
         if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
             return Err(OxideError::ParsePdf);
         }
@@ -506,7 +610,7 @@ pub fn pdf_to_single_page_with_limits(
                 .operations,
         );
         operations.push(lopdf::content::Operation::new("Q", vec![]));
-        merge_page_resources_into(&document, *page_id, &mut merged_resources)?;
+        merge_page_resources_into(document, *page_id, &mut merged_resources)?;
     }
 
     let merged_content = lopdf::content::Content { operations }
@@ -529,12 +633,7 @@ pub fn pdf_to_single_page_with_limits(
         );
         page.set("Resources", Object::Dictionary(merged_resources));
     }
-    rebuild_pages_tree(&mut document, &[first_page])?;
-    let bytes = save_pdf(document)?;
-    enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact {
-        bytes: bytes.into(),
-    })
+    rebuild_pages_tree(document, &[first_page])
 }
 
 /// Lays multiple source pages on each output page.
@@ -622,13 +721,27 @@ pub fn add_pdf_page_numbers_with_limits(
     options: &PageNumbersOptions,
     limits: &ResourceLimits,
 ) -> Result<PdfArtifact, OxideError> {
-    validate_page_number_options(options)?;
     enforce_input_bytes(input.len(), limits)?;
     let mut document = load_pdf(input)?;
+    add_page_numbers_on_document(&mut document, options, limits)?;
+    let bytes = save_pdf(document)?;
+    enforce_output_bytes(bytes.len(), limits)?;
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
+}
+
+/// Adds page numbers to selected pages of an already-parsed document.
+pub(crate) fn add_page_numbers_on_document(
+    document: &mut lopdf::Document,
+    options: &PageNumbersOptions,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
+    validate_page_number_options(options)?;
     let page_count = document.get_pages().len() as u32;
     enforce_max_pages(page_count as usize, limits)?;
     let selected_pages = selected_or_all_pages(options.pages.as_deref(), page_count)?;
-    add_standard_font_resource(&mut document, &selected_pages, b"OxPnF1".to_vec())?;
+    add_standard_font_resource(document, &selected_pages, b"OxPnF1".to_vec())?;
     let page_map = document.get_pages();
     for (index, page_number) in selected_pages.iter().enumerate() {
         let page_id = *page_map
@@ -636,13 +749,15 @@ pub fn add_pdf_page_numbers_with_limits(
             .ok_or_else(|| OxideError::InvalidInput {
                 reason: format!("page {page_number} is out of range"),
             })?;
-        let (page_width, page_height) = page_size(&document, page_id)?;
-        let label = format!(
-            "{}{}{}",
-            options.prefix,
-            options.start + index as u32,
-            options.suffix
-        );
+        let (page_width, page_height) = page_size(document, page_id)?;
+        let number =
+            options
+                .start
+                .checked_add(index as u32)
+                .ok_or_else(|| OxideError::InvalidInput {
+                    reason: "page number exceeds the maximum representable value".to_owned(),
+                })?;
+        let label = format!("{}{}{}", options.prefix, number, options.suffix);
         let content = page_number_content(
             &label,
             page_width,
@@ -654,11 +769,7 @@ pub fn add_pdf_page_numbers_with_limits(
             .add_page_contents(page_id, content)
             .map_err(|_| OxideError::WritePdf)?;
     }
-    let bytes = save_pdf(document)?;
-    enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact {
-        bytes: bytes.into(),
-    })
+    Ok(())
 }
 
 pub(crate) fn parse_page_range(pages: &str, page_count: u32) -> Result<Vec<u32>, OxideError> {
@@ -781,7 +892,7 @@ fn keep_pages(document: &mut lopdf::Document, selected_pages: &[u32]) -> Result<
     rebuild_pages_tree(document, &selected_page_ids)
 }
 
-fn merge_documents(documents: Vec<lopdf::Document>) -> Result<Vec<u8>, OxideError> {
+fn merge_documents(documents: Vec<lopdf::Document>) -> Result<lopdf::Document, OxideError> {
     let mut next_id = 1;
     let mut merged = lopdf::Document::with_version("1.7");
     let mut document_pages = BTreeMap::new();
@@ -867,7 +978,7 @@ fn merge_documents(documents: Vec<lopdf::Document>) -> Result<Vec<u8>, OxideErro
         .max()
         .unwrap_or_default();
 
-    save_pdf(merged)
+    Ok(merged)
 }
 
 fn page_is_structurally_blank(

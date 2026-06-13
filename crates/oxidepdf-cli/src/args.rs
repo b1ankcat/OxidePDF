@@ -1419,10 +1419,10 @@ struct ColorContrastArgs {
 struct ColorReplaceArgs {
     /// Input PDF file, or `-` to read from stdin.
     input: PathBuf,
-    /// Source RGB color as `#RRGGBB` or `r,g,b`.
+    /// Source RGB color as `#RRGGBB` or three comma-separated 0.0-1.0 components.
     #[arg(long)]
     from: String,
-    /// Replacement RGB color as `#RRGGBB` or `r,g,b`.
+    /// Replacement RGB color as `#RRGGBB` or three comma-separated 0.0-1.0 components.
     #[arg(long)]
     to: String,
     /// Page range, for example `1,3-5`. Defaults to all pages.

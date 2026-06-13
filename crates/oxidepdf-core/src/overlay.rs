@@ -597,13 +597,27 @@ pub fn edit_pdf_colors(
     options: &ColorEditOptions,
     limits: &ResourceLimits,
 ) -> Result<PdfArtifact, OxideError> {
+    enforce_input_bytes(input.len(), limits)?;
+    let mut document = load_pdf(input)?;
+    edit_colors_on_document(&mut document, options, limits)?;
+    let bytes = save_pdf(document)?;
+    enforce_output_bytes(bytes.len(), limits)?;
+    Ok(PdfArtifact {
+        bytes: bytes.into(),
+    })
+}
+
+/// Rewrites RGB color operators of an already-parsed document.
+pub(crate) fn edit_colors_on_document(
+    document: &mut lopdf::Document,
+    options: &ColorEditOptions,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
     if options.rasterize_pages {
         return Err(OxideError::UnsupportedPdfFeature {
             feature: "color rasterize_pages is not supported by the vector content path".to_owned(),
         });
     }
-    enforce_input_bytes(input.len(), limits)?;
-    let mut document = load_pdf(input)?;
     let page_count = document.get_pages().len() as u32;
     enforce_max_pages(page_count as usize, limits)?;
     let pages = match options.pages.as_deref() {
@@ -618,13 +632,9 @@ pub fn edit_pdf_colors(
             .ok_or_else(|| OxideError::InvalidInput {
                 reason: format!("page {page} is out of range"),
             })?;
-        rewrite_page_colors(&mut document, page_id, options)?;
+        rewrite_page_colors(document, page_id, options)?;
     }
-    let bytes = save_pdf(document)?;
-    enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact {
-        bytes: bytes.into(),
-    })
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]

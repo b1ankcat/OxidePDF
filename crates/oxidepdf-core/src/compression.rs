@@ -1,6 +1,6 @@
 use crate::{
-    enforce_input_bytes, enforce_max_pages, enforce_output_bytes, load_pdf, save_pdf, OxideError,
-    PdfArtifact, ResourceLimits,
+    enforce_input_bytes, enforce_max_pages, enforce_max_pixels, enforce_output_bytes, load_pdf,
+    save_pdf, OxideError, PdfArtifact, ResourceLimits,
 };
 use lopdf::{Dictionary, Object, Stream};
 use serde::{Deserialize, Serialize};
@@ -53,27 +53,35 @@ pub fn compress_pdf(
     options: &CompressionOptions,
     limits: &ResourceLimits,
 ) -> Result<PdfArtifact, OxideError> {
-    validate_compression_options(options)?;
     enforce_input_bytes(input.len(), limits)?;
-
     let mut document = load_pdf(input)?;
-    enforce_max_pages(document.get_pages().len(), limits)?;
-
-    reject_unsupported_recompressed_stream_filters(&document)?;
-    merge_duplicate_resource_streams(&mut document)?;
-    if let CompressionMode::Lossy = options.mode {
-        recompress_images_lossy(
-            &mut document,
-            options.images.as_ref().ok_or(OxideError::Internal)?,
-        )?;
-    }
-    recompress_streams(&mut document)?;
-
+    compress_on_document(&mut document, options, limits)?;
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
     Ok(PdfArtifact {
         bytes: bytes.into(),
     })
+}
+
+/// Compresses an already-parsed document in place.
+pub(crate) fn compress_on_document(
+    document: &mut lopdf::Document,
+    options: &CompressionOptions,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
+    validate_compression_options(options)?;
+    enforce_max_pages(document.get_pages().len(), limits)?;
+
+    reject_unsupported_recompressed_stream_filters(document)?;
+    merge_duplicate_resource_streams(document)?;
+    if let CompressionMode::Lossy = options.mode {
+        recompress_images_lossy(
+            document,
+            options.images.as_ref().ok_or(OxideError::Internal)?,
+            limits,
+        )?;
+    }
+    recompress_streams(document)
 }
 
 fn validate_compression_options(options: &CompressionOptions) -> Result<(), OxideError> {
@@ -234,6 +242,7 @@ fn remap_duplicate_references(
 fn recompress_images_lossy(
     document: &mut lopdf::Document,
     options: &CompressionImageOptions,
+    limits: &ResourceLimits,
 ) -> Result<(), OxideError> {
     if options
         .format
@@ -251,7 +260,7 @@ fn recompress_images_lossy(
         if stream_subtype(stream) != Some(b"Image") {
             continue;
         }
-        recompress_image_stream_to_jpeg(stream, options)?;
+        recompress_image_stream_to_jpeg(stream, options, limits)?;
     }
 
     Ok(())
@@ -260,10 +269,14 @@ fn recompress_images_lossy(
 fn recompress_image_stream_to_jpeg(
     stream: &mut Stream,
     options: &CompressionImageOptions,
+    limits: &ResourceLimits,
 ) -> Result<(), OxideError> {
     ensure_supported_image_dictionary(stream)?;
     let width = required_u32(stream, b"Width")?;
     let height = required_u32(stream, b"Height")?;
+    // Bound the decoded pixel count before allocating/decoding the payload, so a
+    // small stream declaring huge dimensions cannot force a multi-GB allocation.
+    enforce_max_pixels(u64::from(width) * u64::from(height), limits)?;
     let mut image = image::RgbImage::from_raw(width, height, image_rgb_bytes(stream)?).ok_or(
         OxideError::UnsupportedPdfFeature {
             feature: "image stream dimensions do not match RGB payload length".to_owned(),

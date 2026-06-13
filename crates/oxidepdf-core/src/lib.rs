@@ -45,9 +45,10 @@ pub use outlines::{
 pub use workflow::{
     execute_workflow, validate_workflow, Artifact, ArtifactBytes, ArtifactRef, ArtifactStore,
     BytesArtifact, ExecutionPlan, ExecutionResult, ImageArtifact, InputSpec, OperatorRunner,
-    OperatorSpec, OutputSpec, PdfArtifact, PdfOperatorRunner, ResourceLimits, SvgArtifact, TaskId,
-    TaskSpec, TextArtifact, TextExtractionDiagnostic, TextExtractionDiagnosticCode, Workflow,
-    WorkflowMetadata, WorkflowVersion, WORKFLOW_SCHEMA_VERSION,
+    OperatorSpec, OutputSpec, PdfArtifact, PdfObjectArtifact, PdfOperatorRunner, ResourceLimits,
+    SvgArtifact, TaskId, TaskSpec, TextArtifact, TextExtractionDiagnostic,
+    TextExtractionDiagnosticCode, Workflow, WorkflowMetadata, WorkflowVersion,
+    WORKFLOW_SCHEMA_VERSION,
 };
 
 pub(crate) use pdf_io::{

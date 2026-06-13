@@ -62,3 +62,14 @@ fn outline_inspection_rejects_unsupported_destinations_without_defaulting_page()
     assert!(matches!(err, OxideError::UnsupportedPdfFeature { .. }));
     assert!(err.to_string().contains("outline"));
 }
+
+#[test]
+fn outline_inspection_rejects_cyclic_siblings_without_hanging() {
+    let err = inspect_pdf_outline(
+        &pdf_with_cyclic_outline(),
+        &OutlineInspectOptions::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, OxideError::ParsePdf));
+}
