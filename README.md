@@ -291,4 +291,9 @@ These are not claimed as supported today:
 
 ## License
 
-OxidePDF is licensed under GPLv3. See [LICENSE](LICENSE).
+OxidePDF uses a split license:
+
+- `oxidepdf-core` (the library) is licensed under **Apache-2.0**. See
+  [crates/oxidepdf-core/LICENSE-APACHE](crates/oxidepdf-core/LICENSE-APACHE).
+- `oxidepdf-cli` and `oxidepdf-web` (the end-user applications) are licensed
+  under **GPLv3 or later** (`GPL-3.0-or-later`). See [LICENSE](LICENSE).

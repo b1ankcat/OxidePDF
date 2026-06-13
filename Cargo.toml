@@ -2,13 +2,16 @@
 members = [
     "crates/oxidepdf-core",
     "crates/oxidepdf-cli",
+    "crates/oxidepdf-web",
 ]
 resolver = "2"
 
+# License is intentionally not set here: each crate declares its own SPDX
+# license because they differ. The core library is Apache-2.0; the CLI and web
+# front ends are GPL-3.0-or-later.
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "GPL-3.0-only"
 rust-version = "1.80"
 
 [workspace.dependencies]

@@ -1,0 +1,10 @@
+[package]
+name = "oxidepdf-web"
+version.workspace = true
+edition.workspace = true
+license = "GPL-3.0-or-later"
+rust-version.workspace = true
+description = "Web front end for OxidePDF (placeholder)."
+
+[dependencies]
+oxidepdf-core.workspace = true

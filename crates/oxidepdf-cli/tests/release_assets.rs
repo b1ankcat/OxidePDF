@@ -61,7 +61,8 @@ fn github_release_workflow_builds_musl_zip_release() {
     assert!(workflow.contains("${BIN}.bash"));
     assert!(workflow.contains("zip -qr"));
     assert!(workflow.contains("softprops/action-gh-release"));
-    assert!(workflow.contains("date -u +%Y%m%d"));
+    assert!(workflow.contains("cargo metadata --no-deps"));
+    assert!(workflow.contains("value=v${version}"));
 }
 
 fn read(path: &str) -> String {

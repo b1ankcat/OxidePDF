@@ -2,7 +2,7 @@
 name = "oxidepdf-core"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license = "Apache-2.0"
 rust-version.workspace = true
 description = "Core contracts and operators for OxidePDF."
 
