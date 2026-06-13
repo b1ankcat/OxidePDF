@@ -3,11 +3,6 @@ name: Release
 on:
   push:
   workflow_dispatch:
-    inputs:
-      release_date:
-        description: Date-style release tag, for example 20260101. Defaults to today's UTC date.
-        required: false
-        type: string
 
 permissions:
   contents: write
@@ -44,21 +39,26 @@ jobs:
       - name: Build static musl binary
         run: cargo zigbuild --release --target "$TARGET" -p "$PACKAGE"
 
-      - name: Compute release date
-        id: release_date
+      - name: Compute release version
+        id: version
         shell: bash
         run: |
-          if [ -n "${{ github.event.inputs.release_date }}" ]; then
-            echo "value=${{ github.event.inputs.release_date }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | grep -o '"name":"oxidepdf-cli"[^}]*"version":"[^"]*"' \
+            | grep -o '"version":"[^"]*"' \
+            | head -n1 \
+            | cut -d'"' -f4)"
+          if [ -z "$version" ]; then
+            echo "Failed to resolve version from Cargo metadata" >&2
+            exit 1
           fi
+          echo "value=v${version}" >> "$GITHUB_OUTPUT"
 
       - name: Package binary and bash completion
         shell: bash
         run: |
           set -euo pipefail
-          release="${{ steps.release_date.outputs.value }}"
+          release="${{ steps.version.outputs.value }}"
           package_dir="dist/${BIN}-${release}-${TARGET}"
           mkdir -p "$package_dir"
           cp "target/${TARGET}/release/${BIN}" "$package_dir/${BIN}"
@@ -71,7 +71,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: oxidepdf-${{ steps.release_date.outputs.value }}-${{ env.TARGET }}
+          name: oxidepdf-${{ steps.version.outputs.value }}-${{ env.TARGET }}
           path: |
             dist/*.zip
             dist/*.sha256
@@ -79,8 +79,8 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.release_date.outputs.value }}
-          name: ${{ steps.release_date.outputs.value }}
+          tag_name: ${{ steps.version.outputs.value }}
+          name: ${{ steps.version.outputs.value }}
           files: |
             dist/*.zip
             dist/*.sha256
