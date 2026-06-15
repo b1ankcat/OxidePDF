@@ -10,7 +10,7 @@ OxidePDF is a pure Rust PDF toolkit with a modular CLI and workflow engine. It f
 - 🔐 **Security and signatures**: encrypt, decrypt, inspect/set permissions, add/list/verify/delete signature fields, add visual signature appearances, and attach explicit timestamp material.
 - 📦 **Static Linux releases**: musl builds via `cargo zigbuild`.
 - 🧭 **Bash completion**: generated at build time and available from the CLI.
-- ⚙️ **Workflow orchestration**: YAML/JSON pipeline documents with DAG-based task scheduling, resource limits, and programmatic API.
+- ⚙️ **Workflow orchestration**: YAML/JSON pipeline documents with DAG-based task scheduling, retries, rate limits, timeouts, resource limits, and programmatic API.
 - 🐳 **Container-friendly**: static binary copied into a `scratch` runtime image.
 
 ## Quick Start 🚀
@@ -145,8 +145,9 @@ OxidePDF includes a YAML/JSON-based workflow engine for multi-step document auto
 - **Workflow document**: a YAML or JSON file that declares inputs, tasks, outputs, and optional resource limits.
 - **Tasks**: units of work, each referencing an operator (edit, inspect, sign, security, compare) and its input artifacts.
 - **Artifacts**: named references to PDFs, images, text, or raw bytes that flow between tasks.
-- **DAG execution**: tasks are topologically sorted by their artifact dependencies. Dependency layers run in order, while independent tasks within the same layer may run in parallel. Cycles are detected and rejected.
-- **Resource limits**: enforce bounds on input bytes, total input bytes, page count, pixel count, output bytes, and cooperative execution deadlines. `timeout_ms` is checked between dependency layers and before starting task work; it does not forcibly interrupt an operator that is already running.
+- **DAG execution**: tasks are topologically sorted by artifact dependencies. Ready tasks are scheduled as soon as their dependencies finish, so independent branches run concurrently without layer barriers. Cycles are detected and rejected.
+- **Reliability controls**: workflows can declare task retries, task start rate limits, and timeouts. `timeout_ms` is enforced before and after task work and through the Apalis timeout layer; it stops downstream scheduling, but synchronous PDF work already running may finish before observing the timeout.
+- **Resource limits**: enforce bounds on input bytes, total input bytes, page count, pixel count, output bytes, and artifact spill thresholds.
 
 ### Running a Workflow
 
@@ -176,6 +177,8 @@ limits:
   max_pixels: 200000000
   max_output_bytes: 524288000
   timeout_ms: 300000             # 5 min
+  retry_attempts: 2
+  rate_limit_per_second: 10
 tasks:
   - id: compressed
     op:
@@ -238,7 +241,7 @@ Each task specifies exactly one operator. The engine validates references, detec
 
 ### Execution Model
 
-The engine compiles the task graph into dependency layers and runs the tasks within each layer in parallel, so independent branches of a pipeline execute concurrently rather than one after another. A layer acts as a barrier: its tasks all finish before the next layer starts, which keeps results deterministic regardless of scheduling.
+The engine validates the graph, then hands ready work to an Apalis in-memory backend. Completing a task commits its artifact, releases dependent tasks, and wakes the scheduler immediately. This allows global DAG concurrency: a downstream task can start as soon as its own dependencies are ready, without waiting for unrelated tasks from the same dependency depth.
 
 Memory use is kept close to the live working set rather than the full pipeline:
 
@@ -259,7 +262,7 @@ Workflows are designed for headless environments:
 
 ### Programmatic API
 
-The workflow engine is re-exported from `oxidepdf-core` for Rust embedders. Construct and execute workflows programmatically:
+The workflow engine is re-exported from `oxidepdf-core` for Rust embedders. Construct and execute workflows programmatically from async code:
 
 ```rust
 use oxidepdf_core::{Workflow, execute_workflow, PdfOperatorRunner, ArtifactStore};
@@ -267,10 +270,14 @@ use oxidepdf_core::{Workflow, execute_workflow, PdfOperatorRunner, ArtifactStore
 let workflow: Workflow = serde_saphyr::from_str(yaml_str)?;
 let store = ArtifactStore::new();
 let runner = PdfOperatorRunner::default();
-let result = execute_workflow(&workflow, store, &runner)?;
+let result = execute_workflow(&workflow, store, runner).await?;
 ```
 
 Individual CLI commands (`pdf_edit merge`, `pdf_inspect render`, etc.) are implemented as single-task workflows internally, so the same validation and execution path serves both interactive use and workflow documents.
+
+### Web Crate
+
+`oxidepdf-web` is currently a placeholder crate. The browser/server-facing interface will be built on top of the same `oxidepdf-core` workflow engine later.
 
 ## Milestones 🗺️
 

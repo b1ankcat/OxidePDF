@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) fn run_compare(
+pub(crate) async fn run_compare(
     command: PdfCompareCommand,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -50,5 +50,5 @@ pub(crate) fn run_compare(
         metadata: WorkflowMetadata::default(),
     };
 
-    execute_and_write_workflow(workflow, stdin, force, stdout)
+    execute_and_write_workflow(workflow, stdin, force, stdout).await
 }

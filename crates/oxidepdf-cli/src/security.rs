@@ -1,18 +1,18 @@
 use super::*;
 
-pub(crate) fn run_pdf_security(
+pub(crate) async fn run_pdf_security(
     command: PdfSecurityCommand,
     stdin: &[u8],
     stdout: &mut impl Write,
 ) -> Result<(), CliError> {
     match command {
-        PdfSecurityCommand::Encrypt(args) => run_encrypt(args, stdin, stdout),
-        PdfSecurityCommand::Decrypt(args) => run_decrypt(args, stdin, stdout),
-        PdfSecurityCommand::Permissions(command) => run_permissions(command, stdin, stdout),
+        PdfSecurityCommand::Encrypt(args) => run_encrypt(args, stdin, stdout).await,
+        PdfSecurityCommand::Decrypt(args) => run_decrypt(args, stdin, stdout).await,
+        PdfSecurityCommand::Permissions(command) => run_permissions(command, stdin, stdout).await,
     }
 }
 
-pub(crate) fn run_encrypt(
+pub(crate) async fn run_encrypt(
     args: SecurityEncryptArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -29,10 +29,10 @@ pub(crate) fn run_encrypt(
         })),
     );
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
-pub(crate) fn run_decrypt(
+pub(crate) async fn run_decrypt(
     args: SecurityDecryptArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -46,10 +46,10 @@ pub(crate) fn run_decrypt(
         })),
     );
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
-pub(crate) fn run_permissions(
+pub(crate) async fn run_permissions(
     command: PermissionsCommand,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -66,7 +66,7 @@ pub(crate) fn run_permissions(
                     },
                 )),
             );
-            execute_and_write_workflow(workflow, stdin, args.force, stdout)
+            execute_and_write_workflow(workflow, stdin, args.force, stdout).await
         }
         PermissionsCommand::Set(args) => {
             let workflow = one_input_workflow(
@@ -82,7 +82,7 @@ pub(crate) fn run_permissions(
                     },
                 )),
             );
-            execute_and_write_workflow(workflow, stdin, args.force, stdout)
+            execute_and_write_workflow(workflow, stdin, args.force, stdout).await
         }
     }
 }

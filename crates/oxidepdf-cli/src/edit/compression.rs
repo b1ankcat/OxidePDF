@@ -1,4 +1,4 @@
-pub(crate) fn run_compress(
+pub(crate) async fn run_compress(
     args: CompressArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -14,7 +14,7 @@ pub(crate) fn run_compress(
         })),
     );
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
 pub(crate) fn compression_image_options(args: &CompressArgs) -> Option<CompressionImageOptions> {

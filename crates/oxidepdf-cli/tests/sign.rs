@@ -10,8 +10,8 @@ use common::*;
 use oxidepdf_cli::{command, run, run_with_io};
 use std::fs;
 
-#[test]
-fn verify_signatures_command_writes_json_report() {
+#[tokio::test]
+async fn verify_signatures_command_writes_json_report() {
     let dir = temp_dir("verify_signatures_command_writes_json_report");
     let input = write_signature_pdf(&dir);
     let output = dir.join("signature-report.json");
@@ -33,7 +33,8 @@ fn verify_signatures_command_writes_json_report() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 0);
     assert_eq!(stdout, b"");
@@ -49,8 +50,8 @@ fn verify_signatures_command_writes_json_report() {
     );
 }
 
-#[test]
-fn sign_list_command_writes_json_report_without_trust_anchors() {
+#[tokio::test]
+async fn sign_list_command_writes_json_report_without_trust_anchors() {
     let dir = temp_dir("sign_list_command_writes_json_report");
     let input = write_signature_pdf(&dir);
     let output = dir.join("signature-list.json");
@@ -69,7 +70,8 @@ fn sign_list_command_writes_json_report_without_trust_anchors() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 0);
     assert_eq!(stdout, b"");
@@ -80,8 +82,8 @@ fn sign_list_command_writes_json_report_without_trust_anchors() {
     assert_eq!(report["signatures"][0]["subfilter"], "adbe.pkcs7.detached");
 }
 
-#[test]
-fn verify_signatures_command_without_trust_anchors_is_not_trusted() {
+#[tokio::test]
+async fn verify_signatures_command_without_trust_anchors_is_not_trusted() {
     let dir = temp_dir("verify_signatures_command_without_trust_anchors");
     let input = write_signature_pdf(&dir);
     let output = dir.join("signature-report.json");
@@ -100,7 +102,8 @@ fn verify_signatures_command_without_trust_anchors_is_not_trusted() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 0);
     assert_eq!(stdout, b"");
@@ -111,8 +114,8 @@ fn verify_signatures_command_without_trust_anchors_is_not_trusted() {
     assert_eq!(report["trust_anchor_count"], 0);
 }
 
-#[test]
-fn sign_delete_field_command_requires_destructive_for_signed_field() {
+#[tokio::test]
+async fn sign_delete_field_command_requires_destructive_for_signed_field() {
     let dir = temp_dir("sign_delete_field_command_requires_destructive");
     let input = write_signature_pdf(&dir);
     let output = dir.join("deleted.pdf");
@@ -133,7 +136,8 @@ fn sign_delete_field_command_requires_destructive_for_signed_field() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     let stderr = String::from_utf8(stderr).unwrap();
 
     assert_eq!(code, 3);
@@ -142,8 +146,8 @@ fn sign_delete_field_command_requires_destructive_for_signed_field() {
     assert!(!output.exists());
 }
 
-#[test]
-fn sign_delete_field_command_deletes_when_destructive_is_explicit() {
+#[tokio::test]
+async fn sign_delete_field_command_deletes_when_destructive_is_explicit() {
     let dir = temp_dir("sign_delete_field_command_deletes");
     let input = write_signature_pdf(&dir);
     let output = dir.join("deleted.pdf");
@@ -165,7 +169,8 @@ fn sign_delete_field_command_deletes_when_destructive_is_explicit() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 0);
     assert_eq!(stdout, b"");
@@ -183,7 +188,8 @@ fn sign_delete_field_command_deletes_when_destructive_is_explicit() {
         [],
         &mut Vec::new(),
         &mut Vec::new(),
-    );
+    )
+    .await;
     assert_eq!(code, 0);
     let report: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(report_output).unwrap()).unwrap();
@@ -191,8 +197,8 @@ fn sign_delete_field_command_deletes_when_destructive_is_explicit() {
     assert!(report["signatures"].as_array().unwrap().is_empty());
 }
 
-#[test]
-fn timestamp_add_command_requires_token_or_tsa_url() {
+#[tokio::test]
+async fn timestamp_add_command_requires_token_or_tsa_url() {
     let dir = temp_dir("timestamp_add_command_requires_source");
     let input = write_signature_pdf(&dir);
     let output = dir.join("timestamp-report.json");
@@ -211,7 +217,8 @@ fn timestamp_add_command_requires_token_or_tsa_url() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     let stderr = String::from_utf8(stderr).unwrap();
 
     assert_eq!(code, 3);
@@ -219,8 +226,8 @@ fn timestamp_add_command_requires_token_or_tsa_url() {
     assert!(stderr.contains("exactly one of tsa_url or token"));
 }
 
-#[test]
-fn sign_add_command_writes_signed_pdf() {
+#[tokio::test]
+async fn sign_add_command_writes_signed_pdf() {
     let dir = temp_dir("sign_add_command_writes_signed_pdf");
     let input = fixture_pdf();
     let output = dir.join("new-signed.pdf");
@@ -248,7 +255,8 @@ fn sign_add_command_writes_signed_pdf() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 0);
     assert_eq!(stdout, b"");
@@ -268,7 +276,8 @@ fn sign_add_command_writes_signed_pdf() {
         [],
         &mut Vec::new(),
         &mut Vec::new(),
-    );
+    )
+    .await;
     assert_eq!(code, 0);
     let report: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(report_output).unwrap()).unwrap();
@@ -283,8 +292,8 @@ fn sign_add_command_writes_signed_pdf() {
     );
 }
 
-#[test]
-fn workflow_signature_operator_writes_json_report() {
+#[tokio::test]
+async fn workflow_signature_operator_writes_json_report() {
     let dir = temp_dir("workflow_signature_operator_writes_json_report");
     let input = write_signature_pdf(&dir);
     let workflow = dir.join("workflow.yaml");
@@ -325,7 +334,8 @@ fn workflow_signature_operator_writes_json_report() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 0);
     assert_eq!(stdout, b"");
@@ -336,8 +346,8 @@ fn workflow_signature_operator_writes_json_report() {
     assert_eq!(report["trust_anchor_count"], 1);
 }
 
-#[test]
-fn workflow_signature_operator_without_trust_anchors_is_not_trusted() {
+#[tokio::test]
+async fn workflow_signature_operator_without_trust_anchors_is_not_trusted() {
     let dir = temp_dir("workflow_signature_operator_without_trust_anchors");
     let input = write_signature_pdf(&dir);
     let workflow = dir.join("workflow.yaml");
@@ -375,7 +385,8 @@ fn workflow_signature_operator_without_trust_anchors_is_not_trusted() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     let stderr = String::from_utf8(stderr).unwrap();
 
     assert_eq!(code, 0);

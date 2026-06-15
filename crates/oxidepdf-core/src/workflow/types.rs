@@ -143,6 +143,11 @@ pub struct ResourceLimits {
     /// instead of the heap. `None` keeps every payload inline. Lets deployments
     /// tune the heap/spill tradeoff (e.g. a small CI container vs. a workstation).
     pub spill_threshold_bytes: Option<u64>,
+    /// Number of retries for a failed task. `None` disables retries.
+    pub retry_attempts: Option<usize>,
+    /// Maximum number of tasks started per second. `None` disables rate
+    /// limiting.
+    pub rate_limit_per_second: Option<u64>,
 }
 
 impl Default for ResourceLimits {
@@ -155,6 +160,8 @@ impl Default for ResourceLimits {
             max_output_bytes: None,
             timeout_ms: None,
             spill_threshold_bytes: Some(DEFAULT_SPILL_THRESHOLD_BYTES as u64),
+            retry_attempts: None,
+            rate_limit_per_second: None,
         }
     }
 }

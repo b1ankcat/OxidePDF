@@ -1,4 +1,4 @@
-pub(crate) fn run_annot(
+pub(crate) async fn run_annot(
     command: AnnotCommand,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -16,7 +16,8 @@ pub(crate) fn run_annot(
             stdin,
             args.force,
             stdout,
-        ),
+        )
+        .await,
         AnnotCommand::Add(args) => execute_and_write_workflow(
             one_input_workflow(
                 args.input,
@@ -32,7 +33,8 @@ pub(crate) fn run_annot(
             stdin,
             args.force,
             stdout,
-        ),
+        )
+        .await,
         AnnotCommand::Delete(args) => execute_and_write_workflow(
             one_input_workflow(
                 args.input,
@@ -48,11 +50,12 @@ pub(crate) fn run_annot(
             stdin,
             args.force,
             stdout,
-        ),
+        )
+        .await,
     }
 }
 
-pub(crate) fn run_form(
+pub(crate) async fn run_form(
     command: FormCommand,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -68,7 +71,8 @@ pub(crate) fn run_form(
             stdin,
             args.force,
             stdout,
-        ),
+        )
+        .await,
         FormCommand::Fill(args) => execute_and_write_workflow(
             one_input_workflow(
                 args.input,
@@ -81,7 +85,8 @@ pub(crate) fn run_form(
             stdin,
             args.force,
             stdout,
-        ),
+        )
+        .await,
         FormCommand::UnlockReadonly(args) => execute_and_write_workflow(
             one_input_workflow(
                 args.input,
@@ -92,7 +97,8 @@ pub(crate) fn run_form(
             stdin,
             args.force,
             stdout,
-        ),
+        )
+        .await,
         FormCommand::Remove(args) => execute_and_write_workflow(
             one_input_workflow(
                 args.input,
@@ -103,11 +109,12 @@ pub(crate) fn run_form(
             stdin,
             args.force,
             stdout,
-        ),
+        )
+        .await,
     }
 }
 
-pub(crate) fn run_interactive_remove(
+pub(crate) async fn run_interactive_remove(
     args: InteractiveRemoveArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -131,5 +138,5 @@ pub(crate) fn run_interactive_remove(
         args.force,
         stdout,
     )
+    .await
 }
-

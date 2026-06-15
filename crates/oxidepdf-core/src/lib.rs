@@ -44,9 +44,9 @@ pub use outlines::{
 };
 pub use workflow::{
     Artifact, ArtifactBytes, ArtifactRef, ArtifactStore, BytesArtifact, ExecutionPlan,
-    ExecutionResult, ImageArtifact, InputSpec, OperatorRunner, OperatorSpec, OutputSpec,
-    PdfArtifact, PdfObjectArtifact, PdfOperatorRunner, ResourceLimits, SvgArtifact, TaskId,
-    TaskSpec, TextArtifact, TextExtractionDiagnostic, TextExtractionDiagnosticCode,
+    ExecutionResult, ImageArtifact, InputSpec, OperatorFuture, OperatorRunner, OperatorSpec,
+    OutputSpec, PdfArtifact, PdfObjectArtifact, PdfOperatorRunner, ResourceLimits, SvgArtifact,
+    TaskId, TaskSpec, TextArtifact, TextExtractionDiagnostic, TextExtractionDiagnosticCode,
     WORKFLOW_SCHEMA_VERSION, Workflow, WorkflowMetadata, WorkflowVersion, execute_workflow,
     validate_workflow,
 };

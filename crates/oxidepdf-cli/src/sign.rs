@@ -1,21 +1,21 @@
 use super::*;
 
-pub(crate) fn run_sign(
+pub(crate) async fn run_sign(
     command: PdfSignCommand,
     stdin: &[u8],
     stdout: &mut impl Write,
 ) -> Result<(), CliError> {
     match command {
-        PdfSignCommand::Add(args) => run_add_signature(args, stdin, stdout),
-        PdfSignCommand::List(args) => run_list_signatures(args, stdin, stdout),
-        PdfSignCommand::Verify(args) => run_verify_signatures(args, stdin, stdout),
-        PdfSignCommand::DeleteField(args) => run_delete_signature_field(args, stdin, stdout),
-        PdfSignCommand::Appearance(args) => run_signature_appearance(args, stdin, stdout),
-        PdfSignCommand::Timestamp(args) => run_add_timestamp(args, stdin, stdout),
+        PdfSignCommand::Add(args) => run_add_signature(args, stdin, stdout).await,
+        PdfSignCommand::List(args) => run_list_signatures(args, stdin, stdout).await,
+        PdfSignCommand::Verify(args) => run_verify_signatures(args, stdin, stdout).await,
+        PdfSignCommand::DeleteField(args) => run_delete_signature_field(args, stdin, stdout).await,
+        PdfSignCommand::Appearance(args) => run_signature_appearance(args, stdin, stdout).await,
+        PdfSignCommand::Timestamp(args) => run_add_timestamp(args, stdin, stdout).await,
     }
 }
 
-pub(crate) fn run_verify_signatures(
+pub(crate) async fn run_verify_signatures(
     args: VerifySignaturesArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -30,10 +30,10 @@ pub(crate) fn run_verify_signatures(
         })),
     );
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
-pub(crate) fn run_add_signature(
+pub(crate) async fn run_add_signature(
     args: SignAddArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -51,10 +51,10 @@ pub(crate) fn run_add_signature(
         })),
     );
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
-pub(crate) fn run_list_signatures(
+pub(crate) async fn run_list_signatures(
     args: ListSignaturesArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -69,10 +69,10 @@ pub(crate) fn run_list_signatures(
         })),
     );
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
-pub(crate) fn run_delete_signature_field(
+pub(crate) async fn run_delete_signature_field(
     args: SignDeleteFieldArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -87,10 +87,10 @@ pub(crate) fn run_delete_signature_field(
         })),
     );
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
-pub(crate) fn run_add_timestamp(
+pub(crate) async fn run_add_timestamp(
     args: TimestampAddArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -105,10 +105,10 @@ pub(crate) fn run_add_timestamp(
         })),
     );
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
-pub(crate) fn run_stamp(
+pub(crate) async fn run_stamp(
     args: StampArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -137,9 +137,10 @@ pub(crate) fn run_stamp(
         args.force,
         stdout,
     )
+    .await
 }
 
-pub(crate) fn run_signature_appearance(
+pub(crate) async fn run_signature_appearance(
     args: SignatureAppearanceArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -168,9 +169,10 @@ pub(crate) fn run_signature_appearance(
         args.force,
         stdout,
     )
+    .await
 }
 
-pub(crate) fn run_overlay_pdf(
+pub(crate) async fn run_overlay_pdf(
     args: OverlayPdfArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -201,4 +203,5 @@ pub(crate) fn run_overlay_pdf(
         args.force,
         stdout,
     )
+    .await
 }

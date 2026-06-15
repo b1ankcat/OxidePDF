@@ -1,10 +1,13 @@
-use criterion::{Criterion, criterion_group, criterion_main};
 use lopdf::dictionary;
 use oxidepdf_core::{
     Artifact, ArtifactBytes, ArtifactRef, OperatorSpec, PdfEditOptions, PdfOperatorRunner,
     ResourceLimits, RotateOptions, TaskId, TaskSpec, Workflow, WorkflowMetadata, WorkflowVersion,
     execute_workflow,
 };
+use std::hint::black_box;
+use std::time::Instant;
+
+const ITERS: usize = 10;
 
 fn fixture_pdf() -> Vec<u8> {
     let mut document = lopdf::Document::with_version("1.7");
@@ -92,49 +95,53 @@ fn rotate_task(id: &str, input: &str, degrees: i16) -> TaskSpec {
     }
 }
 
-fn benches(c: &mut Criterion) {
+fn bench(name: &str, mut run: impl FnMut()) {
+    let started = Instant::now();
+    for _ in 0..ITERS {
+        run();
+    }
+    let elapsed = started.elapsed();
+    let per_iter = elapsed / ITERS as u32;
+    println!("{name}: {per_iter:?}/iter over {ITERS} iterations");
+}
+
+fn main() {
     let pdf = fixture_pdf();
     let runner = PdfOperatorRunner::default();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
 
-    c.bench_function("workflow_edit_chain", |b| {
-        let workflow = workflow_with_tasks(vec![
-            rotate_task("rotate1", "source", 90),
-            rotate_task("rotate2", "rotate1", 180),
-            rotate_task("rotate3", "rotate2", 270),
-        ]);
-        b.iter(|| {
-            let mut store = oxidepdf_core::ArtifactStore::new();
-            store.insert(input_ref(), Artifact::pdf(&pdf).unwrap());
-            execute_workflow(&workflow, store, &runner).unwrap()
-        });
+    let workflow = workflow_with_tasks(vec![
+        rotate_task("rotate1", "source", 90),
+        rotate_task("rotate2", "rotate1", 180),
+        rotate_task("rotate3", "rotate2", 270),
+    ]);
+    bench("workflow_edit_chain", || {
+        let mut store = oxidepdf_core::ArtifactStore::new();
+        store.insert(input_ref(), Artifact::pdf(&pdf).unwrap());
+        black_box(
+            runtime
+                .block_on(execute_workflow(&workflow, store, runner.clone()))
+                .unwrap(),
+        );
     });
 
-    c.bench_function("merge_rotate_keep_pages", |b| {
-        b.iter(|| {
-            let merged = oxidepdf_core::merge_pdf_artifacts(&[
-                Artifact::pdf(&pdf).unwrap(),
-                Artifact::pdf(&pdf).unwrap(),
-            ])
-            .unwrap();
-            let rotated = oxidepdf_core::rotate_pdf(&merged.bytes, "1-3", 90).unwrap();
-            oxidepdf_core::split_pdf(&rotated.bytes, "1-4").unwrap()
-        });
+    bench("merge_rotate_keep_pages", || {
+        let merged = oxidepdf_core::merge_pdf_artifacts(&[
+            Artifact::pdf(&pdf).unwrap(),
+            Artifact::pdf(&pdf).unwrap(),
+        ])
+        .unwrap();
+        let rotated = oxidepdf_core::rotate_pdf(&merged.bytes, "1-3", 90).unwrap();
+        black_box(oxidepdf_core::split_pdf(&rotated.bytes, "1-4").unwrap());
     });
 
-    c.bench_function("large_artifact_spill", |b| {
-        b.iter(|| ArtifactBytes::from_vec(vec![7u8; 64 * 1024 * 1024 + 4096]).unwrap());
+    bench("large_artifact_spill", || {
+        black_box(ArtifactBytes::from_vec(vec![7u8; 64 * 1024 * 1024 + 4096]).unwrap());
     });
 
-    c.bench_function("object_output_materialization", |b| {
-        let document = lopdf::Document::load_mem(&pdf).unwrap();
-        let artifact = Artifact::pdf_object(document);
-        b.iter(|| artifact.output_bytes().unwrap().into_owned());
+    let document = lopdf::Document::load_mem(&pdf).unwrap();
+    let artifact = Artifact::pdf_object(document);
+    bench("object_output_materialization", || {
+        black_box(artifact.output_bytes().unwrap().into_owned());
     });
 }
-
-criterion_group! {
-    name = core_hot_paths;
-    config = Criterion::default().sample_size(10);
-    targets = benches
-}
-criterion_main!(core_hot_paths);

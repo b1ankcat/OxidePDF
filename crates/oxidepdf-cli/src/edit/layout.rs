@@ -1,4 +1,4 @@
-pub(crate) fn run_crop_pages(
+pub(crate) async fn run_crop_pages(
     args: CropPagesArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -16,10 +16,10 @@ pub(crate) fn run_crop_pages(
         })),
     );
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
-pub(crate) fn run_scale_pages(
+pub(crate) async fn run_scale_pages(
     args: ScalePagesArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -34,10 +34,10 @@ pub(crate) fn run_scale_pages(
         })),
     );
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
-pub(crate) fn run_single_page(
+pub(crate) async fn run_single_page(
     args: SinglePageArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -49,10 +49,10 @@ pub(crate) fn run_single_page(
         OperatorSpec::PdfEdit(PdfEditOptions::SinglePage(SinglePageOptions::default())),
     );
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
-pub(crate) fn run_nup(
+pub(crate) async fn run_nup(
     args: NUpArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -67,10 +67,10 @@ pub(crate) fn run_nup(
         })),
     );
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
-pub(crate) fn run_booklet(
+pub(crate) async fn run_booklet(
     args: BookletArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -82,10 +82,10 @@ pub(crate) fn run_booklet(
         OperatorSpec::PdfEdit(PdfEditOptions::Booklet(BookletOptions::default())),
     );
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
-pub(crate) fn run_page_numbers(
+pub(crate) async fn run_page_numbers(
     args: PageNumbersArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -104,6 +104,6 @@ pub(crate) fn run_page_numbers(
         })),
     );
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 

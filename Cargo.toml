@@ -15,11 +15,13 @@ edition = "2024"
 rust-version = "1.96"
 
 [workspace.dependencies]
+apalis = "1.0.0-rc.9"
 clap = { version = "4.6.1", features = ["derive"] }
 clap_complete = "4.6.5"
 cms = { version = "0.2.3", features = ["builder", "std"] }
 const-oid = "0.9.6"
 der = { version = "0.7.10", features = ["alloc"] }
+futures-util = "0.3.31"
 hayro = "0.7.1"
 oxidepdf-core = { path = "crates/oxidepdf-core" }
 p256 = { version = "0.13.2", default-features = false, features = ["ecdsa", "pem", "pkcs8", "sha256", "std"] }
@@ -46,14 +48,8 @@ read-fonts = { version = "0.40.1", default-features = false }
 pem-rfc7468 = { version = "1.0.0", features = ["alloc"] }
 x509-cert = { version = "0.2.5", features = ["builder"] }
 zeroize = "1.9.0"
-rayon = "1.12.0"
 tiverse-mmap = "1.0.0"
 tempfile = "3.27.0"
 assert_cmd = "2.2.2"
 predicates = "3.1.4"
-axum = "0.8.9"
-tokio = { version = "1.52.3", features = ["rt-multi-thread", "net", "macros"] }
-rust-embed = "8.11.0"
-base64 = "0.22.1"
-tower-http = { version = "0.6.11", features = ["cors"] }
-criterion = "0.8.2"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "time"] }

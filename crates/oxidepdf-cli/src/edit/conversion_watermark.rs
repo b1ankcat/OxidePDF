@@ -1,4 +1,4 @@
-pub(crate) fn run_img2pdf(
+pub(crate) async fn run_img2pdf(
     args: ImageToPdfArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -12,10 +12,10 @@ pub(crate) fn run_img2pdf(
         })),
     );
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
-pub(crate) fn run_svg2pdf(
+pub(crate) async fn run_svg2pdf(
     args: SvgToPdfArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -29,10 +29,10 @@ pub(crate) fn run_svg2pdf(
         })),
     );
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
-pub(crate) fn run_watermark(
+pub(crate) async fn run_watermark(
     args: WatermarkArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -83,7 +83,7 @@ pub(crate) fn run_watermark(
         metadata: WorkflowMetadata::default(),
     };
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
 pub(crate) fn parse_watermark_kind(value: &str) -> Result<WatermarkKind, CliError> {

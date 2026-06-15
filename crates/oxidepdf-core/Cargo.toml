@@ -10,9 +10,11 @@ description = "Core contracts and operators for OxidePDF."
 default = []
 
 [dependencies]
+apalis.workspace = true
 cms.workspace = true
 const-oid.workspace = true
 der.workspace = true
+futures-util.workspace = true
 hayro.workspace = true
 image.workspace = true
 imageproc.workspace = true
@@ -22,7 +24,6 @@ pdf-extract.workspace = true
 pdf-writer.workspace = true
 pem-rfc7468.workspace = true
 rand.workspace = true
-rayon.workspace = true
 rsa.workspace = true
 resvg.workspace = true
 serde.workspace = true
@@ -37,12 +38,12 @@ svg2pdf.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 tiverse-mmap.workspace = true
+tokio.workspace = true
 usvg.workspace = true
 x509-cert.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-criterion.workspace = true
 der.workspace = true
 image.workspace = true
 lopdf.workspace = true

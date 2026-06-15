@@ -410,8 +410,8 @@ fn error_codes_are_stable_machine_readable_values() {
     );
 }
 
-#[test]
-fn linear_workflow_executes_tasks_in_dependency_order() {
+#[tokio::test]
+async fn linear_workflow_executes_tasks_in_dependency_order() {
     let workflow = workflow_from_json(
         r#"
             {
@@ -437,7 +437,9 @@ fn linear_workflow_executes_tasks_in_dependency_order() {
     store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
     let runner = RecordingRunner::default();
 
-    let result = execute_workflow(&workflow, store, &runner).unwrap();
+    let result = execute_workflow(&workflow, store, runner.clone())
+        .await
+        .unwrap();
 
     assert_eq!(runner.executed(), ["rotate", "render"]);
     assert_eq!(
@@ -475,8 +477,8 @@ fn execution_plan_exposes_task_index() {
     assert_eq!(index, Some(0));
 }
 
-#[test]
-fn intermediate_artifact_evicted_after_last_consumer() {
+#[tokio::test]
+async fn intermediate_artifact_evicted_after_last_consumer() {
     let workflow = workflow_from_json(
         r#"
             {
@@ -502,7 +504,9 @@ fn intermediate_artifact_evicted_after_last_consumer() {
     store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
     let runner = RecordingRunner::default();
 
-    let result = execute_workflow(&workflow, store, &runner).unwrap();
+    let result = execute_workflow(&workflow, store, runner.clone())
+        .await
+        .unwrap();
 
     // "source" and "rotate" are fully consumed and not referenced by any
     // output, so they must be evicted; only the output artifact survives.
@@ -511,8 +515,8 @@ fn intermediate_artifact_evicted_after_last_consumer() {
     assert!(result.store.get(&artifact_ref("render")).is_some());
 }
 
-#[test]
-fn output_referenced_artifact_is_not_evicted() {
+#[tokio::test]
+async fn output_referenced_artifact_is_not_evicted() {
     let workflow = workflow_from_json(
         r#"
             {
@@ -541,7 +545,9 @@ fn output_referenced_artifact_is_not_evicted() {
     store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
     let runner = RecordingRunner::default();
 
-    let result = execute_workflow(&workflow, store, &runner).unwrap();
+    let result = execute_workflow(&workflow, store, runner.clone())
+        .await
+        .unwrap();
 
     // "rotate" is consumed by "render" but is also an output, so it must stay.
     assert!(result.store.get(&artifact_ref("rotate")).is_some());
@@ -691,8 +697,8 @@ fn duplicate_artifact_identifiers_fail_validation() {
     assert!(err.to_string().contains("duplicate"));
 }
 
-#[test]
-fn task_failure_stops_downstream_execution() {
+#[tokio::test]
+async fn task_failure_stops_downstream_execution() {
     let workflow = workflow_from_json(
         r#"
             {
@@ -721,10 +727,120 @@ fn task_failure_stops_downstream_execution() {
     };
     let runner = RecordingRunner::with_failure("fail", expected.clone());
 
-    let err = execute_workflow(&workflow, store, &runner).unwrap_err();
+    let err = execute_workflow(&workflow, store, runner.clone())
+        .await
+        .unwrap_err();
 
     assert_eq!(err, expected);
     assert_eq!(runner.executed(), ["fail"]);
+}
+
+#[tokio::test]
+async fn workflow_retries_failed_task_before_succeeding() {
+    let workflow = workflow_from_json(
+        r#"
+            {
+              "version": 1,
+              "inputs": [{ "id": "source", "path": "input.pdf" }],
+              "tasks": [
+                {
+                  "id": "flaky",
+                  "op": { "pdf_edit": { "rotate_pages": { "pages": "1", "degrees": 90 } } },
+                  "inputs": ["source"]
+                }
+              ],
+              "outputs": [{ "id": "final", "from": "flaky", "path": "out.pdf" }],
+              "limits": { "retry_attempts": 1 }
+            }
+            "#,
+    );
+    let mut store = ArtifactStore::new();
+    store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
+
+    #[derive(Clone, Default)]
+    struct FlakyRunner(std::sync::Arc<std::sync::Mutex<usize>>);
+    impl OperatorRunner for FlakyRunner {
+        fn run(&self, task: TaskSpec, _inputs: Vec<Artifact>) -> oxidepdf_core::OperatorFuture {
+            let attempts = self.0.clone();
+            Box::pin(async move {
+                let mut attempts = attempts.lock().unwrap();
+                *attempts += 1;
+                if *attempts == 1 {
+                    return Err(OxideError::InvalidInput {
+                        reason: "transient failure".to_owned(),
+                    });
+                }
+                Artifact::bytes(task.id.as_str().as_bytes())
+            })
+        }
+    }
+
+    let runner = FlakyRunner::default();
+    let result = execute_workflow(&workflow, store, runner.clone())
+        .await
+        .unwrap();
+
+    assert_eq!(*runner.0.lock().unwrap(), 2);
+    assert_eq!(
+        result.store.get(&artifact_ref("flaky")),
+        Some(&Artifact::bytes(b"flaky").unwrap())
+    );
+}
+
+#[tokio::test]
+async fn workflow_rate_limit_delays_independent_task_start() {
+    let workflow = workflow_from_json(
+        r#"
+            {
+              "version": 1,
+              "inputs": [{ "id": "source", "path": "input.pdf" }],
+              "tasks": [
+                {
+                  "id": "first",
+                  "op": { "pdf_edit": { "rotate_pages": { "pages": "1", "degrees": 90 } } },
+                  "inputs": ["source"]
+                },
+                {
+                  "id": "second",
+                  "op": { "pdf_edit": { "rotate_pages": { "pages": "1", "degrees": 180 } } },
+                  "inputs": ["source"]
+                }
+              ],
+              "outputs": [
+                { "id": "first_out", "from": "first", "path": "first.pdf" },
+                { "id": "second_out", "from": "second", "path": "second.pdf" }
+              ],
+              "limits": { "rate_limit_per_second": 2 }
+            }
+            "#,
+    );
+    let mut store = ArtifactStore::new();
+    store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
+
+    #[derive(Clone, Default)]
+    struct TimedRunner(std::sync::Arc<std::sync::Mutex<Vec<std::time::Instant>>>);
+    impl OperatorRunner for TimedRunner {
+        fn run(&self, task: TaskSpec, _inputs: Vec<Artifact>) -> oxidepdf_core::OperatorFuture {
+            let starts = self.0.clone();
+            Box::pin(async move {
+                starts.lock().unwrap().push(std::time::Instant::now());
+                Artifact::bytes(task.id.as_str().as_bytes())
+            })
+        }
+    }
+
+    let runner = TimedRunner::default();
+    execute_workflow(&workflow, store, runner.clone())
+        .await
+        .unwrap();
+
+    let starts = runner.0.lock().unwrap().clone();
+    assert_eq!(starts.len(), 2);
+    let elapsed = starts[1].duration_since(starts[0]);
+    assert!(
+        elapsed >= std::time::Duration::from_millis(400),
+        "expected rate-limited starts, got {elapsed:?}"
+    );
 }
 
 #[test]
@@ -882,20 +998,21 @@ fn parses_security_operator_schema() {
     ));
 }
 
-#[test]
-fn pdf_operator_runner_handles_page_editing_tasks() {
+#[tokio::test]
+async fn pdf_operator_runner_handles_page_editing_tasks() {
     let pdf = fixture_pdf();
     let runner = PdfOperatorRunner::default();
 
     let merged = runner
         .run(
-            &TaskSpec {
+            TaskSpec {
                 id: TaskId::new("merge"),
                 op: OperatorSpec::PdfEdit(PdfEditOptions::Merge(MergeOptions {})),
                 inputs: vec![artifact_ref("a"), artifact_ref("b")],
             },
-            &[Artifact::pdf(pdf).unwrap(), Artifact::pdf(pdf).unwrap()],
+            vec![Artifact::pdf(pdf).unwrap(), Artifact::pdf(pdf).unwrap()],
         )
+        .await
         .unwrap();
 
     // Object-level operators emit a parsed document; it must serialize back to
@@ -905,8 +1022,8 @@ fn pdf_operator_runner_handles_page_editing_tasks() {
     assert!(bytes.starts_with(b"%PDF-"));
 }
 
-#[test]
-fn pdf_operator_runner_enforces_output_size_limit() {
+#[tokio::test]
+async fn pdf_operator_runner_enforces_output_size_limit() {
     let pdf = fixture_pdf();
     let runner = PdfOperatorRunner::with_limits(ResourceLimits {
         max_output_bytes: Some(1),
@@ -915,15 +1032,16 @@ fn pdf_operator_runner_enforces_output_size_limit() {
 
     let err = runner
         .run(
-            &TaskSpec {
+            TaskSpec {
                 id: TaskId::new("split"),
                 op: OperatorSpec::PdfEdit(PdfEditOptions::KeepPages(SplitOptions {
                     pages: "1".to_owned(),
                 })),
                 inputs: vec![artifact_ref("source")],
             },
-            &[Artifact::pdf(pdf).unwrap()],
+            vec![Artifact::pdf(pdf).unwrap()],
         )
+        .await
         .unwrap_err();
 
     assert_eq!(
@@ -934,8 +1052,8 @@ fn pdf_operator_runner_enforces_output_size_limit() {
     );
 }
 
-#[test]
-fn object_level_operator_emits_parsed_pdf_object() {
+#[tokio::test]
+async fn object_level_operator_emits_parsed_pdf_object() {
     // A migrated page operator returns a parsed object tree, not serialized
     // bytes, so a downstream operator can consume it without re-parsing.
     let pdf = fixture_pdf();
@@ -943,15 +1061,16 @@ fn object_level_operator_emits_parsed_pdf_object() {
 
     let artifact = runner
         .run(
-            &TaskSpec {
+            TaskSpec {
                 id: TaskId::new("keep"),
                 op: OperatorSpec::PdfEdit(PdfEditOptions::KeepPages(SplitOptions {
                     pages: "1".to_owned(),
                 })),
                 inputs: vec![artifact_ref("source")],
             },
-            &[Artifact::pdf(pdf).unwrap()],
+            vec![Artifact::pdf(pdf).unwrap()],
         )
+        .await
         .unwrap();
 
     assert!(matches!(artifact, Artifact::PdfObject(_)));
@@ -959,27 +1078,28 @@ fn object_level_operator_emits_parsed_pdf_object() {
     // The object artifact feeds straight into another object-level operator.
     let chained = runner
         .run(
-            &TaskSpec {
+            TaskSpec {
                 id: TaskId::new("extract"),
                 op: OperatorSpec::PdfEdit(PdfEditOptions::ExtractPages(PageSelectionOptions {
                     pages: "1".to_owned(),
                 })),
                 inputs: vec![artifact_ref("keep")],
             },
-            &[artifact],
+            vec![artifact],
         )
+        .await
         .unwrap();
     assert!(matches!(chained, Artifact::PdfObject(_)));
 }
 
-#[test]
-fn inspect_operator_consumes_object_artifact_without_materializing_bytes() {
+#[tokio::test]
+async fn inspect_operator_consumes_object_artifact_without_materializing_bytes() {
     let pdf = fixture_pdf();
     let runner = PdfOperatorRunner::default();
 
     let object_artifact = runner
         .run(
-            &TaskSpec {
+            TaskSpec {
                 id: TaskId::new("rotate"),
                 op: OperatorSpec::PdfEdit(PdfEditOptions::RotatePages(RotateOptions {
                     pages: "1".to_owned(),
@@ -987,22 +1107,24 @@ fn inspect_operator_consumes_object_artifact_without_materializing_bytes() {
                 })),
                 inputs: vec![artifact_ref("source")],
             },
-            &[Artifact::pdf(pdf).unwrap()],
+            vec![Artifact::pdf(pdf).unwrap()],
         )
+        .await
         .unwrap();
     assert!(matches!(object_artifact, Artifact::PdfObject(_)));
 
     let inspected = runner
         .run(
-            &TaskSpec {
+            TaskSpec {
                 id: TaskId::new("metadata"),
                 op: OperatorSpec::PdfInspect(PdfInspectOptions::Metadata(
                     MetadataInspectOptions::default(),
                 )),
                 inputs: vec![artifact_ref("rotate")],
             },
-            &[object_artifact],
+            vec![object_artifact],
         )
+        .await
         .unwrap();
 
     let Artifact::Text(report_text) = inspected else {
@@ -1013,15 +1135,15 @@ fn inspect_operator_consumes_object_artifact_without_materializing_bytes() {
     assert!(report["entries"].is_object());
 }
 
-#[test]
-fn pdf_operator_runner_emits_signature_verification_report() {
+#[tokio::test]
+async fn pdf_operator_runner_emits_signature_verification_report() {
     let pdf = pdf_with_signature_dictionary(vec![0, 64, 192, 64], vec![0x30, 0x82]);
     let trust_anchors = write_test_trust_anchors("signature_report");
     let runner = PdfOperatorRunner::default();
 
     let artifact = runner
         .run(
-            &TaskSpec {
+            TaskSpec {
                 id: TaskId::new("verify"),
                 op: OperatorSpec::PdfSign(PdfSignOptions::Verify(SignatureOptions {
                     mode: SignatureMode::Verify,
@@ -1029,8 +1151,9 @@ fn pdf_operator_runner_emits_signature_verification_report() {
                 })),
                 inputs: vec![artifact_ref("source")],
             },
-            &[Artifact::pdf(&pdf).unwrap()],
+            vec![Artifact::pdf(&pdf).unwrap()],
         )
+        .await
         .unwrap();
 
     let Artifact::Text(report_text) = artifact else {
@@ -1062,14 +1185,14 @@ fn pdf_operator_runner_emits_signature_verification_report() {
     );
 }
 
-#[test]
-fn pdf_operator_runner_emits_signature_list_report_without_trust_anchors() {
+#[tokio::test]
+async fn pdf_operator_runner_emits_signature_list_report_without_trust_anchors() {
     let pdf = pdf_with_signature_dictionary(vec![0, 64, 192, 64], vec![0x30, 0x82]);
     let runner = PdfOperatorRunner::default();
 
     let artifact = runner
         .run(
-            &TaskSpec {
+            TaskSpec {
                 id: TaskId::new("list"),
                 op: OperatorSpec::PdfSign(PdfSignOptions::List(SignatureOptions {
                     mode: SignatureMode::List,
@@ -1077,8 +1200,9 @@ fn pdf_operator_runner_emits_signature_list_report_without_trust_anchors() {
                 })),
                 inputs: vec![artifact_ref("source")],
             },
-            &[Artifact::pdf(&pdf).unwrap()],
+            vec![Artifact::pdf(&pdf).unwrap()],
         )
+        .await
         .unwrap();
 
     let Artifact::Text(report_text) = artifact else {
@@ -1098,22 +1222,23 @@ fn pdf_operator_runner_emits_signature_list_report_without_trust_anchors() {
     assert!(report.diagnostics.is_empty());
 }
 
-#[test]
-fn pdf_operator_runner_handles_extract_text_tasks() {
+#[tokio::test]
+async fn pdf_operator_runner_handles_extract_text_tasks() {
     let pdf = fixture_pdf();
     let runner = PdfOperatorRunner::default();
 
     let extracted = runner
         .run(
-            &TaskSpec {
+            TaskSpec {
                 id: TaskId::new("extract"),
                 op: OperatorSpec::PdfInspect(PdfInspectOptions::ExtractText(
                     ExtractTextOptions::default(),
                 )),
                 inputs: vec![artifact_ref("source")],
             },
-            &[Artifact::pdf(pdf).unwrap()],
+            vec![Artifact::pdf(pdf).unwrap()],
         )
+        .await
         .unwrap();
 
     let Artifact::Text(text) = extracted else {
@@ -1122,8 +1247,8 @@ fn pdf_operator_runner_handles_extract_text_tasks() {
     assert!(!text.text.trim().is_empty());
 }
 
-#[test]
-fn execute_workflow_enforces_timeout() {
+#[tokio::test]
+async fn execute_workflow_enforces_timeout() {
     let workflow = workflow_from_json(
         r#"
             {
@@ -1145,7 +1270,9 @@ fn execute_workflow_enforces_timeout() {
     store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
     let runner = SlowRunner;
 
-    let err = execute_workflow(&workflow, store, &runner).unwrap_err();
+    let err = execute_workflow(&workflow, store, runner.clone())
+        .await
+        .unwrap_err();
 
     assert_eq!(
         err,
@@ -1155,8 +1282,8 @@ fn execute_workflow_enforces_timeout() {
     );
 }
 
-#[test]
-fn execute_workflow_timeout_stops_downstream_tasks() {
+#[tokio::test]
+async fn execute_workflow_timeout_stops_downstream_tasks() {
     let workflow = workflow_from_json(
         r#"
             {
@@ -1182,17 +1309,23 @@ fn execute_workflow_timeout_stops_downstream_tasks() {
     let mut store = ArtifactStore::new();
     store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
 
-    struct SlowRecordingRunner(std::sync::Mutex<Vec<String>>);
+    #[derive(Clone)]
+    struct SlowRecordingRunner(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
     impl OperatorRunner for SlowRecordingRunner {
-        fn run(&self, task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
-            self.0.lock().unwrap().push(task.id.as_str().to_owned());
-            std::thread::sleep(std::time::Duration::from_millis(5));
-            Artifact::bytes(task.id.as_str().as_bytes())
+        fn run(&self, task: TaskSpec, _inputs: Vec<Artifact>) -> oxidepdf_core::OperatorFuture {
+            let executed = self.0.clone();
+            Box::pin(async move {
+                executed.lock().unwrap().push(task.id.as_str().to_owned());
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                Artifact::bytes(task.id.as_str().as_bytes())
+            })
         }
     }
 
-    let runner = SlowRecordingRunner(std::sync::Mutex::new(Vec::new()));
-    let err = execute_workflow(&workflow, store, &runner).unwrap_err();
+    let runner = SlowRecordingRunner(std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
+    let err = execute_workflow(&workflow, store, runner.clone())
+        .await
+        .unwrap_err();
 
     assert_eq!(
         err,
@@ -1203,8 +1336,8 @@ fn execute_workflow_timeout_stops_downstream_tasks() {
     assert_eq!(runner.0.lock().unwrap().as_slice(), ["slow"]);
 }
 
-#[test]
-fn independent_tasks_in_a_layer_run_in_parallel() {
+#[tokio::test]
+async fn independent_tasks_in_a_layer_run_in_parallel() {
     // Eight independent tasks each sleep 50ms. Run serially that is 400ms; in
     // parallel it should finish in well under that. Use a generous bound to stay
     // robust on busy CI while still proving concurrency.
@@ -1233,16 +1366,21 @@ fn independent_tasks_in_a_layer_run_in_parallel() {
     let mut store = ArtifactStore::new();
     store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
 
+    #[derive(Clone)]
     struct SleepRunner;
     impl OperatorRunner for SleepRunner {
-        fn run(&self, task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            Artifact::bytes(task.id.as_str().as_bytes())
+        fn run(&self, task: TaskSpec, _inputs: Vec<Artifact>) -> oxidepdf_core::OperatorFuture {
+            Box::pin(async move {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                Artifact::bytes(task.id.as_str().as_bytes())
+            })
         }
     }
 
     let started = std::time::Instant::now();
-    let result = execute_workflow(&workflow, store, &SleepRunner).unwrap();
+    let result = execute_workflow(&workflow, store, SleepRunner)
+        .await
+        .unwrap();
     let elapsed = started.elapsed();
 
     assert_eq!(result.plan.task_order.len(), 8);
@@ -1253,8 +1391,85 @@ fn independent_tasks_in_a_layer_run_in_parallel() {
     );
 }
 
-#[test]
-fn execute_workflow_enforces_total_input_size_limit() {
+#[tokio::test]
+async fn downstream_task_starts_before_unrelated_layer_peer_finishes() {
+    let workflow = workflow_from_json(
+        r#"
+            {
+              "version": 1,
+              "inputs": [{ "id": "source", "path": "input.bin" }],
+              "tasks": [
+                {
+                  "id": "fast",
+                  "op": { "pdf_edit": { "merge": {} } },
+                  "inputs": ["source"]
+                },
+                {
+                  "id": "slow_peer",
+                  "op": { "pdf_edit": { "merge": {} } },
+                  "inputs": ["source"]
+                },
+                {
+                  "id": "after_fast",
+                  "op": { "pdf_edit": { "merge": {} } },
+                  "inputs": ["fast"]
+                }
+              ],
+              "outputs": [
+                { "id": "final", "from": "after_fast", "path": "out.bin" },
+                { "id": "peer", "from": "slow_peer", "path": "peer.bin" }
+              ]
+            }
+            "#,
+    );
+    let mut store = ArtifactStore::new();
+    store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
+
+    #[derive(Clone, Default)]
+    struct EventRunner(std::sync::Arc<std::sync::Mutex<Vec<(String, std::time::Instant)>>>);
+    impl EventRunner {
+        fn event_time(&self, name: &str) -> std::time::Instant {
+            self.0
+                .lock()
+                .unwrap()
+                .iter()
+                .find_map(|(event, at)| (event == name).then_some(*at))
+                .unwrap()
+        }
+    }
+    impl OperatorRunner for EventRunner {
+        fn run(&self, task: TaskSpec, _inputs: Vec<Artifact>) -> oxidepdf_core::OperatorFuture {
+            let events = self.0.clone();
+            Box::pin(async move {
+                events.lock().unwrap().push((
+                    format!("{}:start", task.id.as_str()),
+                    std::time::Instant::now(),
+                ));
+                if task.id.as_str() == "slow_peer" {
+                    std::thread::sleep(std::time::Duration::from_millis(80));
+                }
+                events.lock().unwrap().push((
+                    format!("{}:end", task.id.as_str()),
+                    std::time::Instant::now(),
+                ));
+                Artifact::bytes(task.id.as_str().as_bytes())
+            })
+        }
+    }
+
+    let runner = EventRunner::default();
+    execute_workflow(&workflow, store, runner.clone())
+        .await
+        .unwrap();
+
+    assert!(
+        runner.event_time("after_fast:start") < runner.event_time("slow_peer:end"),
+        "downstream task waited for unrelated peer, indicating layer-barrier execution"
+    );
+}
+
+#[tokio::test]
+async fn execute_workflow_enforces_total_input_size_limit() {
     let workflow = workflow_from_json(
         r#"
             {
@@ -1274,7 +1489,9 @@ fn execute_workflow_enforces_total_input_size_limit() {
     store.insert(artifact_ref("second"), Artifact::bytes(b"67890").unwrap());
     let runner = RecordingRunner::default();
 
-    let err = execute_workflow(&workflow, store, &runner).unwrap_err();
+    let err = execute_workflow(&workflow, store, runner.clone())
+        .await
+        .unwrap_err();
 
     assert_eq!(
         err,
@@ -1375,8 +1592,8 @@ fn spilled_payload_roundtrip_is_byte_exact() {
     assert_eq!(bytes.as_slice(), payload.as_slice());
 }
 
-#[test]
-fn workflow_spill_threshold_forces_small_output_to_spill() {
+#[tokio::test]
+async fn workflow_spill_threshold_forces_small_output_to_spill() {
     // A zero spill threshold means "spill every non-empty payload". The task
     // emits a tiny output that would normally stay inline; the workflow's
     // threshold must push it to a memory-mapped temp file.
@@ -1400,22 +1617,25 @@ fn workflow_spill_threshold_forces_small_output_to_spill() {
     let mut store = ArtifactStore::new();
     store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
 
+    #[derive(Clone)]
     struct EchoRunner;
     impl OperatorRunner for EchoRunner {
-        fn run(&self, _task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
-            Ok(Artifact::pdf(b"tiny").unwrap())
+        fn run(&self, _task: TaskSpec, _inputs: Vec<Artifact>) -> oxidepdf_core::OperatorFuture {
+            Box::pin(async { Ok(Artifact::pdf(b"tiny").unwrap()) })
         }
     }
 
-    let result = execute_workflow(&workflow, store, &EchoRunner).unwrap();
+    let result = execute_workflow(&workflow, store, EchoRunner)
+        .await
+        .unwrap();
     let Some(Artifact::Pdf(pdf)) = result.store.get(&artifact_ref("echo")) else {
         panic!("expected a PDF artifact");
     };
     assert!(pdf.bytes.is_spilled());
 }
 
-#[test]
-fn workflow_spill_threshold_keeps_large_output_inline_when_high() {
+#[tokio::test]
+async fn workflow_spill_threshold_keeps_large_output_inline_when_high() {
     // A high threshold keeps an otherwise-spillable payload inline.
     let workflow = workflow_from_json(
         r#"
@@ -1437,16 +1657,19 @@ fn workflow_spill_threshold_keeps_large_output_inline_when_high() {
     let mut store = ArtifactStore::new();
     store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
 
+    #[derive(Clone)]
     struct BigRunner;
     impl OperatorRunner for BigRunner {
-        fn run(&self, _task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
-            // Larger than the default 64 MiB threshold, smaller than the 1 GiB
-            // workflow threshold, so only the workflow threshold decides.
-            Artifact::pdf(vec![0u8; 64 * 1024 * 1024 + 4096])
+        fn run(&self, _task: TaskSpec, _inputs: Vec<Artifact>) -> oxidepdf_core::OperatorFuture {
+            Box::pin(async {
+                // Larger than the default 64 MiB threshold, smaller than the 1 GiB
+                // workflow threshold, so only the workflow threshold decides.
+                Artifact::pdf(vec![0u8; 64 * 1024 * 1024 + 4096])
+            })
         }
     }
 
-    let result = execute_workflow(&workflow, store, &BigRunner).unwrap();
+    let result = execute_workflow(&workflow, store, BigRunner).await.unwrap();
     let Some(Artifact::Pdf(pdf)) = result.store.get(&artifact_ref("echo")) else {
         panic!("expected a PDF artifact");
     };

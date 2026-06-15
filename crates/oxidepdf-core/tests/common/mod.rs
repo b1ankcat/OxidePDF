@@ -1213,19 +1213,19 @@ pub fn simple_svg() -> &'static [u8] {
         </svg>"##
 }
 
-#[derive(Default)]
+#[derive(Clone)]
 pub struct RecordingRunner {
-    executed: std::sync::Mutex<Vec<String>>,
+    executed: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     fail_on: Option<&'static str>,
-    error: std::sync::Mutex<Option<OxideError>>,
+    error: std::sync::Arc<std::sync::Mutex<Option<OxideError>>>,
 }
 
 impl RecordingRunner {
     pub fn with_failure(fail_on: &'static str, error: OxideError) -> Self {
         Self {
-            executed: std::sync::Mutex::new(Vec::new()),
+            executed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             fail_on: Some(fail_on),
-            error: std::sync::Mutex::new(Some(error)),
+            error: std::sync::Arc::new(std::sync::Mutex::new(Some(error))),
         }
     }
 
@@ -1234,25 +1234,42 @@ impl RecordingRunner {
     }
 }
 
-impl OperatorRunner for RecordingRunner {
-    fn run(&self, task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
-        self.executed
-            .lock()
-            .unwrap()
-            .push(task.id.as_str().to_owned());
-        if self.fail_on == Some(task.id.as_str()) {
-            return Err(self.error.lock().unwrap().take().unwrap());
+impl Default for RecordingRunner {
+    fn default() -> Self {
+        Self {
+            executed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            fail_on: None,
+            error: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
-
-        Artifact::bytes(task.id.as_str().as_bytes())
     }
 }
 
+impl OperatorRunner for RecordingRunner {
+    fn run(&self, task: TaskSpec, _inputs: Vec<Artifact>) -> oxidepdf_core::OperatorFuture {
+        let runner = self.clone();
+        Box::pin(async move {
+            runner
+                .executed
+                .lock()
+                .unwrap()
+                .push(task.id.as_str().to_owned());
+            if runner.fail_on == Some(task.id.as_str()) {
+                return Err(runner.error.lock().unwrap().take().unwrap());
+            }
+
+            Artifact::bytes(task.id.as_str().as_bytes())
+        })
+    }
+}
+
+#[derive(Clone)]
 pub struct SlowRunner;
 
 impl OperatorRunner for SlowRunner {
-    fn run(&self, _task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
-        std::thread::sleep(std::time::Duration::from_millis(5));
-        Ok(Artifact::bytes(b"finished").unwrap())
+    fn run(&self, _task: TaskSpec, _inputs: Vec<Artifact>) -> oxidepdf_core::OperatorFuture {
+        Box::pin(async move {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            Ok(Artifact::bytes(b"finished").unwrap())
+        })
     }
 }

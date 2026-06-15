@@ -10,8 +10,8 @@ use common::*;
 use oxidepdf_cli::{command, run, run_with_io};
 use std::fs;
 
-#[test]
-fn metadata_commands_set_and_get_json_report() {
+#[tokio::test]
+async fn metadata_commands_set_and_get_json_report() {
     let dir = temp_dir("metadata_commands_set_and_get_json_report");
     let input = dir.join("input.pdf");
     let edited = dir.join("metadata.pdf");
@@ -37,7 +37,8 @@ fn metadata_commands_set_and_get_json_report() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
     assert_eq!(stderr, b"");
 
@@ -54,7 +55,8 @@ fn metadata_commands_set_and_get_json_report() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
     let report: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(report).unwrap()).unwrap();
@@ -62,8 +64,8 @@ fn metadata_commands_set_and_get_json_report() {
     assert_eq!(report["entries"]["author"], "OxidePDF");
 }
 
-#[test]
-fn attachment_commands_add_list_extract_and_delete() {
+#[tokio::test]
+async fn attachment_commands_add_list_extract_and_delete() {
     let dir = temp_dir("attachment_commands_add_list_extract_and_delete");
     let input = dir.join("input.pdf");
     let note = dir.join("note.txt");
@@ -92,7 +94,8 @@ fn attachment_commands_add_list_extract_and_delete() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
     assert_eq!(stderr, b"");
 
@@ -109,7 +112,8 @@ fn attachment_commands_add_list_extract_and_delete() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
     let report: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&report).unwrap()).unwrap();
@@ -130,7 +134,8 @@ fn attachment_commands_add_list_extract_and_delete() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
     assert_eq!(fs::read(&extracted).unwrap(), b"attachment bytes");
 
@@ -149,13 +154,14 @@ fn attachment_commands_add_list_extract_and_delete() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
     assert_eq!(pdf_page_count(&deleted), 1);
 }
 
-#[test]
-fn commands_with_two_inputs_reject_shared_stdin() {
+#[tokio::test]
+async fn commands_with_two_inputs_reject_shared_stdin() {
     let dir = temp_dir("commands_with_two_inputs_reject_shared_stdin");
     let outline_output = dir.join("outline.pdf");
     let attach_output = dir.join("attached.pdf");
@@ -177,7 +183,8 @@ fn commands_with_two_inputs_reject_shared_stdin() {
         empty_page_pdf(),
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 2);
     assert!(!outline_output.exists());
     assert!(
@@ -204,7 +211,8 @@ fn commands_with_two_inputs_reject_shared_stdin() {
         empty_page_pdf(),
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 2);
     assert!(!attach_output.exists());
     assert!(
@@ -214,8 +222,8 @@ fn commands_with_two_inputs_reject_shared_stdin() {
     );
 }
 
-#[test]
-fn annotation_and_interactive_commands_remove_selected_elements() {
+#[tokio::test]
+async fn annotation_and_interactive_commands_remove_selected_elements() {
     let dir = temp_dir("annotation_and_interactive_commands_remove_selected_elements");
     let input = dir.join("input.pdf");
     let annotated = dir.join("annotated.pdf");
@@ -245,7 +253,8 @@ fn annotation_and_interactive_commands_remove_selected_elements() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
 
     let code = run_with_io(
@@ -261,7 +270,8 @@ fn annotation_and_interactive_commands_remove_selected_elements() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
     let report: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&report).unwrap()).unwrap();
@@ -280,7 +290,8 @@ fn annotation_and_interactive_commands_remove_selected_elements() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
     let code = run_with_io(
         [
@@ -295,15 +306,16 @@ fn annotation_and_interactive_commands_remove_selected_elements() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
     let report: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(empty_report).unwrap()).unwrap();
     assert!(report["annotations"].as_array().unwrap().is_empty());
 }
 
-#[test]
-fn form_commands_fill_inspect_unlock_and_remove() {
+#[tokio::test]
+async fn form_commands_fill_inspect_unlock_and_remove() {
     let dir = temp_dir("form_commands_fill_inspect_unlock_and_remove");
     let input = dir.join("input.pdf");
     let filled = dir.join("filled.pdf");
@@ -330,7 +342,8 @@ fn form_commands_fill_inspect_unlock_and_remove() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
 
     let code = run_with_io(
@@ -346,7 +359,8 @@ fn form_commands_fill_inspect_unlock_and_remove() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
     let report: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&report).unwrap()).unwrap();
@@ -366,7 +380,8 @@ fn form_commands_fill_inspect_unlock_and_remove() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
 
     let code = run_with_io(
@@ -382,7 +397,8 @@ fn form_commands_fill_inspect_unlock_and_remove() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
     let code = run_with_io(
         [
@@ -397,15 +413,16 @@ fn form_commands_fill_inspect_unlock_and_remove() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
     let report: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(empty_report).unwrap()).unwrap();
     assert!(report["fields"].as_array().unwrap().is_empty());
 }
 
-#[test]
-fn stamp_overlay_image_and_color_commands_write_expected_outputs() {
+#[tokio::test]
+async fn stamp_overlay_image_and_color_commands_write_expected_outputs() {
     let dir = temp_dir("stamp_overlay_image_and_color_commands_write_expected_outputs");
     let input = dir.join("input.pdf");
     let overlay = dir.join("overlay.pdf");
@@ -437,7 +454,8 @@ fn stamp_overlay_image_and_color_commands_write_expected_outputs() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
     assert!(page_has_content_operator(&stamped, 1, "Tj"));
 
@@ -456,7 +474,8 @@ fn stamp_overlay_image_and_color_commands_write_expected_outputs() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
     assert!(page_has_content_operator(&overlaid, 1, "Do"));
 
@@ -473,7 +492,8 @@ fn stamp_overlay_image_and_color_commands_write_expected_outputs() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
     let report: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&image_report).unwrap()).unwrap();
@@ -497,7 +517,8 @@ fn stamp_overlay_image_and_color_commands_write_expected_outputs() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
 
     let code = run_with_io(
@@ -515,7 +536,8 @@ fn stamp_overlay_image_and_color_commands_write_expected_outputs() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
     assert!(!fs::read(&extracted).unwrap().is_empty());
 
@@ -534,7 +556,8 @@ fn stamp_overlay_image_and_color_commands_write_expected_outputs() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
 
     let color_input = dir.join("color.pdf");
@@ -552,7 +575,8 @@ fn stamp_overlay_image_and_color_commands_write_expected_outputs() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     assert_eq!(code, 0);
     assert_eq!(pdf_rgb_operator(&colored, 1, "rg"), Some([0.0, 1.0, 1.0]));
 }

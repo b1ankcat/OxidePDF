@@ -1,4 +1,4 @@
-pub(crate) fn run_merge(
+pub(crate) async fn run_merge(
     args: MergeArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -9,10 +9,10 @@ pub(crate) fn run_merge(
         "merge",
         OperatorSpec::PdfEdit(PdfEditOptions::Merge(MergeOptions {})),
     );
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
-pub(crate) fn run_page_selection(
+pub(crate) async fn run_page_selection(
     args: PageSelectionArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -40,10 +40,10 @@ pub(crate) fn run_page_selection(
     };
     let workflow = one_input_workflow(args.input, args.output, task_id, op);
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
-pub(crate) fn run_rotate(
+pub(crate) async fn run_rotate(
     args: RotateArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -58,10 +58,10 @@ pub(crate) fn run_rotate(
         })),
     );
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
-pub(crate) fn run_delete_pages(
+pub(crate) async fn run_delete_pages(
     args: PageSelectionArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -75,10 +75,10 @@ pub(crate) fn run_delete_pages(
         })),
     );
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }
 
-pub(crate) fn run_delete_blank_pages(
+pub(crate) async fn run_delete_blank_pages(
     args: DeleteBlankPagesArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -92,5 +92,5 @@ pub(crate) fn run_delete_blank_pages(
         )),
     );
 
-    execute_and_write_workflow(workflow, stdin, args.force, stdout)
+    execute_and_write_workflow(workflow, stdin, args.force, stdout).await
 }

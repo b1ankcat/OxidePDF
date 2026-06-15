@@ -1,4 +1,4 @@
-pub(crate) fn run_outline(
+pub(crate) async fn run_outline(
     command: OutlineCommand,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -16,7 +16,8 @@ pub(crate) fn run_outline(
             stdin,
             args.force,
             stdout,
-        ),
+        )
+        .await,
         OutlineCommand::Set(args) => {
             reject_shared_stdin_inputs(&args.input, &args.tree)?;
             let tree_bytes = read_path_or_stdin(&args.tree, stdin).map_err(CliError::Input)?;
@@ -36,6 +37,7 @@ pub(crate) fn run_outline(
                 args.force,
                 stdout,
             )
+            .await
         }
         OutlineCommand::Delete(args) => execute_and_write_workflow(
             one_input_workflow(
@@ -50,7 +52,7 @@ pub(crate) fn run_outline(
             stdin,
             args.force,
             stdout,
-        ),
+        )
+        .await,
     }
 }
-

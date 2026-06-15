@@ -82,7 +82,7 @@ impl From<CliCompressionImageFormat> for CompressionImageFormat {
 }
 
 /// Parses CLI arguments and runs the requested command.
-pub fn run() -> i32 {
+pub async fn run() -> i32 {
     let args = std::env::args_os().collect::<Vec<_>>();
     let stdin_buffer = match stdin_for_args(args.clone()) {
         Ok(buffer) => buffer,
@@ -96,11 +96,11 @@ pub fn run() -> i32 {
     let stderr = io::stderr();
     let mut stderr = stderr.lock();
 
-    run_with_io(args, &stdin_buffer, &mut stdout, &mut stderr)
+    run_with_io(args, &stdin_buffer, &mut stdout, &mut stderr).await
 }
 
 /// Runs the CLI with injectable IO for tests.
-pub fn run_with_io<I, S>(
+pub async fn run_with_io<I, S>(
     args: I,
     stdin: impl AsRef<[u8]>,
     stdout: &mut impl Write,
@@ -110,7 +110,7 @@ where
     I: IntoIterator<Item = S>,
     S: Into<std::ffi::OsString> + Clone,
 {
-    match run_with_io_result(args, stdin.as_ref(), stdout) {
+    match run_with_io_result(args, stdin.as_ref(), stdout).await {
         Ok(()) => 0,
         Err(error) => {
             let _ = writeln!(stderr, "oxidepdf: {error}");
@@ -124,20 +124,24 @@ pub fn command() -> clap::Command {
     Cli::command()
 }
 
-fn run_with_io_result<I, S>(args: I, stdin: &[u8], stdout: &mut impl Write) -> Result<(), CliError>
+async fn run_with_io_result<I, S>(
+    args: I,
+    stdin: &[u8],
+    stdout: &mut impl Write,
+) -> Result<(), CliError>
 where
     I: IntoIterator<Item = S>,
     S: Into<std::ffi::OsString> + Clone,
 {
     let cli = Cli::try_parse_from(args).map_err(CliError::Arguments)?;
     match cli.command {
-        Some(Commands::Run(args)) => run_workflow(args, stdin, stdout),
-        Some(Commands::PdfEdit(command)) => run_pdf_edit(command, stdin, stdout),
-        Some(Commands::PdfInspect(command)) => run_pdf_inspect(command, stdin, stdout),
-        Some(Commands::PdfSecurity(command)) => run_pdf_security(command, stdin, stdout),
-        Some(Commands::PdfCompare(command)) => run_compare(command, stdin, stdout),
-        Some(Commands::PdfSign(command)) => run_sign(command, stdin, stdout),
-        Some(Commands::PdfAdv(command)) => run_pdf_adv(command, stdin, stdout),
+        Some(Commands::Run(args)) => run_workflow(args, stdin, stdout).await,
+        Some(Commands::PdfEdit(command)) => run_pdf_edit(command, stdin, stdout).await,
+        Some(Commands::PdfInspect(command)) => run_pdf_inspect(command, stdin, stdout).await,
+        Some(Commands::PdfSecurity(command)) => run_pdf_security(command, stdin, stdout).await,
+        Some(Commands::PdfCompare(command)) => run_compare(command, stdin, stdout).await,
+        Some(Commands::PdfSign(command)) => run_sign(command, stdin, stdout).await,
+        Some(Commands::PdfAdv(command)) => run_pdf_adv(command, stdin, stdout).await,
         Some(Commands::Completion(command)) => run_completion(command, stdout),
         None => Ok(()),
     }

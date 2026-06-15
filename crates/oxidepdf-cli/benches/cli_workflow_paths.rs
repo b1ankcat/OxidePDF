@@ -1,6 +1,9 @@
-use criterion::{Criterion, criterion_group, criterion_main};
 use lopdf::dictionary;
 use std::fs;
+use std::hint::black_box;
+use std::time::Instant;
+
+const ITERS: usize = 10;
 
 fn fixture_pdf() -> Vec<u8> {
     let mut document = lopdf::Document::with_version("1.7");
@@ -53,47 +56,63 @@ fn bench_dir(name: &str) -> std::path::PathBuf {
     dir
 }
 
-fn benches(c: &mut Criterion) {
-    c.bench_function("pdf_edit_rotate_command_path", |b| {
-        let dir = bench_dir("pdf_edit_rotate");
-        let input = dir.join("input.pdf");
-        let output = dir.join("output.pdf");
-        fs::write(&input, fixture_pdf()).unwrap();
-        b.iter(|| {
-            let mut stdout = Vec::new();
-            let mut stderr = Vec::new();
-            let code = oxidepdf_cli::run_with_io(
-                [
-                    "oxidepdf",
-                    "pdf_edit",
-                    "rotate-pages",
-                    input.to_str().unwrap(),
-                    "--pages",
-                    "1-4",
-                    "--degrees",
-                    "90",
-                    "-o",
-                    output.to_str().unwrap(),
-                    "--force",
-                ],
-                [],
-                &mut stdout,
-                &mut stderr,
-            );
-            assert_eq!(code, 0, "{}", String::from_utf8_lossy(&stderr));
-        });
+fn bench(name: &str, mut run: impl FnMut()) {
+    let started = Instant::now();
+    for _ in 0..ITERS {
+        run();
+    }
+    let elapsed = started.elapsed();
+    let per_iter = elapsed / ITERS as u32;
+    println!("{name}: {per_iter:?}/iter over {ITERS} iterations");
+}
+
+fn run_cli<'a>(runtime: &tokio::runtime::Runtime, args: impl IntoIterator<Item = &'a str>) {
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let code = runtime.block_on(oxidepdf_cli::run_with_io(
+        args,
+        [],
+        &mut stdout,
+        &mut stderr,
+    ));
+    assert_eq!(code, 0, "{}", String::from_utf8_lossy(&stderr));
+    black_box(stdout);
+}
+
+fn main() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let rotate_dir = bench_dir("pdf_edit_rotate");
+    let rotate_input = rotate_dir.join("input.pdf");
+    let rotate_output = rotate_dir.join("output.pdf");
+    fs::write(&rotate_input, fixture_pdf()).unwrap();
+    bench("pdf_edit_rotate_command_path", || {
+        run_cli(
+            &runtime,
+            [
+                "oxidepdf",
+                "pdf_edit",
+                "rotate-pages",
+                rotate_input.to_str().unwrap(),
+                "--pages",
+                "1-4",
+                "--degrees",
+                "90",
+                "-o",
+                rotate_output.to_str().unwrap(),
+                "--force",
+            ],
+        );
     });
 
-    c.bench_function("run_workflow_path", |b| {
-        let dir = bench_dir("run_workflow");
-        let input = dir.join("input.pdf");
-        let output = dir.join("output.pdf");
-        let workflow = dir.join("workflow.yaml");
-        fs::write(&input, fixture_pdf()).unwrap();
-        fs::write(
-            &workflow,
-            format!(
-                r#"
+    let workflow_dir = bench_dir("run_workflow");
+    let workflow_input = workflow_dir.join("input.pdf");
+    let workflow_output = workflow_dir.join("output.pdf");
+    let workflow = workflow_dir.join("workflow.yaml");
+    fs::write(&workflow_input, fixture_pdf()).unwrap();
+    fs::write(
+        &workflow,
+        format!(
+            r#"
 version: 1
 inputs:
   - id: source
@@ -111,34 +130,21 @@ outputs:
     from: rotate
     path: {}
 "#,
-                input.display(),
-                output.display()
-            ),
-        )
-        .unwrap();
-        b.iter(|| {
-            let mut stdout = Vec::new();
-            let mut stderr = Vec::new();
-            let code = oxidepdf_cli::run_with_io(
-                [
-                    "oxidepdf",
-                    "run",
-                    "--workflow",
-                    workflow.to_str().unwrap(),
-                    "--force",
-                ],
-                [],
-                &mut stdout,
-                &mut stderr,
-            );
-            assert_eq!(code, 0, "{}", String::from_utf8_lossy(&stderr));
-        });
+            workflow_input.display(),
+            workflow_output.display()
+        ),
+    )
+    .unwrap();
+    bench("run_workflow_path", || {
+        run_cli(
+            &runtime,
+            [
+                "oxidepdf",
+                "run",
+                "--workflow",
+                workflow.to_str().unwrap(),
+                "--force",
+            ],
+        );
     });
 }
-
-criterion_group! {
-    name = cli_paths;
-    config = Criterion::default().sample_size(10);
-    targets = benches
-}
-criterion_main!(cli_paths);

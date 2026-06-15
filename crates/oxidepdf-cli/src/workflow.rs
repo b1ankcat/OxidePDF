@@ -2,7 +2,7 @@ use super::*;
 use serde_json::json;
 use std::time::Instant;
 
-pub(crate) fn run_workflow(
+pub(crate) async fn run_workflow(
     args: RunArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -39,7 +39,9 @@ pub(crate) fn run_workflow(
     let (store, input_bytes) = load_inputs(&workflow, stdin)?;
     let runner = PdfOperatorRunner::with_limits(workflow.limits.clone());
     let started_at = Instant::now();
-    let result = execute_workflow(&workflow, store, &runner).map_err(CliError::Core)?;
+    let result = execute_workflow(&workflow, store, runner)
+        .await
+        .map_err(CliError::Core)?;
     let output_bytes = write_outputs_with_stats(&workflow, &result.store, args.force, stdout)?;
     let elapsed_ms = started_at.elapsed().as_millis() as u64;
 

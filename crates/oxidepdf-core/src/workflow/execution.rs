@@ -4,93 +4,322 @@ use super::types::{
 };
 use super::{Artifact, ArtifactStore, TextArtifact, TextExtractionDiagnostic, validate_workflow};
 use crate::{OxideError, enforce_input_bytes, resource_limit};
-use rayon::prelude::*;
-use std::collections::{BTreeMap, BTreeSet};
+use apalis::prelude::{
+    Event, Identity, ParallelizeExt, RandomId, Task, TaskBuilder, WorkerBuilder, WorkerBuilderExt,
+    WorkerContext,
+};
+use futures_util::{StreamExt, stream::BoxStream};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
-/// Executes a workflow, running independent tasks of each dependency layer in
-/// parallel.
+/// Executes a workflow through a single apalis in-memory worker.
 ///
-/// Tasks are grouped into layers by dependency depth. Within a layer every task
-/// is independent, so they run concurrently on a rayon thread pool, each reading
-/// the shared store immutably and cloning its inputs (an `Arc` refcount bump).
-/// The layer acts as a barrier: once all its tasks finish, results are written
-/// back to the store serially and consumed artifacts are evicted. This keeps the
-/// store lock-free — parallel tasks never mutate it.
-pub fn execute_workflow(
+/// The workflow backend only yields tasks whose dependencies are satisfied.
+/// Each completed task commits its artifact, releases dependents, and wakes the
+/// backend so apalis can immediately schedule newly ready work. This keeps the
+/// whole DAG globally concurrent without layer barriers.
+pub async fn execute_workflow<R>(
     workflow: &Workflow,
-    mut store: ArtifactStore,
-    runner: &impl OperatorRunner,
-) -> Result<ExecutionResult, OxideError> {
+    store: ArtifactStore,
+    runner: R,
+) -> Result<ExecutionResult, OxideError>
+where
+    R: OperatorRunner + Clone + Send + Sync + 'static,
+{
     let plan = validate_workflow(workflow)?;
     enforce_workflow_input_limits(workflow, &store)?;
+    if workflow.tasks.is_empty() {
+        return Ok(ExecutionResult { plan, store });
+    }
     let started_at = Instant::now();
     let timeout = workflow.limits.timeout_ms.map(Duration::from_millis);
-
-    for layer in &plan.layers {
-        enforce_timeout(started_at, timeout)?;
-
-        // Resolve every task's inputs against the read-only store first, so the
-        // parallel section borrows nothing mutable.
-        let resolved = layer
-            .iter()
-            .map(|&index| {
-                let task = &workflow.tasks[index];
-                let inputs = task
-                    .inputs
-                    .iter()
-                    .map(|input| {
-                        store.get(input).cloned().ok_or_else(|| {
-                            invalid_workflow(format!(
-                                "artifact '{}' is missing at execution time",
-                                input.as_str()
-                            ))
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok((task, inputs))
-            })
-            .collect::<Result<Vec<_>, OxideError>>()?;
-
-        // Run the layer's tasks concurrently; the first error short-circuits.
-        let outputs = resolved
-            .par_iter()
-            .map(|(task, inputs)| {
-                enforce_timeout(started_at, timeout)?;
-                runner.run(task, inputs).map(|artifact| (*task, artifact))
-            })
-            .collect::<Result<Vec<_>, OxideError>>()?;
-
-        enforce_timeout(started_at, timeout)?;
-
-        // Barrier passed: commit results and evict consumed artifacts serially.
-        // Re-evaluate each produced payload against the workflow's spill
-        // threshold (operators build artifacts with the default threshold).
-        let spill_threshold = workflow.limits.spill_threshold_bytes;
-        for (task, artifact) in outputs {
-            store.insert(
-                ArtifactRef::new(task.id.as_str()),
-                artifact.spilled_to_threshold(spill_threshold)?,
-            );
-        }
-        for &index in layer {
-            evict_consumed_artifacts(&mut store, &plan, &workflow.tasks[index]);
-        }
-    }
-
+    let store = run_apalis_workflow(workflow, &plan, store, Arc::new(runner), started_at).await?;
+    enforce_timeout(started_at, timeout)?;
     Ok(ExecutionResult { plan, store })
 }
 
-/// Evicts any input artifact whose last consumer is the task that just ran,
-/// unless an output references it. This bounds peak memory to the live working
-/// set instead of accumulating every artifact for the whole run.
-fn evict_consumed_artifacts(store: &mut ArtifactStore, plan: &ExecutionPlan, task: &TaskSpec) {
-    for input in &task.inputs {
-        if plan.output_refs.contains(input) {
-            continue;
+#[derive(Clone)]
+struct WorkflowJob {
+    task_index: usize,
+}
+
+struct WorkflowState {
+    store: ArtifactStore,
+    remaining_deps: Vec<usize>,
+    dependents: Vec<Vec<usize>>,
+    ready: VecDeque<usize>,
+    consumer_counts: BTreeMap<ArtifactRef, usize>,
+    remaining: usize,
+    waker: Option<Waker>,
+}
+
+#[derive(Clone)]
+struct WorkflowBackend {
+    state: Arc<Mutex<WorkflowState>>,
+}
+
+async fn run_apalis_workflow<R>(
+    workflow: &Workflow,
+    plan: &ExecutionPlan,
+    store: ArtifactStore,
+    runner: Arc<R>,
+    started_at: Instant,
+) -> Result<ArtifactStore, OxideError>
+where
+    R: OperatorRunner + Send + Sync + 'static,
+{
+    let limits = workflow.limits.clone();
+    let timeout = limits.timeout_ms.map(Duration::from_millis);
+    let (remaining_deps, dependents) = task_dependencies(workflow);
+    let state = Arc::new(Mutex::new(WorkflowState {
+        store,
+        remaining_deps,
+        dependents,
+        ready: initial_ready_tasks(plan),
+        consumer_counts: artifact_consumer_counts(workflow),
+        remaining: workflow.tasks.len(),
+        waker: None,
+    }));
+    let backend = WorkflowBackend {
+        state: state.clone(),
+    };
+
+    let mut worker = WorkerBuilder::new("oxidepdf-workflow")
+        .backend(backend)
+        .catch_panic()
+        .option_layer(rate_limit_layer(limits.rate_limit_per_second))
+        .retry(apalis::layers::retry::RetryPolicy::retries(
+            limits.retry_attempts.unwrap_or(0),
+        ))
+        .option_layer(timeout.map(apalis::layers::TimeoutLayer::new))
+        .parallelize(spawn_workflow_future)
+        .data(runner)
+        .data(state.clone())
+        .data(Arc::new(workflow.clone()))
+        .data(started_at)
+        .data(timeout)
+        .build(run_workflow_job::<R>)
+        .stream();
+
+    while let Some(event) = worker.next().await {
+        let event = match event {
+            Ok(event) => event,
+            Err(apalis::prelude::WorkerError::GracefulExit) => break,
+            Err(_) => return Err(OxideError::Internal),
+        };
+        match event {
+            Event::Error(error) => {
+                if timeout.is_some_and(|timeout| started_at.elapsed() >= timeout) {
+                    return Err(resource_limit("timeout_ms"));
+                }
+                return Err(workflow_event_error(&error));
+            }
+            Event::Success
+            | Event::Start
+            | Event::Idle
+            | Event::HeartBeat
+            | Event::Stop
+            | Event::Custom(_) => {}
         }
-        if plan.last_consumer.get(input) == Some(&task.id) {
-            store.remove(input);
+    }
+
+    let mut state = state.lock().map_err(|_| OxideError::Internal)?;
+    Ok(std::mem::take(&mut state.store))
+}
+
+fn rate_limit_layer(
+    rate_limit_per_second: Option<u64>,
+) -> Option<apalis::layers::limit::RateLimitLayer> {
+    rate_limit_per_second.map(|rate| {
+        apalis::layers::limit::RateLimitLayer::new(1, Duration::from_secs_f64(1.0 / rate as f64))
+    })
+}
+
+fn spawn_workflow_future<F>(future: F) -> tokio::task::JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let handle = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || handle.block_on(future))
+}
+
+impl apalis::prelude::Backend for WorkflowBackend {
+    type Args = WorkflowJob;
+    type IdType = RandomId;
+    type Context = apalis::prelude::Extensions;
+    type Error = OxideError;
+    type Stream = Self;
+    type Layer = Identity;
+    type Beat = BoxStream<'static, Result<(), Self::Error>>;
+
+    fn heartbeat(&self, _worker: &WorkerContext) -> Self::Beat {
+        futures_util::stream::once(async { Ok(()) }).boxed()
+    }
+
+    fn middleware(&self) -> Self::Layer {
+        Identity::new()
+    }
+
+    fn poll(self, _worker: &WorkerContext) -> Self::Stream {
+        self
+    }
+}
+
+impl futures_util::Stream for WorkflowBackend {
+    type Item =
+        Result<Option<Task<WorkflowJob, apalis::prelude::Extensions, RandomId>>, OxideError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => return Poll::Ready(Some(Err(OxideError::Internal))),
+        };
+        if let Some(task_index) = state.ready.pop_front() {
+            drop(state);
+            let task = TaskBuilder::new(WorkflowJob { task_index })
+                .with_idempotency_key(task_index.to_string())
+                .build();
+            return Poll::Ready(Some(Ok(Some(task))));
+        }
+        if state.remaining == 0 {
+            return Poll::Ready(None);
+        }
+        state.waker = Some(cx.waker().clone());
+        Poll::Pending
+    }
+}
+
+async fn run_workflow_job<R>(
+    job: WorkflowJob,
+    runner: apalis::prelude::Data<Arc<R>>,
+    state: apalis::prelude::Data<Arc<Mutex<WorkflowState>>>,
+    workflow: apalis::prelude::Data<Arc<Workflow>>,
+    started_at: apalis::prelude::Data<Instant>,
+    timeout: apalis::prelude::Data<Option<Duration>>,
+    worker: WorkerContext,
+) -> Result<(), OxideError>
+where
+    R: OperatorRunner + Send + Sync + 'static,
+{
+    enforce_timeout(*started_at, *timeout)?;
+    let (task, inputs) = {
+        let state = state.lock().map_err(|_| OxideError::Internal)?;
+        let task = workflow.tasks[job.task_index].clone();
+        let inputs = task
+            .inputs
+            .iter()
+            .map(|input| {
+                state.store.get(input).cloned().ok_or_else(|| {
+                    invalid_workflow(format!(
+                        "artifact '{}' is missing at execution time",
+                        input.as_str()
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        (task, inputs)
+    };
+    let artifact = runner.run(task.clone(), inputs).await?;
+    enforce_timeout(*started_at, *timeout)?;
+    let done = {
+        let mut state = state.lock().map_err(|_| OxideError::Internal)?;
+        let ready = commit_workflow_task(&workflow, &mut state, job.task_index, task, artifact)?;
+        state.ready.extend(ready);
+        if let Some(waker) = state.waker.take() {
+            waker.wake();
+        }
+        state.remaining == 0
+    };
+    if done {
+        worker.stop().map_err(|_| OxideError::Internal)?;
+    }
+    Ok(())
+}
+
+fn commit_workflow_task(
+    workflow: &Workflow,
+    state: &mut WorkflowState,
+    task_index: usize,
+    task: TaskSpec,
+    artifact: Artifact,
+) -> Result<Vec<usize>, OxideError> {
+    let artifact = artifact.spilled_to_threshold(workflow.limits.spill_threshold_bytes)?;
+    state
+        .store
+        .insert(ArtifactRef::new(task.id.as_str()), artifact);
+    evict_consumed_artifacts(workflow, state, &task);
+    state.remaining -= 1;
+
+    let mut ready = Vec::new();
+    for &dependent in &state.dependents[task_index] {
+        state.remaining_deps[dependent] -= 1;
+        if state.remaining_deps[dependent] == 0 {
+            ready.push(dependent);
+        }
+    }
+    Ok(ready)
+}
+
+fn initial_ready_tasks(plan: &ExecutionPlan) -> VecDeque<usize> {
+    plan.layers
+        .first()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
+}
+
+fn artifact_consumer_counts(workflow: &Workflow) -> BTreeMap<ArtifactRef, usize> {
+    let mut counts = BTreeMap::new();
+    for task in &workflow.tasks {
+        for input in &task.inputs {
+            *counts.entry(input.clone()).or_default() += 1;
+        }
+    }
+    counts
+}
+
+fn task_dependencies(workflow: &Workflow) -> (Vec<usize>, Vec<Vec<usize>>) {
+    let task_ids = workflow
+        .tasks
+        .iter()
+        .enumerate()
+        .map(|(index, task)| (task.id.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut remaining_deps = vec![0usize; workflow.tasks.len()];
+    let mut dependents = vec![Vec::new(); workflow.tasks.len()];
+    for (index, task) in workflow.tasks.iter().enumerate() {
+        for input in &task.inputs {
+            let dependency = TaskId::new(input.as_str());
+            if let Some(&dependency_index) = task_ids.get(&dependency) {
+                remaining_deps[index] += 1;
+                dependents[dependency_index].push(index);
+            }
+        }
+    }
+    (remaining_deps, dependents)
+}
+
+fn workflow_event_error(error: &apalis::prelude::BoxDynError) -> OxideError {
+    if let Some(error) = error.downcast_ref::<OxideError>() {
+        return error.clone();
+    }
+    OxideError::Internal
+}
+
+fn evict_consumed_artifacts(workflow: &Workflow, state: &mut WorkflowState, task: &TaskSpec) {
+    for input in &task.inputs {
+        let Some(count) = state.consumer_counts.get_mut(input) else {
+            continue;
+        };
+        *count -= 1;
+        if *count == 0 && !workflow.outputs.iter().any(|output| output.from == *input) {
+            state.store.remove(input);
         }
     }
 }
@@ -265,6 +494,8 @@ pub(super) fn check_resource_limit_entrypoint(limits: &ResourceLimits) -> Result
         limits.max_pixels,
         limits.max_output_bytes,
         limits.timeout_ms,
+        limits.retry_attempts.map(|value| value as u64),
+        limits.rate_limit_per_second,
     ];
 
     if numeric_limits.into_iter().flatten().any(|limit| limit == 0) || limits.max_pages == Some(0) {

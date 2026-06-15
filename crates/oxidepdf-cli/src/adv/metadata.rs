@@ -1,4 +1,4 @@
-pub(crate) fn run_metadata(
+pub(crate) async fn run_metadata(
     command: MetadataCommand,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -16,7 +16,8 @@ pub(crate) fn run_metadata(
             stdin,
             args.force,
             stdout,
-        ),
+        )
+        .await,
         MetadataCommand::Set(args) => execute_and_write_workflow(
             one_input_workflow(
                 args.input,
@@ -31,7 +32,8 @@ pub(crate) fn run_metadata(
             stdin,
             args.force,
             stdout,
-        ),
+        )
+        .await,
         MetadataCommand::Delete(args) => execute_and_write_workflow(
             one_input_workflow(
                 args.input,
@@ -46,7 +48,8 @@ pub(crate) fn run_metadata(
             stdin,
             args.force,
             stdout,
-        ),
+        )
+        .await,
         MetadataCommand::Validate(args) => execute_and_write_workflow(
             one_input_workflow(
                 args.input,
@@ -59,7 +62,8 @@ pub(crate) fn run_metadata(
             stdin,
             args.force,
             stdout,
-        ),
+        )
+        .await,
     }
 }
 

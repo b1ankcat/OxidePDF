@@ -10,8 +10,8 @@ use common::*;
 use oxidepdf_cli::{command, run, run_with_io};
 use std::fs;
 
-#[test]
-fn compare_command_writes_json_report() {
+#[tokio::test]
+async fn compare_command_writes_json_report() {
     let dir = temp_dir("compare_command_writes_json_report");
     let output = dir.join("compare.json");
     let mut stdout = Vec::new();
@@ -30,7 +30,8 @@ fn compare_command_writes_json_report() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 0);
     assert_eq!(stdout, b"");
@@ -41,8 +42,8 @@ fn compare_command_writes_json_report() {
     assert_eq!(report["differences"], serde_json::json!([]));
 }
 
-#[test]
-fn compare_command_writes_visual_diff_png() {
+#[tokio::test]
+async fn compare_command_writes_visual_diff_png() {
     let dir = temp_dir("compare_command_writes_visual_diff_png");
     let left = dir.join("left.pdf");
     let right = dir.join("right.pdf");
@@ -67,7 +68,8 @@ fn compare_command_writes_visual_diff_png() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 0);
     assert_eq!(stdout, b"");

@@ -1,4 +1,4 @@
-pub(crate) fn run_attach(
+pub(crate) async fn run_attach(
     command: AttachCommand,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -31,7 +31,7 @@ pub(crate) fn run_attach(
                     description: args.description,
                 })),
             );
-            execute_and_write_workflow(workflow, stdin, args.force, stdout)
+            execute_and_write_workflow(workflow, stdin, args.force, stdout).await
         }
         AttachCommand::List(args) => execute_and_write_workflow(
             one_input_workflow(
@@ -45,7 +45,8 @@ pub(crate) fn run_attach(
             stdin,
             args.force,
             stdout,
-        ),
+        )
+        .await,
         AttachCommand::Extract(args) => execute_and_write_workflow(
             one_input_workflow(
                 args.input,
@@ -58,7 +59,8 @@ pub(crate) fn run_attach(
             stdin,
             args.force,
             stdout,
-        ),
+        )
+        .await,
         AttachCommand::Delete(args) => execute_and_write_workflow(
             one_input_workflow(
                 args.input,
@@ -73,7 +75,7 @@ pub(crate) fn run_attach(
             stdin,
             args.force,
             stdout,
-        ),
+        )
+        .await,
     }
 }
-

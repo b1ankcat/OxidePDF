@@ -10,8 +10,8 @@ use common::*;
 use oxidepdf_cli::{command, run, run_with_io};
 use std::fs;
 
-#[test]
-fn workflow_img2pdf_writes_parseable_pdf() {
+#[tokio::test]
+async fn workflow_img2pdf_writes_parseable_pdf() {
     let dir = temp_dir("workflow_img2pdf_writes_parseable_pdf");
     let workflow = dir.join("workflow.yaml");
     let output = dir.join("image.pdf");
@@ -48,7 +48,8 @@ fn workflow_img2pdf_writes_parseable_pdf() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 0);
     assert_eq!(stdout, b"");
@@ -56,8 +57,8 @@ fn workflow_img2pdf_writes_parseable_pdf() {
     assert_eq!(pdf_page_count(&output), 1);
 }
 
-#[test]
-fn workflow_extract_text_writes_plain_text() {
+#[tokio::test]
+async fn workflow_extract_text_writes_plain_text() {
     let dir = temp_dir("workflow_extract_text_writes_plain_text");
     let workflow = dir.join("workflow.yaml");
     let output = dir.join("extracted.txt");
@@ -94,7 +95,8 @@ fn workflow_extract_text_writes_plain_text() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 0);
     assert_eq!(stdout, b"");

@@ -8,7 +8,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-pub(crate) fn execute_and_write_workflow(
+pub(crate) async fn execute_and_write_workflow(
     workflow: Workflow,
     stdin: &[u8],
     force: bool,
@@ -16,7 +16,9 @@ pub(crate) fn execute_and_write_workflow(
 ) -> Result<(), CliError> {
     let (store, _) = load_inputs(&workflow, stdin)?;
     let runner = PdfOperatorRunner::with_limits(workflow.limits.clone());
-    let result = execute_workflow(&workflow, store, &runner).map_err(CliError::Core)?;
+    let result = execute_workflow(&workflow, store, runner)
+        .await
+        .map_err(CliError::Core)?;
     let _ = write_outputs_with_stats(&workflow, &result.store, force, stdout)?;
     Ok(())
 }

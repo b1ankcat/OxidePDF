@@ -10,8 +10,8 @@ use common::*;
 use oxidepdf_cli::{command, run, run_with_io};
 use std::fs;
 
-#[test]
-fn extract_text_command_writes_plain_text() {
+#[tokio::test]
+async fn extract_text_command_writes_plain_text() {
     let dir = temp_dir("extract_text_command_writes_plain_text");
     let output = dir.join("extracted.txt");
     let mut stdout = Vec::new();
@@ -29,7 +29,8 @@ fn extract_text_command_writes_plain_text() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 0);
     assert_eq!(stdout, b"");
@@ -37,8 +38,8 @@ fn extract_text_command_writes_plain_text() {
     assert!(!fs::read_to_string(output).unwrap().trim().is_empty());
 }
 
-#[test]
-fn extract_text_command_rejects_pdf_without_text_layer() {
+#[tokio::test]
+async fn extract_text_command_rejects_pdf_without_text_layer() {
     let dir = temp_dir("extract_text_command_rejects_pdf_without_text_layer");
     let input = dir.join("image.pdf");
     let output = dir.join("extracted.txt");
@@ -58,7 +59,8 @@ fn extract_text_command_rejects_pdf_without_text_layer() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 3);
     assert_eq!(stdout, b"");

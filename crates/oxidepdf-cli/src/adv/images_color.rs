@@ -1,4 +1,4 @@
-pub(crate) fn run_image(
+pub(crate) async fn run_image(
     command: ImageCommand,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -14,7 +14,8 @@ pub(crate) fn run_image(
             stdin,
             args.force,
             stdout,
-        ),
+        )
+        .await,
         ImageCommand::Add(args) => {
             reject_shared_stdin_inputs(&args.input, &args.image)?;
             execute_and_write_workflow(
@@ -33,6 +34,7 @@ pub(crate) fn run_image(
                 args.force,
                 stdout,
             )
+            .await
         }
         ImageCommand::Replace(args) => {
             reject_shared_stdin_inputs(&args.input, &args.image)?;
@@ -52,6 +54,7 @@ pub(crate) fn run_image(
                 args.force,
                 stdout,
             )
+            .await
         }
         ImageCommand::Delete(args) => execute_and_write_workflow(
             one_input_workflow(
@@ -67,7 +70,8 @@ pub(crate) fn run_image(
             stdin,
             args.force,
             stdout,
-        ),
+        )
+        .await,
         ImageCommand::Extract(args) => execute_and_write_workflow(
             one_input_workflow(
                 args.input,
@@ -80,11 +84,12 @@ pub(crate) fn run_image(
             stdin,
             args.force,
             stdout,
-        ),
+        )
+        .await,
     }
 }
 
-pub(crate) fn run_color(
+pub(crate) async fn run_color(
     command: ColorCommand,
     stdin: &[u8],
     stdout: &mut impl Write,
@@ -104,7 +109,7 @@ pub(crate) fn run_color(
             },
             stdin,
             stdout,
-        ),
+        ).await,
         ColorCommand::Invert(args) => run_color_edit(
             args.input,
             args.output,
@@ -119,7 +124,7 @@ pub(crate) fn run_color(
             },
             stdin,
             stdout,
-        ),
+        ).await,
         ColorCommand::Replace(args) => run_color_edit(
             args.input,
             args.output,
@@ -134,11 +139,11 @@ pub(crate) fn run_color(
             },
             stdin,
             stdout,
-        ),
+        ).await,
     }
 }
 
-pub(crate) fn run_color_edit(
+pub(crate) async fn run_color_edit(
     input: PathBuf,
     output: PathBuf,
     force: bool,
@@ -156,7 +161,7 @@ pub(crate) fn run_color_edit(
         stdin,
         force,
         stdout,
-    )
+    ).await
 }
 
 pub(crate) fn parse_rgb(value: &str) -> Result<[f32; 3], CliError> {

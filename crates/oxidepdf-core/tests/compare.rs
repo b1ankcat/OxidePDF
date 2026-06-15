@@ -137,8 +137,8 @@ fn compare_report_makes_page_count_mismatch_explicit() {
         && difference.right == serde_json::json!(2)));
 }
 
-#[test]
-fn compare_workflow_produces_text_report() {
+#[tokio::test]
+async fn compare_workflow_produces_text_report() {
     let pdf = fixture_pdf();
     let workflow = workflow_from_json(
         r#"
@@ -164,7 +164,7 @@ fn compare_workflow_produces_text_report() {
     store.insert(artifact_ref("right"), Artifact::pdf(pdf).unwrap());
     let runner = PdfOperatorRunner::default();
 
-    let result = execute_workflow(&workflow, store, &runner).unwrap();
+    let result = execute_workflow(&workflow, store, runner).await.unwrap();
 
     match result.store.get(&artifact_ref("compare")).unwrap() {
         Artifact::Text(artifact) => {

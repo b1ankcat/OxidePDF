@@ -5,14 +5,15 @@ use crate::OxideError;
 use crate::operators::{
     run_pdf_compare, run_pdf_edit, run_pdf_inspect, run_pdf_security, run_pdf_sign,
 };
+use std::future::Future;
+use std::pin::Pin;
+
+pub type OperatorFuture = Pin<Box<dyn Future<Output = Result<Artifact, OxideError>> + Send>>;
 
 /// Operator implementation boundary used by the executor.
-///
-/// `run` takes `&self` and the trait requires `Sync` so the executor can invoke
-/// it concurrently across the tasks of a single dependency layer.
-pub trait OperatorRunner: Sync {
+pub trait OperatorRunner: Sync + Send + 'static {
     /// Runs a task against resolved input artifacts.
-    fn run(&self, task: &TaskSpec, inputs: &[Artifact]) -> Result<Artifact, OxideError>;
+    fn run(&self, task: TaskSpec, inputs: Vec<Artifact>) -> OperatorFuture;
 }
 
 /// Operator runner for object-level PDF page editing.
@@ -29,15 +30,18 @@ impl PdfOperatorRunner {
 }
 
 impl OperatorRunner for PdfOperatorRunner {
-    fn run(&self, task: &TaskSpec, inputs: &[Artifact]) -> Result<Artifact, OxideError> {
-        let artifact = match &task.op {
-            OperatorSpec::PdfEdit(options) => run_pdf_edit(options, inputs, &self.limits),
-            OperatorSpec::PdfInspect(options) => run_pdf_inspect(options, inputs, &self.limits),
-            OperatorSpec::PdfSecurity(options) => run_pdf_security(options, inputs, &self.limits),
-            OperatorSpec::PdfCompare(options) => run_pdf_compare(options, inputs, &self.limits),
-            OperatorSpec::PdfSign(options) => run_pdf_sign(options, inputs, &self.limits),
-        }?;
-        enforce_artifact_output_bytes(&artifact, &self.limits)?;
-        Ok(artifact)
+    fn run(&self, task: TaskSpec, inputs: Vec<Artifact>) -> OperatorFuture {
+        let limits = self.limits.clone();
+        Box::pin(async move {
+            let artifact = match &task.op {
+                OperatorSpec::PdfEdit(options) => run_pdf_edit(options, &inputs, &limits),
+                OperatorSpec::PdfInspect(options) => run_pdf_inspect(options, &inputs, &limits),
+                OperatorSpec::PdfSecurity(options) => run_pdf_security(options, &inputs, &limits),
+                OperatorSpec::PdfCompare(options) => run_pdf_compare(options, &inputs, &limits),
+                OperatorSpec::PdfSign(options) => run_pdf_sign(options, &inputs, &limits),
+            }?;
+            enforce_artifact_output_bytes(&artifact, &limits)?;
+            Ok(artifact)
+        })
     }
 }

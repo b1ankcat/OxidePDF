@@ -10,13 +10,13 @@ use common::*;
 use oxidepdf_cli::{command, run, run_with_io};
 use std::fs;
 
-#[test]
-fn clap_definition_is_valid() {
+#[tokio::test]
+async fn clap_definition_is_valid() {
     command().debug_assert();
 }
 
-#[test]
-fn help_mentions_project_name() {
+#[tokio::test]
+async fn help_mentions_project_name() {
     let mut help = Vec::new();
     command().write_long_help(&mut help).unwrap();
     let help = String::from_utf8(help).unwrap();
@@ -28,8 +28,8 @@ fn help_mentions_project_name() {
     assert!(help.contains("sign"));
 }
 
-#[test]
-fn command_tree_has_useful_help_for_commands_and_arguments() {
+#[tokio::test]
+async fn command_tree_has_useful_help_for_commands_and_arguments() {
     fn assert_help(command: &clap::Command, path: String) {
         if command.is_hide_set() {
             return;
@@ -68,8 +68,8 @@ fn command_tree_has_useful_help_for_commands_and_arguments() {
     assert_help(&command, String::new());
 }
 
-#[test]
-fn bash_completion_can_be_written_to_stdout() {
+#[tokio::test]
+async fn bash_completion_can_be_written_to_stdout() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
@@ -78,7 +78,8 @@ fn bash_completion_can_be_written_to_stdout() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     let completion = String::from_utf8(stdout).unwrap();
 
     assert_eq!(code, 0);
@@ -88,8 +89,8 @@ fn bash_completion_can_be_written_to_stdout() {
     assert!(completion.contains("oxidepdf__subcmd__pdf_sign"));
 }
 
-#[test]
-fn bash_completion_can_be_written_to_file() {
+#[tokio::test]
+async fn bash_completion_can_be_written_to_file() {
     let dir = temp_dir("bash_completion_can_be_written_to_file");
     let output = dir.join("oxidepdf.bash");
     let mut stdout = Vec::new();
@@ -106,7 +107,8 @@ fn bash_completion_can_be_written_to_file() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 0);
     assert_eq!(stdout, b"");
@@ -115,8 +117,8 @@ fn bash_completion_can_be_written_to_file() {
     assert!(completion.contains("_oxidepdf()"));
 }
 
-#[test]
-fn bash_completion_rejects_conflicting_destinations() {
+#[tokio::test]
+async fn bash_completion_rejects_conflicting_destinations() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
@@ -132,7 +134,8 @@ fn bash_completion_rejects_conflicting_destinations() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 2);
     assert_eq!(stdout, b"");
@@ -143,20 +146,20 @@ fn bash_completion_rejects_conflicting_destinations() {
     );
 }
 
-#[test]
-fn version_uses_package_version() {
+#[tokio::test]
+async fn version_uses_package_version() {
     let command = command();
     let version = command.get_version().unwrap();
 
     assert_eq!(version, env!("CARGO_PKG_VERSION"));
 }
 
-#[test]
-fn help_returns_success_exit_code() {
+#[tokio::test]
+async fn help_returns_success_exit_code() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
-    let code = run_with_io(["oxidepdf", "--help"], [], &mut stdout, &mut stderr);
+    let code = run_with_io(["oxidepdf", "--help"], [], &mut stdout, &mut stderr).await;
 
     assert_eq!(code, 0);
     assert_eq!(stdout, b"");
@@ -167,12 +170,12 @@ fn help_returns_success_exit_code() {
     );
 }
 
-#[test]
-fn invalid_arguments_return_usage_exit_code() {
+#[tokio::test]
+async fn invalid_arguments_return_usage_exit_code() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
-    let code = run_with_io(["oxidepdf", "--missing"], [], &mut stdout, &mut stderr);
+    let code = run_with_io(["oxidepdf", "--missing"], [], &mut stdout, &mut stderr).await;
 
     assert_eq!(code, 2);
     assert_eq!(stdout, b"");
@@ -183,8 +186,8 @@ fn invalid_arguments_return_usage_exit_code() {
     );
 }
 
-#[test]
-fn removed_legacy_top_level_commands_are_not_aliases() {
+#[tokio::test]
+async fn removed_legacy_top_level_commands_are_not_aliases() {
     for legacy_command in [
         "merge",
         "split",
@@ -229,7 +232,8 @@ fn removed_legacy_top_level_commands_are_not_aliases() {
             [],
             &mut stdout,
             &mut stderr,
-        );
+        )
+        .await;
 
         assert_eq!(code, 2, "{legacy_command} should not remain as an alias");
         assert_eq!(stdout, b"");
@@ -242,8 +246,8 @@ fn removed_legacy_top_level_commands_are_not_aliases() {
     }
 }
 
-#[test]
-fn run_workflow_file_writes_input_artifact_to_output() {
+#[tokio::test]
+async fn run_workflow_file_writes_input_artifact_to_output() {
     let dir = temp_dir("run_workflow_file_writes_input_artifact_to_output");
     let workflow = dir.join("workflow.yaml");
     let output = dir.join("out.bin");
@@ -275,7 +279,8 @@ fn run_workflow_file_writes_input_artifact_to_output() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 0);
     assert_eq!(stdout, b"");
@@ -283,8 +288,8 @@ fn run_workflow_file_writes_input_artifact_to_output() {
     assert_eq!(fs::read(output).unwrap(), b"input bytes");
 }
 
-#[test]
-fn run_workflow_input_stdin_and_output_stdout_keep_diagnostics_on_stderr() {
+#[tokio::test]
+async fn run_workflow_input_stdin_and_output_stdout_keep_diagnostics_on_stderr() {
     let dir = temp_dir("run_workflow_input_stdin_and_output_stdout");
     let workflow_path = dir.join("workflow.yaml");
     let workflow = br#"
@@ -312,15 +317,16 @@ fn run_workflow_input_stdin_and_output_stdout_keep_diagnostics_on_stderr() {
         b"stdin bytes",
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 0);
     assert_eq!(stdout, b"stdin bytes");
     assert_eq!(stderr, b"");
 }
 
-#[test]
-fn run_workflow_document_can_be_read_from_stdin() {
+#[tokio::test]
+async fn run_workflow_document_can_be_read_from_stdin() {
     let workflow = br#"
         version: 1
         inputs: []
@@ -335,15 +341,16 @@ fn run_workflow_document_can_be_read_from_stdin() {
         workflow,
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 0);
     assert_eq!(stdout, b"");
     assert_eq!(stderr, b"");
 }
 
-#[test]
-fn pdf_parse_error_returns_input_exit_code_without_output() {
+#[tokio::test]
+async fn pdf_parse_error_returns_input_exit_code_without_output() {
     let dir = temp_dir("pdf_parse_error_returns_input_exit_code");
     let workflow = dir.join("workflow.yaml");
     let output = dir.join("out.bin");
@@ -382,7 +389,8 @@ fn pdf_parse_error_returns_input_exit_code_without_output() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 3);
     assert_eq!(stdout, b"");
@@ -392,8 +400,8 @@ fn pdf_parse_error_returns_input_exit_code_without_output() {
     assert!(stderr.contains("expected PDF"));
 }
 
-#[test]
-fn workflow_enforces_total_input_size_limit() {
+#[tokio::test]
+async fn workflow_enforces_total_input_size_limit() {
     let dir = temp_dir("workflow_enforces_total_input_size_limit");
     let workflow = dir.join("workflow.yaml");
     let output = dir.join("out.bin");
@@ -431,7 +439,8 @@ fn workflow_enforces_total_input_size_limit() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 5);
     assert_eq!(stdout, b"");
@@ -443,8 +452,8 @@ fn workflow_enforces_total_input_size_limit() {
     );
 }
 
-#[test]
-fn workflow_enforces_output_size_limit() {
+#[tokio::test]
+async fn workflow_enforces_output_size_limit() {
     let dir = temp_dir("workflow_enforces_output_size_limit");
     let workflow = dir.join("workflow.yaml");
     let output = dir.join("out.bin");
@@ -478,7 +487,8 @@ fn workflow_enforces_output_size_limit() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 5);
     assert_eq!(stdout, b"");
@@ -490,8 +500,8 @@ fn workflow_enforces_output_size_limit() {
     );
 }
 
-#[test]
-fn error_output_redacts_sensitive_material_and_paths() {
+#[tokio::test]
+async fn error_output_redacts_sensitive_material_and_paths() {
     let dir = temp_dir("error_output_redacts_sensitive_material_and_paths");
     let secret_dir = dir.join("secret-client-certificates");
     fs::create_dir_all(&secret_dir).unwrap();
@@ -524,7 +534,8 @@ fn error_output_redacts_sensitive_material_and_paths() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
     let stderr = String::from_utf8(stderr).unwrap();
 
     assert_eq!(code, 3);
@@ -537,8 +548,8 @@ fn error_output_redacts_sensitive_material_and_paths() {
     assert!(!stderr.contains("stack backtrace"));
 }
 
-#[test]
-fn invalid_workflow_returns_usage_exit_code() {
+#[tokio::test]
+async fn invalid_workflow_returns_usage_exit_code() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
@@ -547,15 +558,16 @@ fn invalid_workflow_returns_usage_exit_code() {
         b"version: 1\ninputs: []\ntasks: []\n",
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 2);
     assert_eq!(stdout, b"");
     assert!(String::from_utf8(stderr).unwrap().contains("workflow"));
 }
 
-#[test]
-fn missing_input_file_returns_input_exit_code() {
+#[tokio::test]
+async fn missing_input_file_returns_input_exit_code() {
     let dir = temp_dir("missing_input_file_returns_input_exit_code");
     let workflow = dir.join("workflow.yaml");
     fs::write(
@@ -585,15 +597,16 @@ fn missing_input_file_returns_input_exit_code() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 3);
     assert_eq!(stdout, b"");
     assert!(String::from_utf8(stderr).unwrap().contains("input"));
 }
 
-#[test]
-fn output_file_is_not_overwritten_without_force() {
+#[tokio::test]
+async fn output_file_is_not_overwritten_without_force() {
     let dir = temp_dir("output_file_is_not_overwritten_without_force");
     let workflow = dir.join("workflow.yaml");
     let output = dir.join("out.bin");
@@ -626,7 +639,8 @@ fn output_file_is_not_overwritten_without_force() {
         [],
         &mut stdout,
         &mut stderr,
-    );
+    )
+    .await;
 
     assert_eq!(code, 2);
     assert_eq!(fs::read(output).unwrap(), b"existing");
