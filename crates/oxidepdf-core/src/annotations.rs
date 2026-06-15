@@ -43,6 +43,12 @@ pub fn inspect_pdf_annotations(
     _options: &AnnotationInspectOptions,
 ) -> Result<TextArtifact, OxideError> {
     let document = load_pdf(input)?;
+    inspect_annotations_on_document(&document)
+}
+
+pub(crate) fn inspect_annotations_on_document(
+    document: &lopdf::Document,
+) -> Result<TextArtifact, OxideError> {
     let mut annotations = Vec::new();
     for (page_number, page_id) in document.get_pages() {
         let page = document
@@ -104,7 +110,7 @@ pub fn edit_pdf_annotations(
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
     Ok(PdfArtifact {
-        bytes: bytes.into(),
+        bytes: crate::ArtifactBytes::from_vec(bytes)?,
     })
 }
 

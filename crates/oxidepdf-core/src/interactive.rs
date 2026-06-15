@@ -26,7 +26,7 @@ pub fn remove_pdf_interactive_elements(
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
     Ok(PdfArtifact {
-        bytes: bytes.into(),
+        bytes: crate::ArtifactBytes::from_vec(bytes)?,
     })
 }
 

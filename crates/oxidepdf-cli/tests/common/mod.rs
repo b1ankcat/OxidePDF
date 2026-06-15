@@ -12,8 +12,11 @@ use p256::pkcs8::EncodePrivateKey;
 use std::fs;
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use x509_cert::builder::Builder;
+
+static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub fn temp_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("oxidepdf_cli_{}_{}", name, std::process::id()));
@@ -187,7 +190,7 @@ pub fn simple_svg() -> &'static [u8] {
 
 pub fn image_only_pdf() -> Vec<u8> {
     oxidepdf_core::image_artifacts_to_pdf(
-        &[Artifact::image(fixture_jpg_bytes())],
+        &[Artifact::image(fixture_jpg_bytes()).unwrap()],
         &ImageToPdfOptions::default(),
         &Default::default(),
     )
@@ -207,7 +210,8 @@ pub fn fixture_pdf_bytes() -> Vec<u8> {
 fn write_fixture_file(name: &str, bytes: Vec<u8>) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("oxidepdf_cli_fixtures_{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(name);
+    let counter = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path = dir.join(format!("{counter}_{name}"));
     fs::write(&path, bytes).unwrap();
     path.canonicalize().unwrap()
 }

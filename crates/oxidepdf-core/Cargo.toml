@@ -42,6 +42,7 @@ x509-cert.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 der.workspace = true
 image.workspace = true
 lopdf.workspace = true
@@ -51,3 +52,7 @@ serde_json.workspace = true
 serde-saphyr.workspace = true
 spki.workspace = true
 x509-cert.workspace = true
+
+[[bench]]
+name = "workflow_hot_paths"
+harness = false

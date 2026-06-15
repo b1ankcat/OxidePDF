@@ -82,7 +82,7 @@ fn compress_pdf_merges_duplicate_image_resources_without_reencoding() {
 fn compress_pdf_lossless_keeps_jpeg_image_streams() {
     let image = fixture_jpg();
     let pdf = image_artifacts_to_pdf(
-        &[Artifact::image(image)],
+        &[Artifact::image(image).unwrap()],
         &ImageToPdfOptions {
             layout: Some("original_size".to_owned()),
         },

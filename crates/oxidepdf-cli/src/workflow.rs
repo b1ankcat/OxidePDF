@@ -1,10 +1,21 @@
 use super::*;
+use serde_json::json;
+use std::time::Instant;
 
 pub(crate) fn run_workflow(
     args: RunArgs,
     stdin: &[u8],
     stdout: &mut impl Write,
 ) -> Result<(), CliError> {
+    if args.metrics_output.as_deref().is_some_and(is_stdio) {
+        return Err(CliError::Workflow(
+            "metrics output cannot be '-'".to_owned(),
+        ));
+    }
+    if let Some(path) = &args.metrics_output {
+        check_metrics_output_path(path, args.force)?;
+    }
+
     let workflow_from_stdin = is_stdio(&args.workflow);
     let workflow_bytes = read_path_or_stdin(&args.workflow, stdin).map_err(CliError::Input)?;
     let workflow = parse_workflow(&workflow_bytes, &args.workflow)?;
@@ -25,10 +36,79 @@ pub(crate) fn run_workflow(
         ));
     }
 
-    let store = load_inputs(&workflow, stdin)?;
+    let (store, input_bytes) = load_inputs(&workflow, stdin)?;
     let runner = PdfOperatorRunner::with_limits(workflow.limits.clone());
+    let started_at = Instant::now();
     let result = execute_workflow(&workflow, store, &runner).map_err(CliError::Core)?;
-    write_outputs(&workflow, &result.store, args.force, stdout)?;
+    let output_bytes = write_outputs_with_stats(&workflow, &result.store, args.force, stdout)?;
+    let elapsed_ms = started_at.elapsed().as_millis() as u64;
+
+    if let Some(path) = args.metrics_output {
+        let peak_rss_bytes = linux_peak_rss_bytes()?;
+        let metrics = json!({
+            "version": 1,
+            "elapsed_ms": elapsed_ms,
+            "input_bytes": input_bytes,
+            "output_bytes": output_bytes,
+            "task_count": workflow.tasks.len() as u64,
+            "peak_rss_bytes": peak_rss_bytes,
+            "peak_rss_source": "/proc/self/status:VmHWM",
+        });
+        write_metrics_output(&path, &metrics, args.force)?;
+    }
 
     Ok(())
+}
+
+fn write_metrics_output(
+    path: &Path,
+    metrics: &serde_json::Value,
+    force: bool,
+) -> Result<(), CliError> {
+    check_metrics_output_path(path, force)?;
+    let bytes =
+        serde_json::to_vec_pretty(metrics).map_err(|_| CliError::Core(OxideError::Internal))?;
+    fs::write(path, bytes).map_err(CliError::Io)
+}
+
+fn check_metrics_output_path(path: &Path, force: bool) -> Result<(), CliError> {
+    if path.exists() && !force {
+        return Err(CliError::Workflow(format!(
+            "metrics output file already exists: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_peak_rss_bytes() -> Result<u64, CliError> {
+    let status = fs::read_to_string("/proc/self/status")
+        .map_err(|_| CliError::Core(OxideError::ArtifactStorage))?;
+    for line in status.lines() {
+        let Some(rest) = line.strip_prefix("VmHWM:") else {
+            continue;
+        };
+        let mut parts = rest.split_whitespace();
+        let value = parts
+            .next()
+            .ok_or(CliError::Core(OxideError::ArtifactStorage))?
+            .parse::<u64>()
+            .map_err(|_| CliError::Core(OxideError::ArtifactStorage))?;
+        let unit = parts
+            .next()
+            .ok_or(CliError::Core(OxideError::ArtifactStorage))?;
+        if unit != "kB" {
+            return Err(CliError::Core(OxideError::ArtifactStorage));
+        }
+        return value
+            .checked_mul(1024)
+            .ok_or(CliError::Core(OxideError::ArtifactStorage));
+    }
+    Err(CliError::Core(OxideError::ArtifactStorage))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn linux_peak_rss_bytes() -> Result<u64, CliError> {
+    Err(CliError::Core(OxideError::ArtifactStorage))
 }

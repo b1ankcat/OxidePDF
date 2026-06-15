@@ -47,8 +47,14 @@ pub fn inspect_pdf_attachments(
     _options: &AttachmentInspectOptions,
 ) -> Result<TextArtifact, OxideError> {
     let document = load_pdf(input)?;
+    inspect_attachments_on_document(&document)
+}
+
+pub(crate) fn inspect_attachments_on_document(
+    document: &lopdf::Document,
+) -> Result<TextArtifact, OxideError> {
     let report = AttachmentReport {
-        attachments: read_attachment_reports(&document)?,
+        attachments: read_attachment_reports(document)?,
     };
     let text = serde_json::to_string_pretty(&report).map_err(|_| OxideError::Internal)?;
     Ok(TextArtifact {
@@ -79,7 +85,7 @@ pub fn edit_pdf_attachment_artifacts(
             let bytes = save_pdf(document)?;
             enforce_output_bytes(bytes.len(), limits)?;
             Ok(PdfArtifact {
-                bytes: bytes.into(),
+                bytes: crate::ArtifactBytes::from_vec(bytes)?,
             })
         }
         AttachmentEditAction::Delete => {
@@ -96,7 +102,7 @@ pub fn edit_pdf_attachment_artifacts(
             let bytes = save_pdf(document)?;
             enforce_output_bytes(bytes.len(), limits)?;
             Ok(PdfArtifact {
-                bytes: bytes.into(),
+                bytes: crate::ArtifactBytes::from_vec(bytes)?,
             })
         }
     }
@@ -112,7 +118,7 @@ pub fn extract_pdf_attachment(
     let attachment = find_attachment_stream(&document, name, limits)?;
     enforce_output_bytes(attachment.len(), limits)?;
     Ok(BytesArtifact {
-        bytes: attachment.into(),
+        bytes: crate::ArtifactBytes::from_vec(attachment)?,
     })
 }
 

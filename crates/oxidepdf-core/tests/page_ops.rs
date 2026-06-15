@@ -13,7 +13,8 @@ use oxidepdf_core::*;
 fn merge_pdf_artifacts_combines_pages() {
     let pdf = fixture_pdf();
 
-    let merged = merge_pdf_artifacts(&[Artifact::pdf(pdf), Artifact::pdf(pdf)]).unwrap();
+    let merged =
+        merge_pdf_artifacts(&[Artifact::pdf(pdf).unwrap(), Artifact::pdf(pdf).unwrap()]).unwrap();
     let document = lopdf::Document::load_mem(&merged.bytes).unwrap();
 
     assert_eq!(document.get_pages().len(), 6);
@@ -24,7 +25,7 @@ fn merge_pdf_artifacts_enforces_input_and_page_limits() {
     let pdf = fixture_pdf();
 
     let input_err = merge_pdf_artifacts_with_limits(
-        &[Artifact::pdf(pdf), Artifact::pdf(pdf)],
+        &[Artifact::pdf(pdf).unwrap(), Artifact::pdf(pdf).unwrap()],
         &ResourceLimits {
             max_input_bytes: Some(1),
             ..ResourceLimits::default()
@@ -39,7 +40,7 @@ fn merge_pdf_artifacts_enforces_input_and_page_limits() {
     );
 
     let page_err = merge_pdf_artifacts_with_limits(
-        &[Artifact::pdf(pdf), Artifact::pdf(pdf)],
+        &[Artifact::pdf(pdf).unwrap(), Artifact::pdf(pdf).unwrap()],
         &ResourceLimits {
             max_pages: Some(5),
             ..ResourceLimits::default()

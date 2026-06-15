@@ -83,7 +83,11 @@ async fn run(mut mp: Multipart) -> Response {
         let id = input.id.as_str().to_string();
         match uploads.remove(&id) {
             Some(b) => {
-                store.insert(input.id.clone(), Artifact::bytes(b));
+                let artifact = match Artifact::bytes(b) {
+                    Ok(artifact) => artifact,
+                    Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+                };
+                store.insert(input.id.clone(), artifact);
             }
             None => {
                 return err(

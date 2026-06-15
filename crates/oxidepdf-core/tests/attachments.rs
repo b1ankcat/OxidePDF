@@ -13,7 +13,10 @@ use oxidepdf_core::*;
 fn attachments_add_list_extract_and_delete() {
     let pdf = empty_page_pdf();
     let edited = edit_pdf_attachment_artifacts(
-        &[Artifact::pdf(&pdf), Artifact::bytes(b"attachment bytes")],
+        &[
+            Artifact::pdf(&pdf).unwrap(),
+            Artifact::bytes(b"attachment bytes").unwrap(),
+        ],
         &AttachmentEditOptions {
             action: AttachmentEditAction::Add,
             name: Some("note.txt".to_owned()),
@@ -36,7 +39,7 @@ fn attachments_add_list_extract_and_delete() {
     assert_eq!(extracted.bytes.as_slice(), b"attachment bytes");
 
     let deleted = edit_pdf_attachment_artifacts(
-        &[Artifact::pdf(&edited.bytes)],
+        &[Artifact::pdf(&edited.bytes).unwrap()],
         &AttachmentEditOptions {
             action: AttachmentEditAction::Delete,
             name: Some("note.txt".to_owned()),

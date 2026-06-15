@@ -48,7 +48,13 @@ pub fn inspect_pdf_outline(
     _options: &OutlineInspectOptions,
 ) -> Result<TextArtifact, OxideError> {
     let document = load_pdf(input)?;
-    let tree = read_outline_tree(&document)?;
+    inspect_outline_on_document(&document)
+}
+
+pub(crate) fn inspect_outline_on_document(
+    document: &lopdf::Document,
+) -> Result<TextArtifact, OxideError> {
+    let tree = read_outline_tree(document)?;
     let text = serde_json::to_string_pretty(&tree).map_err(|_| OxideError::Internal)?;
     Ok(TextArtifact {
         text,
@@ -67,7 +73,7 @@ pub fn edit_pdf_outline(
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
     Ok(PdfArtifact {
-        bytes: bytes.into(),
+        bytes: crate::ArtifactBytes::from_vec(bytes)?,
     })
 }
 

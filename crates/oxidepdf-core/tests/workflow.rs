@@ -434,7 +434,7 @@ fn linear_workflow_executes_tasks_in_dependency_order() {
             "#,
     );
     let mut store = ArtifactStore::new();
-    store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
+    store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
     let runner = RecordingRunner::default();
 
     let result = execute_workflow(&workflow, store, &runner).unwrap();
@@ -442,7 +442,7 @@ fn linear_workflow_executes_tasks_in_dependency_order() {
     assert_eq!(runner.executed(), ["rotate", "render"]);
     assert_eq!(
         result.store.get(&artifact_ref("render")),
-        Some(&Artifact::bytes(b"render"))
+        Some(&Artifact::bytes(b"render").unwrap())
     );
     assert_eq!(result.plan.task_order[0].as_str(), "rotate");
     assert_eq!(result.plan.task_order[1].as_str(), "render");
@@ -499,7 +499,7 @@ fn intermediate_artifact_evicted_after_last_consumer() {
             "#,
     );
     let mut store = ArtifactStore::new();
-    store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
+    store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
     let runner = RecordingRunner::default();
 
     let result = execute_workflow(&workflow, store, &runner).unwrap();
@@ -538,7 +538,7 @@ fn output_referenced_artifact_is_not_evicted() {
             "#,
     );
     let mut store = ArtifactStore::new();
-    store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
+    store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
     let runner = RecordingRunner::default();
 
     let result = execute_workflow(&workflow, store, &runner).unwrap();
@@ -715,7 +715,7 @@ fn task_failure_stops_downstream_execution() {
             "#,
     );
     let mut store = ArtifactStore::new();
-    store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
+    store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
     let expected = OxideError::InvalidInput {
         reason: "runner failed".to_owned(),
     };
@@ -894,7 +894,7 @@ fn pdf_operator_runner_handles_page_editing_tasks() {
                 op: OperatorSpec::PdfEdit(PdfEditOptions::Merge(MergeOptions {})),
                 inputs: vec![artifact_ref("a"), artifact_ref("b")],
             },
-            &[Artifact::pdf(pdf), Artifact::pdf(pdf)],
+            &[Artifact::pdf(pdf).unwrap(), Artifact::pdf(pdf).unwrap()],
         )
         .unwrap();
 
@@ -922,7 +922,7 @@ fn pdf_operator_runner_enforces_output_size_limit() {
                 })),
                 inputs: vec![artifact_ref("source")],
             },
-            &[Artifact::pdf(pdf)],
+            &[Artifact::pdf(pdf).unwrap()],
         )
         .unwrap_err();
 
@@ -950,7 +950,7 @@ fn object_level_operator_emits_parsed_pdf_object() {
                 })),
                 inputs: vec![artifact_ref("source")],
             },
-            &[Artifact::pdf(pdf)],
+            &[Artifact::pdf(pdf).unwrap()],
         )
         .unwrap();
 
@@ -973,6 +973,47 @@ fn object_level_operator_emits_parsed_pdf_object() {
 }
 
 #[test]
+fn inspect_operator_consumes_object_artifact_without_materializing_bytes() {
+    let pdf = fixture_pdf();
+    let runner = PdfOperatorRunner::default();
+
+    let object_artifact = runner
+        .run(
+            &TaskSpec {
+                id: TaskId::new("rotate"),
+                op: OperatorSpec::PdfEdit(PdfEditOptions::RotatePages(RotateOptions {
+                    pages: "1".to_owned(),
+                    degrees: 90,
+                })),
+                inputs: vec![artifact_ref("source")],
+            },
+            &[Artifact::pdf(pdf).unwrap()],
+        )
+        .unwrap();
+    assert!(matches!(object_artifact, Artifact::PdfObject(_)));
+
+    let inspected = runner
+        .run(
+            &TaskSpec {
+                id: TaskId::new("metadata"),
+                op: OperatorSpec::PdfInspect(PdfInspectOptions::Metadata(
+                    MetadataInspectOptions::default(),
+                )),
+                inputs: vec![artifact_ref("rotate")],
+            },
+            &[object_artifact],
+        )
+        .unwrap();
+
+    let Artifact::Text(report_text) = inspected else {
+        panic!("metadata inspect should emit a text JSON report");
+    };
+    let report: serde_json::Value = serde_json::from_str(&report_text.text).unwrap();
+    assert_eq!(report["valid"], true);
+    assert!(report["entries"].is_object());
+}
+
+#[test]
 fn pdf_operator_runner_emits_signature_verification_report() {
     let pdf = pdf_with_signature_dictionary(vec![0, 64, 192, 64], vec![0x30, 0x82]);
     let trust_anchors = write_test_trust_anchors("signature_report");
@@ -988,7 +1029,7 @@ fn pdf_operator_runner_emits_signature_verification_report() {
                 })),
                 inputs: vec![artifact_ref("source")],
             },
-            &[Artifact::pdf(&pdf)],
+            &[Artifact::pdf(&pdf).unwrap()],
         )
         .unwrap();
 
@@ -1036,7 +1077,7 @@ fn pdf_operator_runner_emits_signature_list_report_without_trust_anchors() {
                 })),
                 inputs: vec![artifact_ref("source")],
             },
-            &[Artifact::pdf(&pdf)],
+            &[Artifact::pdf(&pdf).unwrap()],
         )
         .unwrap();
 
@@ -1071,7 +1112,7 @@ fn pdf_operator_runner_handles_extract_text_tasks() {
                 )),
                 inputs: vec![artifact_ref("source")],
             },
-            &[Artifact::pdf(pdf)],
+            &[Artifact::pdf(pdf).unwrap()],
         )
         .unwrap();
 
@@ -1101,7 +1142,7 @@ fn execute_workflow_enforces_timeout() {
             "#,
     );
     let mut store = ArtifactStore::new();
-    store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
+    store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
     let runner = SlowRunner;
 
     let err = execute_workflow(&workflow, store, &runner).unwrap_err();
@@ -1142,13 +1183,13 @@ fn independent_tasks_in_a_layer_run_in_parallel() {
             "#,
     ));
     let mut store = ArtifactStore::new();
-    store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
+    store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
 
     struct SleepRunner;
     impl OperatorRunner for SleepRunner {
         fn run(&self, task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
             std::thread::sleep(std::time::Duration::from_millis(50));
-            Ok(Artifact::bytes(task.id.as_str().as_bytes()))
+            Artifact::bytes(task.id.as_str().as_bytes())
         }
     }
 
@@ -1181,8 +1222,8 @@ fn execute_workflow_enforces_total_input_size_limit() {
             "#,
     );
     let mut store = ArtifactStore::new();
-    store.insert(artifact_ref("first"), Artifact::bytes(b"12345"));
-    store.insert(artifact_ref("second"), Artifact::bytes(b"67890"));
+    store.insert(artifact_ref("first"), Artifact::bytes(b"12345").unwrap());
+    store.insert(artifact_ref("second"), Artifact::bytes(b"67890").unwrap());
     let runner = RecordingRunner::default();
 
     let err = execute_workflow(&workflow, store, &runner).unwrap_err();
@@ -1199,7 +1240,7 @@ fn execute_workflow_enforces_total_input_size_limit() {
 #[test]
 fn artifact_bytes_clone_is_zero_copy() {
     let payload = vec![7u8; 4096];
-    let original = ArtifactBytes::from(payload);
+    let original = ArtifactBytes::from_vec(payload).unwrap();
     let cloned = original.clone();
 
     // Cloning an ArtifactBytes must share the same backing allocation rather
@@ -1225,7 +1266,7 @@ fn from_arc_is_zero_copy() {
 #[test]
 fn from_arc_clone_shares_buffer() {
     let arc: std::sync::Arc<[u8]> = std::sync::Arc::from(vec![1u8; 1024].into_boxed_slice());
-    let bytes = ArtifactBytes::from(arc);
+    let bytes = ArtifactBytes::from_arc(arc);
     let cloned = bytes.clone();
 
     assert_eq!(bytes.as_ptr(), cloned.as_ptr());
@@ -1234,7 +1275,7 @@ fn from_arc_clone_shares_buffer() {
 
 #[test]
 fn artifact_clone_shares_pdf_payload() {
-    let artifact = Artifact::pdf(vec![1u8; 1024]);
+    let artifact = Artifact::pdf(vec![1u8; 1024]).unwrap();
     let cloned = artifact.clone();
 
     let (Artifact::Pdf(original), Artifact::Pdf(copy)) = (&artifact, &cloned) else {
@@ -1245,7 +1286,7 @@ fn artifact_clone_shares_pdf_payload() {
 
 #[test]
 fn small_artifact_stays_inline() {
-    let bytes = ArtifactBytes::from(vec![9u8; 1024]);
+    let bytes = ArtifactBytes::from_vec(vec![9u8; 1024]).unwrap();
     assert!(!bytes.is_spilled());
     assert_eq!(bytes.len(), 1024);
 }
@@ -1258,7 +1299,7 @@ fn large_artifact_spills_to_disk_and_reads_back() {
     let mut payload = vec![0u8; size];
     payload[0] = 1;
     payload[size - 1] = 2;
-    let bytes = ArtifactBytes::from(payload);
+    let bytes = ArtifactBytes::from_vec(payload).unwrap();
 
     assert!(bytes.is_spilled());
     assert_eq!(bytes.len(), size);
@@ -1280,7 +1321,7 @@ fn spilled_payload_roundtrip_is_byte_exact() {
     for (index, byte) in payload.iter_mut().enumerate() {
         *byte = (index % 251) as u8;
     }
-    let bytes = ArtifactBytes::from(payload.clone());
+    let bytes = ArtifactBytes::from_vec(payload.clone()).unwrap();
 
     assert!(bytes.is_spilled());
     assert_eq!(bytes.as_slice(), payload.as_slice());
@@ -1309,12 +1350,12 @@ fn workflow_spill_threshold_forces_small_output_to_spill() {
             "#,
     );
     let mut store = ArtifactStore::new();
-    store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
+    store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
 
     struct EchoRunner;
     impl OperatorRunner for EchoRunner {
         fn run(&self, _task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
-            Ok(Artifact::pdf(b"tiny"))
+            Ok(Artifact::pdf(b"tiny").unwrap())
         }
     }
 
@@ -1346,14 +1387,14 @@ fn workflow_spill_threshold_keeps_large_output_inline_when_high() {
             "#,
     );
     let mut store = ArtifactStore::new();
-    store.insert(artifact_ref("source"), Artifact::bytes(b"input"));
+    store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
 
     struct BigRunner;
     impl OperatorRunner for BigRunner {
         fn run(&self, _task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
             // Larger than the default 64 MiB threshold, smaller than the 1 GiB
             // workflow threshold, so only the workflow threshold decides.
-            Ok(Artifact::pdf(vec![0u8; 64 * 1024 * 1024 + 4096]))
+            Artifact::pdf(vec![0u8; 64 * 1024 * 1024 + 4096])
         }
     }
 

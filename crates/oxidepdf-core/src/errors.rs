@@ -42,6 +42,9 @@ pub enum OxideError {
     /// Font resolution failed.
     #[error("font resolution error")]
     FontResolution,
+    /// Artifact storage failed.
+    #[error("artifact storage error")]
+    ArtifactStorage,
     /// SVG parsing failed.
     #[error("SVG parse error")]
     SvgParse,
@@ -76,6 +79,7 @@ impl OxideError {
             Self::RenderPdf => "render_pdf",
             Self::ExtractText => "extract_text",
             Self::FontResolution => "font_resolution",
+            Self::ArtifactStorage => "artifact_storage",
             Self::SvgParse => "svg_parse",
             Self::ImageDecode => "image_decode",
             Self::ResourceLimitExceeded { .. } => "resource_limit_exceeded",

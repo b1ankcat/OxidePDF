@@ -41,8 +41,14 @@ pub fn inspect_pdf_forms(
     _options: &FormInspectOptions,
 ) -> Result<TextArtifact, OxideError> {
     let document = load_pdf(input)?;
+    inspect_forms_on_document(&document)
+}
+
+pub(crate) fn inspect_forms_on_document(
+    document: &lopdf::Document,
+) -> Result<TextArtifact, OxideError> {
     let report = FormReport {
-        fields: collect_form_fields(&document)?,
+        fields: collect_form_fields(document)?,
     };
     let text = serde_json::to_string_pretty(&report).map_err(|_| OxideError::Internal)?;
     Ok(TextArtifact {
@@ -62,7 +68,7 @@ pub fn fill_pdf_form(
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
     Ok(PdfArtifact {
-        bytes: bytes.into(),
+        bytes: crate::ArtifactBytes::from_vec(bytes)?,
     })
 }
 
@@ -103,7 +109,7 @@ pub fn unlock_pdf_form_readonly(
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
     Ok(PdfArtifact {
-        bytes: bytes.into(),
+        bytes: crate::ArtifactBytes::from_vec(bytes)?,
     })
 }
 
@@ -128,7 +134,7 @@ pub fn remove_pdf_forms(input: &[u8], limits: &ResourceLimits) -> Result<PdfArti
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
     Ok(PdfArtifact {
-        bytes: bytes.into(),
+        bytes: crate::ArtifactBytes::from_vec(bytes)?,
     })
 }
 

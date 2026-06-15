@@ -12,7 +12,7 @@ resolver = "2"
 [workspace.package]
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.96"
 
 [workspace.dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
@@ -56,3 +56,4 @@ tokio = { version = "1.52.3", features = ["rt-multi-thread", "net", "macros"] }
 rust-embed = "8.11.0"
 base64 = "0.22.1"
 tower-http = { version = "0.6.11", features = ["cors"] }
+criterion = "0.8.2"

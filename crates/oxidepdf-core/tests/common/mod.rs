@@ -1244,7 +1244,7 @@ impl OperatorRunner for RecordingRunner {
             return Err(self.error.lock().unwrap().take().unwrap());
         }
 
-        Ok(Artifact::bytes(task.id.as_str().as_bytes()))
+        Artifact::bytes(task.id.as_str().as_bytes())
     }
 }
 
@@ -1253,6 +1253,6 @@ pub struct SlowRunner;
 impl OperatorRunner for SlowRunner {
     fn run(&self, _task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
         std::thread::sleep(std::time::Duration::from_millis(5));
-        Ok(Artifact::bytes(b"finished"))
+        Ok(Artifact::bytes(b"finished").unwrap())
     }
 }

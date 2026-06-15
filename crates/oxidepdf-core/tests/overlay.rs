@@ -14,7 +14,10 @@ fn overlay_pdf_page_and_signature_appearance_are_visual_only() {
     let pdf = empty_page_pdf();
     let overlay = fixture_pdf();
     let overlaid = overlay_pdf_artifacts(
-        &[Artifact::pdf(&pdf), Artifact::pdf(overlay)],
+        &[
+            Artifact::pdf(&pdf).unwrap(),
+            Artifact::pdf(overlay).unwrap(),
+        ],
         &OverlayOptions {
             kind: OverlayKind::PdfPage,
             text: None,
@@ -37,7 +40,7 @@ fn overlay_pdf_page_and_signature_appearance_are_visual_only() {
     assert!(page_content_contains_operator(&document, 1, "Do"));
 
     let appearance = overlay_pdf_artifacts(
-        &[Artifact::pdf(&pdf)],
+        &[Artifact::pdf(&pdf).unwrap()],
         &OverlayOptions {
             kind: OverlayKind::SignatureAppearance,
             text: Some("Ada Lovelace".to_owned()),
@@ -73,7 +76,7 @@ fn overlay_pdf_page_and_signature_appearance_are_visual_only() {
 fn image_resources_list_add_replace_delete_and_extract() {
     let image = fixture_jpg();
     let pdf = image_artifacts_to_pdf(
-        &[Artifact::image(image)],
+        &[Artifact::image(image).unwrap()],
         &ImageToPdfOptions {
             layout: Some("original_size".to_owned()),
         },
@@ -98,7 +101,10 @@ fn image_resources_list_add_replace_delete_and_extract() {
     assert!(!extracted.bytes.is_empty());
 
     let added = edit_pdf_images_artifacts(
-        &[Artifact::pdf(empty_page_pdf()), Artifact::image(image)],
+        &[
+            Artifact::pdf(empty_page_pdf()).unwrap(),
+            Artifact::image(image).unwrap(),
+        ],
         &ImageEditOptions {
             action: ImageEditAction::Add,
             name: Some("Logo".to_owned()),
@@ -111,7 +117,10 @@ fn image_resources_list_add_replace_delete_and_extract() {
     assert!(page_resources(&added_doc, 1).has(b"XObject"));
 
     let replaced = edit_pdf_images_artifacts(
-        &[Artifact::pdf(&added.bytes), Artifact::image(image)],
+        &[
+            Artifact::pdf(&added.bytes).unwrap(),
+            Artifact::image(image).unwrap(),
+        ],
         &ImageEditOptions {
             action: ImageEditAction::Replace,
             name: Some("Logo".to_owned()),
@@ -127,7 +136,7 @@ fn image_resources_list_add_replace_delete_and_extract() {
     assert_eq!(report["images"][0]["name"], "Logo");
 
     let deleted = edit_pdf_images_artifacts(
-        &[Artifact::pdf(&replaced.bytes)],
+        &[Artifact::pdf(&replaced.bytes).unwrap()],
         &ImageEditOptions {
             action: ImageEditAction::Delete,
             name: Some("Logo".to_owned()),
@@ -151,7 +160,7 @@ fn image_resources_reject_malformed_xobject_dictionary() {
     assert!(matches!(err, OxideError::ParsePdf));
 
     let err = edit_pdf_images_artifacts(
-        &[Artifact::pdf(&pdf)],
+        &[Artifact::pdf(&pdf).unwrap()],
         &ImageEditOptions {
             action: ImageEditAction::Delete,
             name: Some("Logo".to_owned()),
@@ -220,7 +229,7 @@ fn image_artifacts_to_pdf_converts_real_jpeg() {
     let image = fixture_jpg();
 
     let pdf = image_artifacts_to_pdf(
-        &[Artifact::image(image)],
+        &[Artifact::image(image).unwrap()],
         &ImageToPdfOptions::default(),
         &ResourceLimits::default(),
     )
@@ -235,7 +244,10 @@ fn image_artifacts_to_pdf_writes_one_page_per_image() {
     let image = fixture_jpg();
 
     let pdf = image_artifacts_to_pdf(
-        &[Artifact::image(image), Artifact::image(image)],
+        &[
+            Artifact::image(image).unwrap(),
+            Artifact::image(image).unwrap(),
+        ],
         &ImageToPdfOptions::default(),
         &ResourceLimits::default(),
     )
@@ -254,7 +266,7 @@ fn image_artifacts_to_pdf_enforces_pixel_limit() {
     };
 
     let err = image_artifacts_to_pdf(
-        &[Artifact::image(image)],
+        &[Artifact::image(image).unwrap()],
         &ImageToPdfOptions::default(),
         &limits,
     )
@@ -271,7 +283,7 @@ fn image_artifacts_to_pdf_enforces_pixel_limit() {
 #[test]
 fn image_artifacts_to_pdf_rejects_unknown_image_format() {
     let err = image_artifacts_to_pdf(
-        &[Artifact::image(b"not an image")],
+        &[Artifact::image(b"not an image").unwrap()],
         &ImageToPdfOptions::default(),
         &ResourceLimits::default(),
     )
@@ -285,7 +297,7 @@ fn image_artifacts_to_pdf_enforces_output_size_limit() {
     let image = fixture_jpg();
 
     let err = image_artifacts_to_pdf(
-        &[Artifact::image(image)],
+        &[Artifact::image(image).unwrap()],
         &ImageToPdfOptions::default(),
         &ResourceLimits {
             max_output_bytes: Some(1),
@@ -462,7 +474,7 @@ fn watermark_pdf_adds_text_watermark_to_selected_page() {
     let pdf = blank_three_page_pdf();
 
     let watermarked = watermark_pdf_artifacts(
-        &[Artifact::pdf(&pdf)],
+        &[Artifact::pdf(&pdf).unwrap()],
         &WatermarkOptions {
             kind: WatermarkKind::Text,
             text: Some("DRAFT".to_owned()),
@@ -493,7 +505,7 @@ fn watermark_pdf_rejects_missing_text_font_without_substitution() {
     let pdf = fixture_pdf();
 
     let err = watermark_pdf_artifacts(
-        &[Artifact::pdf(pdf)],
+        &[Artifact::pdf(pdf).unwrap()],
         &WatermarkOptions {
             kind: WatermarkKind::Text,
             text: Some("DRAFT".to_owned()),
@@ -520,7 +532,7 @@ fn watermark_pdf_enforces_image_pixel_limit() {
     let image = fixture_jpg();
 
     let err = watermark_pdf_artifacts(
-        &[Artifact::pdf(pdf), Artifact::image(image)],
+        &[Artifact::pdf(pdf).unwrap(), Artifact::image(image).unwrap()],
         &WatermarkOptions {
             kind: WatermarkKind::Image,
             text: None,
@@ -555,7 +567,7 @@ fn watermark_pdf_adds_image_watermark_to_selected_page() {
     let image = fixture_jpg();
 
     let watermarked = watermark_pdf_artifacts(
-        &[Artifact::pdf(pdf), Artifact::image(image)],
+        &[Artifact::pdf(pdf).unwrap(), Artifact::image(image).unwrap()],
         &WatermarkOptions {
             kind: WatermarkKind::Image,
             text: None,
@@ -585,7 +597,7 @@ fn watermark_pdf_adds_svg_watermark_as_vector_xobject() {
     let svg = simple_svg();
 
     let watermarked = watermark_pdf_artifacts(
-        &[Artifact::pdf(pdf), Artifact::svg(svg)],
+        &[Artifact::pdf(pdf).unwrap(), Artifact::svg(svg).unwrap()],
         &WatermarkOptions {
             kind: WatermarkKind::Svg,
             text: None,
@@ -622,7 +634,7 @@ fn watermark_pdf_rasterizes_svg_only_when_requested() {
     let svg = simple_svg();
 
     let watermarked = watermark_pdf_artifacts(
-        &[Artifact::pdf(pdf), Artifact::svg(svg)],
+        &[Artifact::pdf(pdf).unwrap(), Artifact::svg(svg).unwrap()],
         &WatermarkOptions {
             kind: WatermarkKind::Svg,
             text: None,
@@ -649,7 +661,10 @@ fn watermark_pdf_rejects_malformed_svg_without_panic() {
     let pdf = fixture_pdf();
 
     let err = watermark_pdf_artifacts(
-        &[Artifact::pdf(pdf), Artifact::svg(b"<svg><broken>")],
+        &[
+            Artifact::pdf(pdf).unwrap(),
+            Artifact::svg(b"<svg><broken>").unwrap(),
+        ],
         &WatermarkOptions {
             kind: WatermarkKind::Svg,
             text: None,

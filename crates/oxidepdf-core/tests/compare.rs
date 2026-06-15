@@ -79,7 +79,7 @@ fn compare_report_locates_page_size_difference() {
 fn compare_report_locates_text_difference() {
     let pdf = fixture_pdf();
     let changed = watermark_pdf_artifacts(
-        &[Artifact::pdf(pdf)],
+        &[Artifact::pdf(pdf).unwrap()],
         &WatermarkOptions {
             kind: WatermarkKind::Text,
             text: Some("VISIBLE TEXT DIFFERENCE".to_owned()),
@@ -160,8 +160,8 @@ fn compare_workflow_produces_text_report() {
             "#,
     );
     let mut store = ArtifactStore::new();
-    store.insert(artifact_ref("left"), Artifact::pdf(pdf));
-    store.insert(artifact_ref("right"), Artifact::pdf(pdf));
+    store.insert(artifact_ref("left"), Artifact::pdf(pdf).unwrap());
+    store.insert(artifact_ref("right"), Artifact::pdf(pdf).unwrap());
     let runner = PdfOperatorRunner::default();
 
     let result = execute_workflow(&workflow, store, &runner).unwrap();

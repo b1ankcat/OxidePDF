@@ -46,9 +46,15 @@ pub fn inspect_pdf_metadata(
     _options: &MetadataInspectOptions,
 ) -> Result<TextArtifact, OxideError> {
     let document = load_pdf(input)?;
+    inspect_metadata_on_document(&document)
+}
+
+pub(crate) fn inspect_metadata_on_document(
+    document: &lopdf::Document,
+) -> Result<TextArtifact, OxideError> {
     let report = MetadataReport {
         valid: true,
-        entries: read_metadata_entries(&document)?,
+        entries: read_metadata_entries(document)?,
     };
     let text = serde_json::to_string_pretty(&report).map_err(|_| OxideError::Internal)?;
     Ok(TextArtifact {
@@ -68,7 +74,7 @@ pub fn edit_pdf_metadata(
     let bytes = save_pdf(document)?;
     enforce_output_bytes(bytes.len(), limits)?;
     Ok(PdfArtifact {
-        bytes: bytes.into(),
+        bytes: crate::ArtifactBytes::from_vec(bytes)?,
     })
 }
 
