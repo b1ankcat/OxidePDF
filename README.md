@@ -146,7 +146,7 @@ OxidePDF includes a YAML/JSON-based workflow engine for multi-step document auto
 - **Tasks**: units of work, each referencing an operator (edit, inspect, sign, security, compare) and its input artifacts.
 - **Artifacts**: named references to PDFs, images, text, or raw bytes that flow between tasks.
 - **DAG execution**: tasks are topologically sorted by their artifact dependencies. Dependency layers run in order, while independent tasks within the same layer may run in parallel. Cycles are detected and rejected.
-- **Resource limits**: enforce bounds on input bytes, total input bytes, page count, pixel count, output bytes, and execution time.
+- **Resource limits**: enforce bounds on input bytes, total input bytes, page count, pixel count, output bytes, and cooperative execution deadlines. `timeout_ms` is checked between dependency layers and before starting task work; it does not forcibly interrupt an operator that is already running.
 
 ### Running a Workflow
 

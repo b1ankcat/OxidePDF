@@ -1,0 +1,8 @@
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071: rsa 0.9.10 Marvin timing side-channel.
+    # No fixed upgrade is available. OxidePDF currently uses rsa in production
+    # for public-key PKCS#1 v1.5 signature verification only, not RSA private-key
+    # decryption or signing on attacker-observable request paths.
+    "RUSTSEC-2023-0071",
+]

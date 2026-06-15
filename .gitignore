@@ -8,7 +8,8 @@
 **/*.rs.bk
 
 # Local Cargo overrides and generated reports.
-/.cargo/config.toml
+/.cargo/*
+!/.cargo/audit.toml
 /tarpaulin-report.html
 /coverage/
 /lcov.info

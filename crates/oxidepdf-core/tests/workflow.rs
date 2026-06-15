@@ -1156,6 +1156,54 @@ fn execute_workflow_enforces_timeout() {
 }
 
 #[test]
+fn execute_workflow_timeout_stops_downstream_tasks() {
+    let workflow = workflow_from_json(
+        r#"
+            {
+              "version": 1,
+              "inputs": [{ "id": "source", "path": "input.bin" }],
+              "tasks": [
+                {
+                  "id": "slow",
+                  "op": { "pdf_edit": { "merge": {} } },
+                  "inputs": ["source"]
+                },
+                {
+                  "id": "downstream",
+                  "op": { "pdf_edit": { "merge": {} } },
+                  "inputs": ["slow"]
+                }
+              ],
+              "outputs": [{ "id": "final", "from": "downstream", "path": "out.bin" }],
+              "limits": { "timeout_ms": 1 }
+            }
+            "#,
+    );
+    let mut store = ArtifactStore::new();
+    store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
+
+    struct SlowRecordingRunner(std::sync::Mutex<Vec<String>>);
+    impl OperatorRunner for SlowRecordingRunner {
+        fn run(&self, task: &TaskSpec, _inputs: &[Artifact]) -> Result<Artifact, OxideError> {
+            self.0.lock().unwrap().push(task.id.as_str().to_owned());
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            Artifact::bytes(task.id.as_str().as_bytes())
+        }
+    }
+
+    let runner = SlowRecordingRunner(std::sync::Mutex::new(Vec::new()));
+    let err = execute_workflow(&workflow, store, &runner).unwrap_err();
+
+    assert_eq!(
+        err,
+        OxideError::ResourceLimitExceeded {
+            limit: "timeout_ms".to_owned()
+        }
+    );
+    assert_eq!(runner.0.lock().unwrap().as_slice(), ["slow"]);
+}
+
+#[test]
 fn independent_tasks_in_a_layer_run_in_parallel() {
     // Eight independent tasks each sleep 50ms. Run serially that is 400ms; in
     // parallel it should finish in well under that. Use a generous bound to stay

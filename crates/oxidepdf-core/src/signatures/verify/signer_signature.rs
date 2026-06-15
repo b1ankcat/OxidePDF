@@ -169,15 +169,15 @@ fn verify_rsa_pkcs1v15_signature(
 
     let verified = if *signature_algorithm_oid
         == const_oid::db::rfc5912::SHA_256_WITH_RSA_ENCRYPTION
-        || *digest_algorithm_oid == const_oid::db::rfc5912::ID_SHA_256
+        && *digest_algorithm_oid == const_oid::db::rfc5912::ID_SHA_256
     {
         rsa::pkcs1v15::VerifyingKey::<sha2::Sha256>::new(public_key).verify(message, &signature)
     } else if *signature_algorithm_oid == const_oid::db::rfc5912::SHA_384_WITH_RSA_ENCRYPTION
-        || *digest_algorithm_oid == const_oid::db::rfc5912::ID_SHA_384
+        && *digest_algorithm_oid == const_oid::db::rfc5912::ID_SHA_384
     {
         rsa::pkcs1v15::VerifyingKey::<sha2::Sha384>::new(public_key).verify(message, &signature)
     } else if *signature_algorithm_oid == const_oid::db::rfc5912::SHA_512_WITH_RSA_ENCRYPTION
-        || *digest_algorithm_oid == const_oid::db::rfc5912::ID_SHA_512
+        && *digest_algorithm_oid == const_oid::db::rfc5912::ID_SHA_512
     {
         rsa::pkcs1v15::VerifyingKey::<sha2::Sha512>::new(public_key).verify(message, &signature)
     } else {

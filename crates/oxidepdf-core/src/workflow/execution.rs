@@ -55,7 +55,10 @@ pub fn execute_workflow(
         // Run the layer's tasks concurrently; the first error short-circuits.
         let outputs = resolved
             .par_iter()
-            .map(|(task, inputs)| runner.run(task, inputs).map(|artifact| (*task, artifact)))
+            .map(|(task, inputs)| {
+                enforce_timeout(started_at, timeout)?;
+                runner.run(task, inputs).map(|artifact| (*task, artifact))
+            })
             .collect::<Result<Vec<_>, OxideError>>()?;
 
         enforce_timeout(started_at, timeout)?;
