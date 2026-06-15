@@ -250,11 +250,11 @@ pub(crate) fn page_size(
         .get(b"MediaBox")
         .and_then(Object::as_array)
         .map_err(|_| OxideError::ParsePdf)?;
-    if media_box.len() != 4 {
+    let [left, bottom, right, top] = media_box.as_slice() else {
         return Err(OxideError::ParsePdf);
-    }
-    let width = object_to_f32(&media_box[2])? - object_to_f32(&media_box[0])?;
-    let height = object_to_f32(&media_box[3])? - object_to_f32(&media_box[1])?;
+    };
+    let width = object_to_f32(right)? - object_to_f32(left)?;
+    let height = object_to_f32(top)? - object_to_f32(bottom)?;
     Ok((width, height))
 }
 

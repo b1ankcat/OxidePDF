@@ -20,11 +20,12 @@ fn byte_range_verification(
             covered_len: None,
         };
     };
+    let [first_start, first_len, second_start, second_len] = values;
     let research = byte_range_research(
-        values[0],
-        values[1],
-        values[2],
-        values[3],
+        first_start,
+        first_len,
+        second_start,
+        second_len,
         input.len() as u64,
     );
     if !research.in_bounds {

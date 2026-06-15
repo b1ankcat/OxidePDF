@@ -30,7 +30,7 @@ pub(crate) fn edit_colors_on_document(
         Some(pages) => parse_page_range(pages, page_count)?,
         None => (1..=page_count).collect(),
     };
-    validate_color_options(options)?;
+    let plan = color_edit_plan(options)?;
     let page_map = document.get_pages();
     for page in pages {
         let page_id = *page_map
@@ -38,7 +38,7 @@ pub(crate) fn edit_colors_on_document(
             .ok_or_else(|| OxideError::InvalidInput {
                 reason: format!("page {page} is out of range"),
             })?;
-        rewrite_page_colors(document, page_id, options)?;
+        rewrite_page_colors(document, page_id, plan)?;
     }
     Ok(())
 }

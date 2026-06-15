@@ -124,12 +124,13 @@ fn ensure_supported_image_dictionary(stream: &Stream) -> Result<(), OxideError> 
 }
 
 fn image_rgb_bytes(stream: &Stream) -> Result<Vec<u8>, OxideError> {
-    match stream_filter_names(stream)? {
+    let filters = stream_filter_names(stream)?;
+    match filters.as_deref() {
         None => Ok(stream.content.clone()),
-        Some(filters) if filters.len() == 1 && filters[0] == b"FlateDecode" => stream
+        Some([filter]) if filter.as_slice() == b"FlateDecode" => stream
             .get_plain_content()
             .map_err(|_| unsupported_stream_filter_error(stream)),
-        Some(filters) if filters.len() == 1 && filters[0] == b"DCTDecode" => {
+        Some([filter]) if filter.as_slice() == b"DCTDecode" => {
             let image =
                 image::load_from_memory_with_format(&stream.content, image::ImageFormat::Jpeg)
                     .map_err(|_| OxideError::ImageDecode)?;

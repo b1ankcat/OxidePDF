@@ -70,13 +70,13 @@ pub fn edit_pdf_attachment_artifacts(
 ) -> Result<PdfArtifact, OxideError> {
     match options.action {
         AttachmentEditAction::Add => {
-            if inputs.len() != 2 {
+            let [pdf, attachment] = inputs else {
                 return Err(OxideError::InvalidInput {
                     reason: "attachment add requires PDF input and attachment bytes".to_owned(),
                 });
-            }
-            let pdf = pdf_bytes(&inputs[0])?;
-            let attachment = raw_bytes(&inputs[1]);
+            };
+            let pdf = pdf_bytes(pdf)?;
+            let attachment = raw_bytes(attachment);
             enforce_input_bytes(pdf.len(), limits)?;
             enforce_input_bytes(attachment.len(), limits)?;
             let mut document = load_pdf(pdf)?;
@@ -89,12 +89,12 @@ pub fn edit_pdf_attachment_artifacts(
             })
         }
         AttachmentEditAction::Delete => {
-            if inputs.len() != 1 {
+            let [pdf] = inputs else {
                 return Err(OxideError::InvalidInput {
                     reason: "attachment delete requires exactly one PDF input".to_owned(),
                 });
-            }
-            let pdf = pdf_bytes(&inputs[0])?;
+            };
+            let pdf = pdf_bytes(pdf)?;
             enforce_input_bytes(pdf.len(), limits)?;
             let mut document = load_pdf(pdf)?;
             enforce_max_pages(document.get_pages().len(), limits)?;
@@ -191,13 +191,12 @@ fn delete_attachment(document: &mut lopdf::Document, name: &str) -> Result<(), O
     let mut kept = Vec::new();
     let mut removed = false;
     for pair in entries.chunks(2) {
-        if pair.len() != 2 {
-            return Err(OxideError::ParsePdf);
-        }
-        if matches_pdf_string(&pair[0], name) {
+        let (entry_name, file_spec) = attachment_name_pair(pair)?;
+        if matches_pdf_string(entry_name, name) {
             removed = true;
         } else {
-            kept.extend_from_slice(pair);
+            kept.push(entry_name.clone());
+            kept.push(file_spec.clone());
         }
     }
     if !removed {
@@ -217,11 +216,9 @@ fn read_attachment_reports(
     };
     let mut reports = Vec::new();
     for pair in entries.chunks(2) {
-        if pair.len() != 2 {
-            return Err(OxideError::ParsePdf);
-        }
-        let name = pdf_string(&pair[0])?;
-        let file_spec = deref_dict(document, &pair[1])?;
+        let (name_object, file_spec_object) = attachment_name_pair(pair)?;
+        let name = pdf_string(name_object)?;
+        let file_spec = deref_dict(document, file_spec_object)?;
         let description = file_spec.get(b"Desc").ok().map(pdf_string).transpose()?;
         let size = attachment_reported_size(document, file_spec)?;
         reports.push(AttachmentEntryReport {
@@ -245,11 +242,9 @@ fn find_attachment_stream(
         });
     };
     for pair in entries.chunks(2) {
-        if pair.len() != 2 {
-            return Err(OxideError::ParsePdf);
-        }
-        if matches_pdf_string(&pair[0], name) {
-            let file_spec = deref_dict(document, &pair[1])?;
+        let (entry_name, file_spec_object) = attachment_name_pair(pair)?;
+        if matches_pdf_string(entry_name, name) {
+            let file_spec = deref_dict(document, file_spec_object)?;
             // Reject oversized attachments by their declared size before
             // decompressing, so a decompression bomb cannot allocate past the
             // output limit while being read.
@@ -264,6 +259,13 @@ fn find_attachment_stream(
     Err(OxideError::InvalidInput {
         reason: format!("attachment '{name}' not found"),
     })
+}
+
+fn attachment_name_pair(pair: &[Object]) -> Result<(&Object, &Object), OxideError> {
+    let [name, file_spec] = pair else {
+        return Err(OxideError::ParsePdf);
+    };
+    Ok((name, file_spec))
 }
 
 /// Reports an attachment's size for inspection without decompressing the

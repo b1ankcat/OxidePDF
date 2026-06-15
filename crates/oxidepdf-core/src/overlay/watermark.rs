@@ -104,7 +104,8 @@ fn resolve_watermark_font(options: &OverlayOptions) -> Result<ResolvedFont, Oxid
         let mut db = fontdb::Database::new();
         db.load_font_data(bytes.clone());
         let face = db.faces().next().ok_or(OxideError::FontResolution)?;
-        (bytes, sanitize_pdf_name(&face.families[0].0))
+        let family = face.families.first().ok_or(OxideError::FontResolution)?;
+        (bytes, sanitize_pdf_name(&family.0))
     } else {
         let family = options.font.as_deref().ok_or(OxideError::FontResolution)?;
         let mut db = fontdb::Database::new();

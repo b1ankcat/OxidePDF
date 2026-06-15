@@ -167,26 +167,27 @@ fn verify_rsa_pkcs1v15_signature(
     use rsa::pkcs8::DecodePublicKey;
     use signature::Verifier;
 
-    let verified = if *signature_algorithm_oid
-        == const_oid::db::rfc5912::SHA_256_WITH_RSA_ENCRYPTION
-        && *digest_algorithm_oid == const_oid::db::rfc5912::ID_SHA_256
-    {
-        rsa::pkcs1v15::VerifyingKey::<sha2::Sha256>::new(public_key).verify(message, &signature)
-    } else if *signature_algorithm_oid == const_oid::db::rfc5912::SHA_384_WITH_RSA_ENCRYPTION
-        && *digest_algorithm_oid == const_oid::db::rfc5912::ID_SHA_384
-    {
-        rsa::pkcs1v15::VerifyingKey::<sha2::Sha384>::new(public_key).verify(message, &signature)
-    } else if *signature_algorithm_oid == const_oid::db::rfc5912::SHA_512_WITH_RSA_ENCRYPTION
-        && *digest_algorithm_oid == const_oid::db::rfc5912::ID_SHA_512
-    {
-        rsa::pkcs1v15::VerifyingKey::<sha2::Sha512>::new(public_key).verify(message, &signature)
-    } else {
-        return signature_check(
-            SignatureCheckState::Unsupported,
-            format!(
-                "unsupported RSA signature algorithm {signature_algorithm_oid} with digest algorithm {digest_algorithm_oid}"
-            ),
-        );
+    let verified = match rsa_pkcs1v15_digest(signature_algorithm_oid, digest_algorithm_oid) {
+        Some(RsaPkcs1v15Digest::Sha256) => {
+            rsa::pkcs1v15::VerifyingKey::<sha2::Sha256>::new(public_key)
+                .verify(message, &signature)
+        }
+        Some(RsaPkcs1v15Digest::Sha384) => {
+            rsa::pkcs1v15::VerifyingKey::<sha2::Sha384>::new(public_key)
+                .verify(message, &signature)
+        }
+        Some(RsaPkcs1v15Digest::Sha512) => {
+            rsa::pkcs1v15::VerifyingKey::<sha2::Sha512>::new(public_key)
+                .verify(message, &signature)
+        }
+        None => {
+            return signature_check(
+                SignatureCheckState::Unsupported,
+                format!(
+                    "unsupported RSA signature algorithm {signature_algorithm_oid} with digest algorithm {digest_algorithm_oid}"
+                ),
+            );
+        }
     };
 
     if verified.is_ok() {
@@ -200,6 +201,35 @@ fn verify_rsa_pkcs1v15_signature(
             "RSA signature mathematics verification failed",
         )
     }
+}
+
+enum RsaPkcs1v15Digest {
+    Sha256,
+    Sha384,
+    Sha512,
+}
+
+fn rsa_pkcs1v15_digest(
+    signature_algorithm_oid: &const_oid::ObjectIdentifier,
+    digest_algorithm_oid: &const_oid::ObjectIdentifier,
+) -> Option<RsaPkcs1v15Digest> {
+    if *signature_algorithm_oid == const_oid::db::rfc5912::SHA_256_WITH_RSA_ENCRYPTION
+        && *digest_algorithm_oid == const_oid::db::rfc5912::ID_SHA_256
+    {
+        return Some(RsaPkcs1v15Digest::Sha256);
+    }
+    if *signature_algorithm_oid == const_oid::db::rfc5912::SHA_384_WITH_RSA_ENCRYPTION
+        && *digest_algorithm_oid == const_oid::db::rfc5912::ID_SHA_384
+    {
+        return Some(RsaPkcs1v15Digest::Sha384);
+    }
+    if *signature_algorithm_oid == const_oid::db::rfc5912::SHA_512_WITH_RSA_ENCRYPTION
+        && *digest_algorithm_oid == const_oid::db::rfc5912::ID_SHA_512
+    {
+        return Some(RsaPkcs1v15Digest::Sha512);
+    }
+
+    None
 }
 
 fn message_digest_attribute(attribute: &x509_cert::attr::Attribute) -> Option<Vec<u8>> {

@@ -3,33 +3,12 @@ pub(crate) fn run_merge(
     stdin: &[u8],
     stdout: &mut impl Write,
 ) -> Result<(), CliError> {
-    let input_refs = (0..args.inputs.len())
-        .map(|index| ArtifactRef::new(format!("input_{index}")))
-        .collect::<Vec<_>>();
-    let workflow = Workflow {
-        version: WorkflowVersion::V1,
-        inputs: args
-            .inputs
-            .into_iter()
-            .zip(input_refs.iter())
-            .map(|(path, id)| oxidepdf_core::InputSpec {
-                id: id.clone(),
-                path,
-            })
-            .collect(),
-        tasks: vec![TaskSpec {
-            id: TaskId::new("merge"),
-            op: OperatorSpec::PdfEdit(PdfEditOptions::Merge(MergeOptions {})),
-            inputs: input_refs,
-        }],
-        outputs: vec![oxidepdf_core::OutputSpec {
-            id: ArtifactRef::new("output"),
-            from: ArtifactRef::new("merge"),
-            path: args.output,
-        }],
-        limits: Default::default(),
-        metadata: WorkflowMetadata::default(),
-    };
+    let workflow = multi_input_workflow(
+        args.inputs,
+        args.output,
+        "merge",
+        OperatorSpec::PdfEdit(PdfEditOptions::Merge(MergeOptions {})),
+    );
     execute_and_write_workflow(workflow, stdin, args.force, stdout)
 }
 
@@ -115,4 +94,3 @@ pub(crate) fn run_delete_blank_pages(
 
     execute_and_write_workflow(workflow, stdin, args.force, stdout)
 }
-

@@ -155,10 +155,9 @@ fn impose_pages(
         let mut operations = Vec::new();
 
         for (slot, source_index) in chunk.iter().enumerate() {
-            if *source_index >= page_ids.len() {
+            let Some(&source_page_id) = page_ids.get(*source_index) else {
                 continue;
-            }
-            let source_page_id = page_ids[*source_index];
+            };
             let (source_width, source_height) = page_size(source, source_page_id)?;
             let xobject_id =
                 page_form_xobject_from_source(source, &mut target, source_page_id, &mut imported)?;

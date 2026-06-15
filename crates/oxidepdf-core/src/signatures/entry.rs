@@ -4,23 +4,18 @@ pub fn verify_pdf_signatures(
     limits: &ResourceLimits,
 ) -> Result<TextArtifact, OxideError> {
     enforce_input_bytes(input.len(), limits)?;
-    let trust_anchors = match options.mode {
-        SignatureMode::List => None,
-        SignatureMode::Verify => Some(load_trust_anchors(options.trust_anchors.as_deref())?),
-    };
-    let document = load_pdf(input)?;
-    enforce_max_pages(document.get_pages().len(), limits)?;
-
     match options.mode {
-        SignatureMode::List => list_pdf_signatures(input, &document, limits),
-        SignatureMode::Verify => verify_pdf_signatures_report(
-            input,
-            trust_anchors
-                .as_ref()
-                .expect("verify mode loads trust anchors"),
-            &document,
-            limits,
-        ),
+        SignatureMode::List => {
+            let document = load_pdf(input)?;
+            enforce_max_pages(document.get_pages().len(), limits)?;
+            list_pdf_signatures(input, &document, limits)
+        }
+        SignatureMode::Verify => {
+            let trust_anchors = load_trust_anchors(options.trust_anchors.as_deref())?;
+            let document = load_pdf(input)?;
+            enforce_max_pages(document.get_pages().len(), limits)?;
+            verify_pdf_signatures_report(input, &trust_anchors, &document, limits)
+        }
     }
 }
 
@@ -125,18 +120,7 @@ pub fn add_pdf_timestamp(
 ) -> Result<TextArtifact, OxideError> {
     enforce_input_bytes(input.len(), limits)?;
     ensure_pdf_magic(input)?;
-    if options.tsa_url.is_some() == options.token.is_some() {
-        return Err(OxideError::InvalidInput {
-            reason: "timestamp add requires exactly one of tsa_url or token".to_owned(),
-        });
-    }
-    if options.tsa_url.is_some() {
-        return Err(OxideError::UnsupportedPdfFeature {
-            feature: "live TSA timestamp requests".to_owned(),
-        });
-    }
-
-    let token_path = options.token.as_deref().expect("checked token is present");
+    let token_path = timestamp_token_path(options)?;
     let token = std::fs::read(token_path).map_err(|_| OxideError::Io)?;
     let status = if ContentInfo::from_der(&token).is_ok() || SignedData::from_der(&token).is_ok() {
         signature_check(
@@ -166,3 +150,14 @@ pub fn add_pdf_timestamp(
     })
 }
 
+fn timestamp_token_path(options: &TimestampAddOptions) -> Result<&std::path::Path, OxideError> {
+    match (options.tsa_url.as_ref(), options.token.as_deref()) {
+        (None, Some(token)) => Ok(token),
+        (Some(_), None) => Err(OxideError::UnsupportedPdfFeature {
+            feature: "live TSA timestamp requests".to_owned(),
+        }),
+        _ => Err(OxideError::InvalidInput {
+            reason: "timestamp add requires exactly one of tsa_url or token".to_owned(),
+        }),
+    }
+}

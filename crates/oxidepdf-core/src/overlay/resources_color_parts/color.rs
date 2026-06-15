@@ -1,4 +1,11 @@
-fn validate_color_options(options: &ColorEditOptions) -> Result<(), OxideError> {
+#[derive(Clone, Copy)]
+enum ColorEditPlan {
+    Invert,
+    Replace { from: [f32; 3], to: [f32; 3] },
+    Contrast { factor: f32 },
+}
+
+fn color_edit_plan(options: &ColorEditOptions) -> Result<ColorEditPlan, OxideError> {
     match options.action {
         ColorEditAction::Contrast => {
             let factor = options.factor.unwrap_or(1.0);
@@ -7,17 +14,18 @@ fn validate_color_options(options: &ColorEditOptions) -> Result<(), OxideError> 
                     reason: "contrast factor must be greater than zero".to_owned(),
                 });
             }
+            Ok(ColorEditPlan::Contrast { factor })
         }
-        ColorEditAction::Invert => {}
+        ColorEditAction::Invert => Ok(ColorEditPlan::Invert),
         ColorEditAction::Replace => {
-            validate_rgb(options.from, "replace from")?;
-            validate_rgb(options.to, "replace to")?;
+            let from = validated_rgb(options.from, "replace from")?;
+            let to = validated_rgb(options.to, "replace to")?;
+            Ok(ColorEditPlan::Replace { from, to })
         }
     }
-    Ok(())
 }
 
-fn validate_rgb(value: Option<[f32; 3]>, label: &str) -> Result<(), OxideError> {
+fn validated_rgb(value: Option<[f32; 3]>, label: &str) -> Result<[f32; 3], OxideError> {
     let rgb = value.ok_or_else(|| OxideError::InvalidInput {
         reason: format!("color {label} must be provided"),
     })?;
@@ -29,13 +37,13 @@ fn validate_rgb(value: Option<[f32; 3]>, label: &str) -> Result<(), OxideError> 
             reason: format!("color {label} components must be between 0.0 and 1.0"),
         });
     }
-    Ok(())
+    Ok(rgb)
 }
 
 fn rewrite_page_colors(
     document: &mut lopdf::Document,
     page_id: lopdf::ObjectId,
-    options: &ColorEditOptions,
+    plan: ColorEditPlan,
 ) -> Result<(), OxideError> {
     let content = document
         .get_page_content(page_id)
@@ -44,7 +52,7 @@ fn rewrite_page_colors(
         lopdf::content::Content::decode(&content).map_err(|_| OxideError::ParsePdf)?;
     for operation in &mut content.operations {
         match operation.operator.as_str() {
-            "rg" | "RG" => rewrite_rgb_operation(operation, options)?,
+            "rg" | "RG" => rewrite_rgb_operation(operation, plan)?,
             "g" | "G" | "k" | "K" | "cs" | "CS" | "sc" | "SC" | "scn" | "SCN" | "sh" => {
                 return Err(OxideError::UnsupportedPdfFeature {
                     feature: format!(
@@ -62,29 +70,26 @@ fn rewrite_page_colors(
 
 fn rewrite_rgb_operation(
     operation: &mut lopdf::content::Operation,
-    options: &ColorEditOptions,
+    plan: ColorEditPlan,
 ) -> Result<(), OxideError> {
-    if operation.operands.len() != 3 {
+    let [red, green, blue] = operation.operands.as_slice() else {
         return Err(OxideError::ParsePdf);
-    }
+    };
     let current = [
-        object_to_f32(&operation.operands[0])?,
-        object_to_f32(&operation.operands[1])?,
-        object_to_f32(&operation.operands[2])?,
+        object_to_f32(red)?,
+        object_to_f32(green)?,
+        object_to_f32(blue)?,
     ];
-    let updated = match options.action {
-        ColorEditAction::Invert => [1.0 - current[0], 1.0 - current[1], 1.0 - current[2]],
-        ColorEditAction::Replace => {
-            let from = options.from.unwrap();
-            let to = options.to.unwrap();
+    let updated = match plan {
+        ColorEditPlan::Invert => [1.0 - current[0], 1.0 - current[1], 1.0 - current[2]],
+        ColorEditPlan::Replace { from, to } => {
             if rgb_matches(current, from) {
                 to
             } else {
                 current
             }
         }
-        ColorEditAction::Contrast => {
-            let factor = options.factor.unwrap_or(1.0);
+        ColorEditPlan::Contrast { factor } => {
             current.map(|component| ((component - 0.5) * factor + 0.5).clamp(0.0, 1.0))
         }
     };
@@ -111,4 +116,3 @@ fn replace_page_content(
     page.set("Contents", content_id);
     Ok(())
 }
-

@@ -52,11 +52,14 @@ fn parse_byte_ranges_for_research(input: &[u8]) -> Vec<ByteRangeResearch> {
         if numbers.len() < 4 {
             continue;
         }
+        let [first_start, first_len, second_start, second_len] = numbers[..4] else {
+            continue;
+        };
         ranges.push(byte_range_research(
-            numbers[0],
-            numbers[1],
-            numbers[2],
-            numbers[3],
+            first_start,
+            first_len,
+            second_start,
+            second_len,
             input.len() as u64,
         ));
     }

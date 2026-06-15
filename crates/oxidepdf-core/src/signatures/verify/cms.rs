@@ -152,11 +152,11 @@ fn signed_bytes(input: &[u8], byte_range: &ByteRangeVerification) -> Option<Vec<
     if !byte_range.in_bounds || !byte_range.ordered_non_overlapping {
         return None;
     }
-    let values = byte_range.values?;
-    let first_start = usize::try_from(values[0]).ok()?;
-    let first_len = usize::try_from(values[1]).ok()?;
-    let second_start = usize::try_from(values[2]).ok()?;
-    let second_len = usize::try_from(values[3]).ok()?;
+    let [first_start, first_len, second_start, second_len] = byte_range.values?;
+    let first_start = usize::try_from(first_start).ok()?;
+    let first_len = usize::try_from(first_len).ok()?;
+    let second_start = usize::try_from(second_start).ok()?;
+    let second_len = usize::try_from(second_len).ok()?;
     let first_end = first_start.checked_add(first_len)?;
     let second_end = second_start.checked_add(second_len)?;
     let mut bytes = Vec::with_capacity(first_len.checked_add(second_len)?);

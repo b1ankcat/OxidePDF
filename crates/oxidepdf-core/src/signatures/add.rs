@@ -185,11 +185,12 @@ fn find_signature_placeholder_window(
 }
 
 fn signed_bytes_from_range(pdf: &[u8], byte_range: [usize; 4]) -> Option<Vec<u8>> {
-    let first_end = byte_range[0].checked_add(byte_range[1])?;
-    let second_end = byte_range[2].checked_add(byte_range[3])?;
-    let mut bytes = Vec::with_capacity(byte_range[1].checked_add(byte_range[3])?);
-    bytes.extend_from_slice(pdf.get(byte_range[0]..first_end)?);
-    bytes.extend_from_slice(pdf.get(byte_range[2]..second_end)?);
+    let [first_start, first_len, second_start, second_len] = byte_range;
+    let first_end = first_start.checked_add(first_len)?;
+    let second_end = second_start.checked_add(second_len)?;
+    let mut bytes = Vec::with_capacity(first_len.checked_add(second_len)?);
+    bytes.extend_from_slice(pdf.get(first_start..first_end)?);
+    bytes.extend_from_slice(pdf.get(second_start..second_end)?);
     Some(bytes)
 }
 
@@ -198,9 +199,10 @@ fn fill_byte_range_placeholder(
     window: SignaturePlaceholderWindow,
     byte_range: [usize; 4],
 ) -> Result<Vec<u8>, OxideError> {
+    let [first_start, first_len, second_start, second_len] = byte_range;
     let byte_range_text = format!(
         "{:010} {:010} {:010} {:010}",
-        byte_range[0], byte_range[1], byte_range[2], byte_range[3]
+        first_start, first_len, second_start, second_len
     );
     if byte_range_text.len() != window.byte_range_end - window.byte_range_start {
         return Err(OxideError::InvalidInput {
@@ -309,4 +311,3 @@ fn load_p256_signing_key(path: &std::path::Path) -> Result<p256::ecdsa::SigningK
         reason: "private key file must contain an unencrypted P-256 PKCS#8 PEM key".to_owned(),
     })
 }
-

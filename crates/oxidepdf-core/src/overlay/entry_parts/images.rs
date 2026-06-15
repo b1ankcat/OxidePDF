@@ -52,12 +52,12 @@ pub fn edit_pdf_images_artifacts(
 
     match options.action {
         ImageEditAction::Add => {
-            if inputs.len() != 2 {
+            let [_, image] = inputs else {
                 return Err(OxideError::InvalidInput {
                     reason: "image add requires PDF input and image input".to_owned(),
                 });
-            }
-            let image = decode_limited_image(image_bytes(&inputs[1])?, limits)?;
+            };
+            let image = decode_limited_image(image_bytes(image)?, limits)?;
             let page = options.page.ok_or_else(|| OxideError::InvalidInput {
                 reason: "image add requires page".to_owned(),
             })?;
@@ -65,21 +65,21 @@ pub fn edit_pdf_images_artifacts(
             add_image_to_page(&mut document, page, name, &image)?;
         }
         ImageEditAction::Replace => {
-            if inputs.len() != 2 {
+            let [_, image] = inputs else {
                 return Err(OxideError::InvalidInput {
                     reason: "image replace requires PDF input and image input".to_owned(),
                 });
-            }
-            let image = decode_limited_image(image_bytes(&inputs[1])?, limits)?;
+            };
+            let image = decode_limited_image(image_bytes(image)?, limits)?;
             let name = required_image_name(options.name.as_deref(), "image replace")?;
             replace_image_resource(&mut document, name, &image)?;
         }
         ImageEditAction::Delete => {
-            if inputs.len() != 1 {
+            let [_] = inputs else {
                 return Err(OxideError::InvalidInput {
                     reason: "image delete requires exactly one PDF input".to_owned(),
                 });
-            }
+            };
             let name = required_image_name(options.name.as_deref(), "image delete")?;
             delete_image_resource(&mut document, name)?;
         }

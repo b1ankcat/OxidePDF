@@ -192,9 +192,13 @@ fn write_outline_items(
     let ids = (0..items.len())
         .map(|_| document.new_object_id())
         .collect::<Vec<_>>();
+    let (Some(&first_id), Some(&last_id)) = (ids.first(), ids.last()) else {
+        return Err(OxideError::InvalidInput {
+            reason: "outline item list must not be empty".to_owned(),
+        });
+    };
     let mut total_count = 0i64;
-    for (index, item) in items.iter().enumerate() {
-        let id = ids[index];
+    for (index, (item, id)) in items.iter().zip(ids.iter().copied()).enumerate() {
         let page_id = page_id_for_number(document, item.page)?;
         let mut dictionary = dictionary! {
             "Title" => Object::string_literal(item.title.as_str()),
@@ -207,8 +211,8 @@ fn write_outline_items(
         if index > 0 {
             dictionary.set("Prev", ids[index - 1]);
         }
-        if index + 1 < ids.len() {
-            dictionary.set("Next", ids[index + 1]);
+        if let Some(next_id) = ids.get(index + 1) {
+            dictionary.set("Next", *next_id);
         }
         let mut item_count = 1i64;
         if !item.children.is_empty() {
@@ -221,7 +225,7 @@ fn write_outline_items(
         total_count += item_count;
         document.objects.insert(id, Object::Dictionary(dictionary));
     }
-    Ok((ids[0], *ids.last().unwrap(), total_count))
+    Ok((first_id, last_id, total_count))
 }
 
 fn delete_outline_tree(document: &mut lopdf::Document) -> Result<(), OxideError> {

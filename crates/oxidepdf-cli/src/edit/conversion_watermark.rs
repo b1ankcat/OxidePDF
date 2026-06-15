@@ -3,35 +3,14 @@ pub(crate) fn run_img2pdf(
     stdin: &[u8],
     stdout: &mut impl Write,
 ) -> Result<(), CliError> {
-    let input_refs = (0..args.inputs.len())
-        .map(|index| ArtifactRef::new(format!("input_{index}")))
-        .collect::<Vec<_>>();
-    let workflow = Workflow {
-        version: WorkflowVersion::V1,
-        inputs: args
-            .inputs
-            .into_iter()
-            .zip(input_refs.iter())
-            .map(|(path, id)| oxidepdf_core::InputSpec {
-                id: id.clone(),
-                path,
-            })
-            .collect(),
-        tasks: vec![TaskSpec {
-            id: TaskId::new("img2pdf"),
-            op: OperatorSpec::PdfEdit(PdfEditOptions::ImageToPdf(ImageToPdfOptions {
-                layout: args.layout,
-            })),
-            inputs: input_refs,
-        }],
-        outputs: vec![oxidepdf_core::OutputSpec {
-            id: ArtifactRef::new("output"),
-            from: ArtifactRef::new("img2pdf"),
-            path: args.output,
-        }],
-        limits: Default::default(),
-        metadata: WorkflowMetadata::default(),
-    };
+    let workflow = multi_input_workflow(
+        args.inputs,
+        args.output,
+        "img2pdf",
+        OperatorSpec::PdfEdit(PdfEditOptions::ImageToPdf(ImageToPdfOptions {
+            layout: args.layout,
+        })),
+    );
 
     execute_and_write_workflow(workflow, stdin, args.force, stdout)
 }

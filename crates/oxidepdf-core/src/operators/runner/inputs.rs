@@ -6,16 +6,12 @@
 /// document, it is serialized here so the chain keeps working; byte inputs are
 /// returned without copying beyond the borrow.
 fn single_pdf_input_bytes(inputs: &[Artifact]) -> Result<std::borrow::Cow<'_, [u8]>, OxideError> {
-    if inputs.len() != 1 {
-        return Err(OxideError::InvalidInput {
-            reason: "operator requires exactly one PDF input".to_owned(),
-        });
-    }
-    match &inputs[0] {
+    let input = single_input(inputs, "operator requires exactly one PDF input")?;
+    match input {
         Artifact::PdfObject(_) => Ok(std::borrow::Cow::Owned(
-            inputs[0].output_bytes()?.into_owned(),
+            input.output_bytes()?.into_owned(),
         )),
-        _ => Ok(std::borrow::Cow::Borrowed(pdf_bytes(&inputs[0])?)),
+        _ => Ok(std::borrow::Cow::Borrowed(pdf_bytes(input)?)),
     }
 }
 
@@ -46,12 +42,7 @@ fn materialize_object_inputs(inputs: &[Artifact]) -> Result<Vec<Artifact>, Oxide
 /// avoids the serialize-then-reparse roundtrip that a byte-only pipeline pays
 /// between every chained PDF operator.
 fn single_pdf_document(inputs: &[Artifact]) -> Result<lopdf::Document, OxideError> {
-    if inputs.len() != 1 {
-        return Err(OxideError::InvalidInput {
-            reason: "operator requires exactly one PDF input".to_owned(),
-        });
-    }
-    match &inputs[0] {
+    match single_input(inputs, "operator requires exactly one PDF input")? {
         Artifact::PdfObject(artifact) => Ok((*artifact.document).clone()),
         Artifact::Pdf(pdf) => load_pdf(pdf.bytes.as_slice()),
         Artifact::Bytes(bytes) => load_pdf(bytes.bytes.as_slice()),
@@ -65,12 +56,7 @@ fn single_pdf_document_for_inspect(
     inputs: &[Artifact],
     limits: &ResourceLimits,
 ) -> Result<lopdf::Document, OxideError> {
-    if inputs.len() != 1 {
-        return Err(OxideError::InvalidInput {
-            reason: "operator requires exactly one PDF input".to_owned(),
-        });
-    }
-    match &inputs[0] {
+    match single_input(inputs, "operator requires exactly one PDF input")? {
         Artifact::PdfObject(artifact) => Ok((*artifact.document).clone()),
         Artifact::Pdf(pdf) => {
             enforce_input_bytes(pdf.bytes.len(), limits)?;
@@ -87,27 +73,31 @@ fn single_pdf_document_for_inspect(
 }
 
 fn two_pdf_inputs(inputs: &[Artifact]) -> Result<(&[u8], &[u8]), OxideError> {
-    if inputs.len() != 2 {
+    let [left, right] = inputs else {
         return Err(OxideError::InvalidInput {
             reason: "compare requires exactly two PDF inputs".to_owned(),
         });
-    }
+    };
 
-    Ok((pdf_bytes(&inputs[0])?, pdf_bytes(&inputs[1])?))
+    Ok((pdf_bytes(left)?, pdf_bytes(right)?))
 }
 
 fn single_svg_input(inputs: &[Artifact]) -> Result<&[u8], OxideError> {
-    if inputs.len() != 1 {
-        return Err(OxideError::InvalidInput {
-            reason: "svg2pdf requires exactly one SVG input".to_owned(),
-        });
-    }
-
-    match &inputs[0] {
+    match single_input(inputs, "svg2pdf requires exactly one SVG input")? {
         Artifact::Svg(svg) => Ok(&svg.bytes),
         Artifact::Bytes(bytes) => Ok(&bytes.bytes),
         _ => Err(OxideError::InvalidInput {
             reason: "expected SVG input artifact".to_owned(),
         }),
     }
+}
+
+fn single_input<'a>(inputs: &'a [Artifact], reason: &str) -> Result<&'a Artifact, OxideError> {
+    let [input] = inputs else {
+        return Err(OxideError::InvalidInput {
+            reason: reason.to_owned(),
+        });
+    };
+
+    Ok(input)
 }

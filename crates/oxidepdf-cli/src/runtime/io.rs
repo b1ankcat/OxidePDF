@@ -27,25 +27,16 @@ pub(crate) fn one_input_workflow(
     task_id: &'static str,
     op: OperatorSpec,
 ) -> Workflow {
-    Workflow {
-        version: WorkflowVersion::V1,
-        inputs: vec![oxidepdf_core::InputSpec {
+    workflow_from_specs(
+        vec![oxidepdf_core::InputSpec {
             id: ArtifactRef::new("input"),
             path: input,
         }],
-        tasks: vec![TaskSpec {
-            id: TaskId::new(task_id),
-            op,
-            inputs: vec![ArtifactRef::new("input")],
-        }],
-        outputs: vec![oxidepdf_core::OutputSpec {
-            id: ArtifactRef::new("output"),
-            from: ArtifactRef::new(task_id),
-            path: output,
-        }],
-        limits: Default::default(),
-        metadata: WorkflowMetadata::default(),
-    }
+        vec![ArtifactRef::new("input")],
+        output,
+        task_id,
+        op,
+    )
 }
 
 pub(crate) fn two_input_workflow(
@@ -55,9 +46,8 @@ pub(crate) fn two_input_workflow(
     task_id: &'static str,
     op: OperatorSpec,
 ) -> Workflow {
-    Workflow {
-        version: WorkflowVersion::V1,
-        inputs: vec![
+    workflow_from_specs(
+        vec![
             oxidepdf_core::InputSpec {
                 id: ArtifactRef::new("input"),
                 path: first,
@@ -67,10 +57,47 @@ pub(crate) fn two_input_workflow(
                 path: second,
             },
         ],
+        vec![ArtifactRef::new("input"), ArtifactRef::new("attachment")],
+        output,
+        task_id,
+        op,
+    )
+}
+
+pub(crate) fn multi_input_workflow(
+    inputs: Vec<PathBuf>,
+    output: PathBuf,
+    task_id: &'static str,
+    op: OperatorSpec,
+) -> Workflow {
+    let input_refs = (0..inputs.len())
+        .map(|index| ArtifactRef::new(format!("input_{index}")))
+        .collect::<Vec<_>>();
+    let inputs = inputs
+        .into_iter()
+        .zip(input_refs.iter())
+        .map(|(path, id)| oxidepdf_core::InputSpec {
+            id: id.clone(),
+            path,
+        })
+        .collect();
+    workflow_from_specs(inputs, input_refs, output, task_id, op)
+}
+
+fn workflow_from_specs(
+    inputs: Vec<oxidepdf_core::InputSpec>,
+    task_inputs: Vec<ArtifactRef>,
+    output: PathBuf,
+    task_id: &'static str,
+    op: OperatorSpec,
+) -> Workflow {
+    Workflow {
+        version: WorkflowVersion::V1,
+        inputs,
         tasks: vec![TaskSpec {
             id: TaskId::new(task_id),
             op,
-            inputs: vec![ArtifactRef::new("input"), ArtifactRef::new("attachment")],
+            inputs: task_inputs,
         }],
         outputs: vec![oxidepdf_core::OutputSpec {
             id: ArtifactRef::new("output"),
