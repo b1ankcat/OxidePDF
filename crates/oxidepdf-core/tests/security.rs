@@ -11,7 +11,7 @@ use oxidepdf_core::*;
 
 #[test]
 fn pdf_security_encrypts_with_aes256_and_decrypts_with_correct_password() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
     let encrypted = encrypt_pdf(
         pdf,
         &SecurityEncryptOptions {

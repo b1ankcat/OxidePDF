@@ -41,12 +41,8 @@ pub fn write_test_trust_anchors(name: &str) -> PathBuf {
         "oxidepdf_core_{name}_{}_anchors.pem",
         std::process::id()
     ));
-    std::fs::write(
-        &path,
-        include_bytes!("../../../../tests/fixtures/test-trust-anchor.txt"),
-    )
-    .unwrap();
-    path
+    std::fs::write(&path, test_trust_anchor_pem()).unwrap();
+    path.canonicalize().unwrap()
 }
 
 pub fn write_p256_signing_material(name: &str) -> (PathBuf, PathBuf) {
@@ -89,6 +85,32 @@ pub fn write_p256_signing_material(name: &str) -> (PathBuf, PathBuf) {
     std::fs::write(&private_key_path, private_key_pem).unwrap();
     std::fs::write(&certificate_path, certificate_pem).unwrap();
     (certificate_path, private_key_path)
+}
+
+fn test_trust_anchor_pem() -> String {
+    let signing_key = p256::ecdsa::SigningKey::from_bytes((&[9u8; 32]).into()).unwrap();
+    let verifying_key = *signing_key.verifying_key();
+    let public_key = spki::SubjectPublicKeyInfoOwned::from_key(verifying_key).unwrap();
+    let subject = x509_cert::name::Name::from_str("CN=OxidePDF Test Trust Anchor,O=OxidePDF,C=US")
+        .unwrap()
+        .to_der()
+        .unwrap();
+    let subject = x509_cert::name::Name::from_der(&subject).unwrap();
+    let validity = x509_cert::time::Validity::from_now(Duration::from_secs(60 * 60)).unwrap();
+    let serial_number = x509_cert::serial_number::SerialNumber::from(99u32);
+    let certificate = x509_cert::builder::CertificateBuilder::new(
+        x509_cert::builder::Profile::Root,
+        serial_number,
+        validity,
+        subject,
+        public_key,
+        &signing_key,
+    )
+    .unwrap()
+    .build::<p256::ecdsa::DerSignature>()
+    .unwrap();
+
+    certificate.to_pem(LineEnding::LF).unwrap()
 }
 
 pub fn write_empty_trust_anchors(name: &str) -> PathBuf {
@@ -397,6 +419,163 @@ pub fn empty_page_pdf() -> Vec<u8> {
     page.finish();
 
     pdf.finish()
+}
+
+pub fn fixture_pdf() -> &'static [u8] {
+    static PDF: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    PDF.get_or_init(three_page_text_pdf)
+}
+
+pub fn fixture_jpg() -> &'static [u8] {
+    static JPG: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    JPG.get_or_init(test_jpeg)
+}
+
+pub fn fixture_signature_pdf() -> &'static [u8] {
+    static PDF: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    PDF.get_or_init(|| {
+        let mut bytes = b"%PDF-1.7
+1 0 obj
+<< /Type /Sig /SubFilter /adbe.pkcs7.detached /ByteRange [0 64 192 64] /Contents <3082> >>
+endobj
+%%EOF"
+            .to_vec();
+        bytes.resize(256, b' ');
+        bytes
+    })
+}
+
+pub fn blank_three_page_pdf() -> Vec<u8> {
+    let mut document = lopdf::Document::with_version("1.7");
+    let pages_id = document.new_object_id();
+    let catalog_id = document.new_object_id();
+    let mut page_ids = Vec::new();
+
+    for _ in 0..3 {
+        let page_id = document.new_object_id();
+        document.objects.insert(
+            page_id,
+            Object::Dictionary(lopdf::dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "MediaBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+            }),
+        );
+        page_ids.push(page_id);
+    }
+
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(lopdf::dictionary! {
+            "Type" => "Pages",
+            "Kids" => Object::Array(page_ids.iter().copied().map(Object::Reference).collect()),
+            "Count" => page_ids.len() as i64,
+        }),
+    );
+    document.objects.insert(
+        catalog_id,
+        Object::Dictionary(lopdf::dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        }),
+    );
+    document.trailer.set("Root", catalog_id);
+
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+fn three_page_text_pdf() -> Vec<u8> {
+    let mut document = lopdf::Document::with_version("1.7");
+    let pages_id = document.new_object_id();
+    let font_id = document.new_object_id();
+    let catalog_id = document.new_object_id();
+    let mut page_ids = Vec::new();
+
+    document.objects.insert(
+        font_id,
+        Object::Dictionary(lopdf::dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => "Helvetica",
+        }),
+    );
+
+    for page_number in 1..=3 {
+        let page_id = document.new_object_id();
+        let content_id = document.new_object_id();
+        let content = lopdf::content::Content {
+            operations: vec![
+                lopdf::content::Operation::new("BT", vec![]),
+                lopdf::content::Operation::new("Tf", vec![Object::Name(b"F1".to_vec()), 12.into()]),
+                lopdf::content::Operation::new("Td", vec![72.into(), 720.into()]),
+                lopdf::content::Operation::new(
+                    "Tj",
+                    vec![Object::string_literal(format!(
+                        "OxidePDF fixture page {page_number}"
+                    ))],
+                ),
+                lopdf::content::Operation::new("ET", vec![]),
+            ],
+        }
+        .encode()
+        .unwrap();
+        document.objects.insert(
+            content_id,
+            Object::Stream(Stream::new(Dictionary::new(), content)),
+        );
+        document.objects.insert(
+            page_id,
+            Object::Dictionary(lopdf::dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "MediaBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+                "Resources" => Object::Dictionary(lopdf::dictionary! {
+                    "Font" => Object::Dictionary(lopdf::dictionary! {
+                        "F1" => font_id,
+                    }),
+                }),
+                "Contents" => content_id,
+            }),
+        );
+        page_ids.push(page_id);
+    }
+
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(lopdf::dictionary! {
+            "Type" => "Pages",
+            "Kids" => Object::Array(page_ids.iter().copied().map(Object::Reference).collect()),
+            "Count" => page_ids.len() as i64,
+        }),
+    );
+    document.objects.insert(
+        catalog_id,
+        Object::Dictionary(lopdf::dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        }),
+    );
+    document.trailer.set("Root", catalog_id);
+
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+fn test_jpeg() -> Vec<u8> {
+    let image = image::RgbImage::from_fn(8, 8, |x, y| {
+        if (x + y) % 2 == 0 {
+            image::Rgb([220, 38, 38])
+        } else {
+            image::Rgb([37, 99, 235])
+        }
+    });
+    let mut bytes = Vec::new();
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 85);
+    encoder.encode_image(&image).unwrap();
+    bytes
 }
 
 pub fn pdf_with_media_box(width: i64, height: i64) -> Vec<u8> {

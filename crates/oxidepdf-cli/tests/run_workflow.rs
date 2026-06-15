@@ -1,4 +1,6 @@
 use assert_cmd::Command;
+mod common;
+use common::{fixture_jpg, fixture_pdf};
 use lopdf::dictionary;
 use predicates::prelude::*;
 use std::fs;
@@ -813,20 +815,6 @@ fn temp_dir(name: &str) -> std::path::PathBuf {
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir
-}
-
-fn fixture_pdf() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/test.pdf")
-        .canonicalize()
-        .unwrap()
-}
-
-fn fixture_jpg() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/test.jpg")
-        .canonicalize()
-        .unwrap()
 }
 
 fn pdf_page_count(path: &std::path::Path) -> usize {

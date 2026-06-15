@@ -884,7 +884,7 @@ fn parses_security_operator_schema() {
 
 #[test]
 fn pdf_operator_runner_handles_page_editing_tasks() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
     let runner = PdfOperatorRunner::default();
 
     let merged = runner
@@ -907,7 +907,7 @@ fn pdf_operator_runner_handles_page_editing_tasks() {
 
 #[test]
 fn pdf_operator_runner_enforces_output_size_limit() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
     let runner = PdfOperatorRunner::with_limits(ResourceLimits {
         max_output_bytes: Some(1),
         ..ResourceLimits::default()
@@ -938,7 +938,7 @@ fn pdf_operator_runner_enforces_output_size_limit() {
 fn object_level_operator_emits_parsed_pdf_object() {
     // A migrated page operator returns a parsed object tree, not serialized
     // bytes, so a downstream operator can consume it without re-parsing.
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
     let runner = PdfOperatorRunner::default();
 
     let artifact = runner
@@ -1059,7 +1059,7 @@ fn pdf_operator_runner_emits_signature_list_report_without_trust_anchors() {
 
 #[test]
 fn pdf_operator_runner_handles_extract_text_tasks() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
     let runner = PdfOperatorRunner::default();
 
     let extracted = runner

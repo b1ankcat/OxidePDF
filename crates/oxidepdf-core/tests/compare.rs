@@ -11,7 +11,7 @@ use oxidepdf_core::*;
 
 #[test]
 fn compare_identical_pdf_report_is_equal() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let artifact =
         compare_pdf_report(pdf, pdf, &CompareOptions::default(), &Default::default()).unwrap();
@@ -25,7 +25,7 @@ fn compare_identical_pdf_report_is_equal() {
 
 #[test]
 fn compare_report_locates_metadata_difference() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
     let changed = edit_pdf_metadata(
         pdf,
         &MetadataEditOptions {
@@ -77,7 +77,7 @@ fn compare_report_locates_page_size_difference() {
 
 #[test]
 fn compare_report_locates_text_difference() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
     let changed = watermark_pdf_artifacts(
         &[Artifact::pdf(pdf)],
         &WatermarkOptions {
@@ -139,7 +139,7 @@ fn compare_report_makes_page_count_mismatch_explicit() {
 
 #[test]
 fn compare_workflow_produces_text_report() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
     let workflow = workflow_from_json(
         r#"
             {

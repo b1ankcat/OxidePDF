@@ -11,7 +11,7 @@ use oxidepdf_core::*;
 
 #[test]
 fn merge_pdf_artifacts_combines_pages() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let merged = merge_pdf_artifacts(&[Artifact::pdf(pdf), Artifact::pdf(pdf)]).unwrap();
     let document = lopdf::Document::load_mem(&merged.bytes).unwrap();
@@ -21,7 +21,7 @@ fn merge_pdf_artifacts_combines_pages() {
 
 #[test]
 fn merge_pdf_artifacts_enforces_input_and_page_limits() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let input_err = merge_pdf_artifacts_with_limits(
         &[Artifact::pdf(pdf), Artifact::pdf(pdf)],
@@ -56,7 +56,7 @@ fn merge_pdf_artifacts_enforces_input_and_page_limits() {
 
 #[test]
 fn split_pdf_keeps_only_selected_pages() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let split = split_pdf(pdf, "2-3").unwrap();
     let document = lopdf::Document::load_mem(&split.bytes).unwrap();
@@ -67,7 +67,7 @@ fn split_pdf_keeps_only_selected_pages() {
 
 #[test]
 fn split_pdf_enforces_resource_limits() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let err = split_pdf_with_limits(
         pdf,
@@ -89,7 +89,7 @@ fn split_pdf_enforces_resource_limits() {
 
 #[test]
 fn reorder_pdf_rearranges_pages() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let reordered = reorder_pdf(pdf, "3,1,2").unwrap();
     let document = lopdf::Document::load_mem(&reordered.bytes).unwrap();
@@ -100,7 +100,7 @@ fn reorder_pdf_rearranges_pages() {
 
 #[test]
 fn rotate_pdf_updates_page_rotation() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let rotated = rotate_pdf(pdf, "1-2", 90).unwrap();
     let document = lopdf::Document::load_mem(&rotated.bytes).unwrap();
@@ -121,7 +121,7 @@ fn rotate_pdf_rejects_non_pdf_magic_bytes() {
 
 #[test]
 fn delete_pdf_pages_removes_selected_pages() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let deleted = delete_pdf_pages(pdf, "2").unwrap();
     let document = lopdf::Document::load_mem(&deleted.bytes).unwrap();
@@ -131,7 +131,7 @@ fn delete_pdf_pages_removes_selected_pages() {
 
 #[test]
 fn delete_pdf_pages_rejects_deleting_every_page() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let err = delete_pdf_pages(pdf, "1-3").unwrap_err();
 
@@ -141,7 +141,7 @@ fn delete_pdf_pages_rejects_deleting_every_page() {
 
 #[test]
 fn extract_pdf_pages_keeps_selected_order() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let extracted = extract_pdf_pages(pdf, "3,1").unwrap();
     let document = lopdf::Document::load_mem(&extracted.bytes).unwrap();
@@ -171,7 +171,7 @@ fn delete_blank_pdf_pages_rejects_unresolved_resource_reference() {
 
 #[test]
 fn crop_pdf_pages_sets_crop_box_on_selected_pages() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let cropped = crop_pdf_pages(
         pdf,
@@ -195,7 +195,7 @@ fn crop_pdf_pages_sets_crop_box_on_selected_pages() {
 
 #[test]
 fn scale_pdf_pages_scales_page_box_and_content_stream() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let scaled = scale_pdf_pages(
         pdf,
@@ -215,7 +215,7 @@ fn scale_pdf_pages_scales_page_box_and_content_stream() {
 
 #[test]
 fn pdf_to_single_page_combines_pages_into_one_tall_page() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let single = pdf_to_single_page(pdf, &SinglePageOptions::default()).unwrap();
     let document = lopdf::Document::load_mem(&single.bytes).unwrap();
@@ -228,7 +228,7 @@ fn pdf_to_single_page_combines_pages_into_one_tall_page() {
 
 #[test]
 fn nup_pdf_pages_places_source_pages_as_xobjects() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let nup = nup_pdf_pages(
         pdf,
@@ -251,7 +251,7 @@ fn nup_pdf_pages_places_source_pages_as_xobjects() {
 
 #[test]
 fn nup_pdf_pages_rejects_zero_columns() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let err = nup_pdf_pages(
         pdf,
@@ -268,7 +268,7 @@ fn nup_pdf_pages_rejects_zero_columns() {
 
 #[test]
 fn booklet_pdf_pages_outputs_two_up_imposed_pages() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let booklet = booklet_pdf_pages(pdf, &BookletOptions::default()).unwrap();
     let document = lopdf::Document::load_mem(&booklet.bytes).unwrap();
@@ -281,7 +281,7 @@ fn booklet_pdf_pages_outputs_two_up_imposed_pages() {
 
 #[test]
 fn add_pdf_page_numbers_writes_selected_page_content() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let numbered = add_pdf_page_numbers(
         pdf,
@@ -304,7 +304,7 @@ fn add_pdf_page_numbers_writes_selected_page_content() {
 
 #[test]
 fn add_pdf_page_numbers_rejects_non_ascii_text() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let err = add_pdf_page_numbers(
         pdf,

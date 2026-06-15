@@ -68,7 +68,7 @@ fn signature_field_delete_removes_field_when_destructive_is_explicit() {
 
 #[test]
 fn add_signature_creates_pdf_that_verifies_and_detects_tamper() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
     let (certificate_path, private_key_path) = write_p256_signing_material("add_signature");
 
     let signed_pdf = add_pdf_signature(
@@ -136,7 +136,7 @@ fn add_signature_creates_pdf_that_verifies_and_detects_tamper() {
 
 #[test]
 fn timestamp_add_requires_exactly_one_timestamp_source() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let err = add_pdf_timestamp(
         pdf,
@@ -155,7 +155,7 @@ fn timestamp_add_requires_exactly_one_timestamp_source() {
 
 #[test]
 fn timestamp_add_reports_invalid_explicit_token_without_modifying_pdf() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
     let token_path = std::env::temp_dir().join(format!(
         "oxidepdf_core_invalid_timestamp_{}.tsr",
         std::process::id()
@@ -185,7 +185,7 @@ fn timestamp_add_reports_invalid_explicit_token_without_modifying_pdf() {
 
 #[test]
 fn add_signature_validates_inputs_without_leaking_key_paths() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
     let err = add_pdf_signature(
         pdf,
         &SignatureAddOptions {
@@ -229,7 +229,7 @@ fn verify_pdf_signatures_without_trust_anchors_is_indeterminate_not_trusted() {
 
 #[test]
 fn verify_pdf_signatures_rejects_empty_trust_anchor_file() {
-    let pdf = include_bytes!("../../../tests/fixtures/signature-placeholder.pdf");
+    let pdf = fixture_signature_pdf();
     let trust_anchors = write_empty_trust_anchors("empty_signature_anchors");
 
     let err = verify_pdf_signatures(
@@ -252,7 +252,7 @@ fn verify_pdf_signatures_rejects_empty_trust_anchor_file() {
 
 #[test]
 fn verify_pdf_signatures_rejects_invalid_trust_anchor_certificate() {
-    let pdf = include_bytes!("../../../tests/fixtures/signature-placeholder.pdf");
+    let pdf = fixture_signature_pdf();
     let trust_anchors = write_invalid_trust_anchors("invalid_signature_anchors");
 
     let err = verify_pdf_signatures(
@@ -275,7 +275,7 @@ fn verify_pdf_signatures_rejects_invalid_trust_anchor_certificate() {
 
 #[test]
 fn verify_pdf_signatures_reports_unsigned_pdf_as_indeterminate() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
     let trust_anchors = write_test_trust_anchors("unsigned_pdf_report");
 
     let report = verify_pdf_signatures(
@@ -354,7 +354,7 @@ fn verify_pdf_signatures_reports_unknown_subfilter_as_unsupported() {
 
 #[test]
 fn signature_research_scanner_finds_signature_markers() {
-    let pdf = include_bytes!("../../../tests/fixtures/signature-placeholder.pdf");
+    let pdf = fixture_signature_pdf();
 
     let report = inspect_pdf_signature_markers_for_research(pdf).unwrap();
 

@@ -80,7 +80,7 @@ fn compress_pdf_merges_duplicate_image_resources_without_reencoding() {
 
 #[test]
 fn compress_pdf_lossless_keeps_jpeg_image_streams() {
-    let image = include_bytes!("../../../tests/test.jpg");
+    let image = fixture_jpg();
     let pdf = image_artifacts_to_pdf(
         &[Artifact::image(image)],
         &ImageToPdfOptions {

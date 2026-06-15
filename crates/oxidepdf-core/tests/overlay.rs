@@ -12,7 +12,7 @@ use oxidepdf_core::*;
 #[test]
 fn overlay_pdf_page_and_signature_appearance_are_visual_only() {
     let pdf = empty_page_pdf();
-    let overlay = include_bytes!("../../../tests/test.pdf");
+    let overlay = fixture_pdf();
     let overlaid = overlay_pdf_artifacts(
         &[Artifact::pdf(&pdf), Artifact::pdf(overlay)],
         &OverlayOptions {
@@ -71,7 +71,7 @@ fn overlay_pdf_page_and_signature_appearance_are_visual_only() {
 
 #[test]
 fn image_resources_list_add_replace_delete_and_extract() {
-    let image = include_bytes!("../../../tests/test.jpg");
+    let image = fixture_jpg();
     let pdf = image_artifacts_to_pdf(
         &[Artifact::image(image)],
         &ImageToPdfOptions {
@@ -217,7 +217,7 @@ fn color_operations_rewrite_simple_content_and_reject_rasterize_pages() {
 
 #[test]
 fn image_artifacts_to_pdf_converts_real_jpeg() {
-    let image = include_bytes!("../../../tests/test.jpg");
+    let image = fixture_jpg();
 
     let pdf = image_artifacts_to_pdf(
         &[Artifact::image(image)],
@@ -232,7 +232,7 @@ fn image_artifacts_to_pdf_converts_real_jpeg() {
 
 #[test]
 fn image_artifacts_to_pdf_writes_one_page_per_image() {
-    let image = include_bytes!("../../../tests/test.jpg");
+    let image = fixture_jpg();
 
     let pdf = image_artifacts_to_pdf(
         &[Artifact::image(image), Artifact::image(image)],
@@ -247,7 +247,7 @@ fn image_artifacts_to_pdf_writes_one_page_per_image() {
 
 #[test]
 fn image_artifacts_to_pdf_enforces_pixel_limit() {
-    let image = include_bytes!("../../../tests/test.jpg");
+    let image = fixture_jpg();
     let limits = ResourceLimits {
         max_pixels: Some(1),
         ..ResourceLimits::default()
@@ -282,7 +282,7 @@ fn image_artifacts_to_pdf_rejects_unknown_image_format() {
 
 #[test]
 fn image_artifacts_to_pdf_enforces_output_size_limit() {
-    let image = include_bytes!("../../../tests/test.jpg");
+    let image = fixture_jpg();
 
     let err = image_artifacts_to_pdf(
         &[Artifact::image(image)],
@@ -357,7 +357,7 @@ fn svg_to_pdf_rejects_non_svg_magic_bytes() {
 
 #[test]
 fn render_pdf_page_writes_png_for_real_pdf() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let image = render_pdf_page(
         pdf,
@@ -377,7 +377,7 @@ fn render_pdf_page_writes_png_for_real_pdf() {
 
 #[test]
 fn render_pdf_page_rejects_out_of_range_page() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let err = render_pdf_page(
         pdf,
@@ -396,7 +396,7 @@ fn render_pdf_page_rejects_out_of_range_page() {
 
 #[test]
 fn extract_text_from_pdf_returns_plain_text_for_real_pdf() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let text = extract_text_from_pdf(
         pdf,
@@ -426,7 +426,7 @@ fn extract_text_from_pdf_rejects_pdf_without_text_layer() {
 
 #[test]
 fn extract_text_from_pdf_rejects_unknown_format() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let err = extract_text_from_pdf(
         pdf,
@@ -459,10 +459,10 @@ fn extract_text_from_pdf_rejects_non_pdf_magic_bytes() {
 
 #[test]
 fn watermark_pdf_adds_text_watermark_to_selected_page() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = blank_three_page_pdf();
 
     let watermarked = watermark_pdf_artifacts(
-        &[Artifact::pdf(pdf)],
+        &[Artifact::pdf(&pdf)],
         &WatermarkOptions {
             kind: WatermarkKind::Text,
             text: Some("DRAFT".to_owned()),
@@ -490,7 +490,7 @@ fn watermark_pdf_adds_text_watermark_to_selected_page() {
 
 #[test]
 fn watermark_pdf_rejects_missing_text_font_without_substitution() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let err = watermark_pdf_artifacts(
         &[Artifact::pdf(pdf)],
@@ -516,8 +516,8 @@ fn watermark_pdf_rejects_missing_text_font_without_substitution() {
 
 #[test]
 fn watermark_pdf_enforces_image_pixel_limit() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
-    let image = include_bytes!("../../../tests/test.jpg");
+    let pdf = fixture_pdf();
+    let image = fixture_jpg();
 
     let err = watermark_pdf_artifacts(
         &[Artifact::pdf(pdf), Artifact::image(image)],
@@ -551,8 +551,8 @@ fn watermark_pdf_enforces_image_pixel_limit() {
 
 #[test]
 fn watermark_pdf_adds_image_watermark_to_selected_page() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
-    let image = include_bytes!("../../../tests/test.jpg");
+    let pdf = fixture_pdf();
+    let image = fixture_jpg();
 
     let watermarked = watermark_pdf_artifacts(
         &[Artifact::pdf(pdf), Artifact::image(image)],
@@ -581,7 +581,7 @@ fn watermark_pdf_adds_image_watermark_to_selected_page() {
 
 #[test]
 fn watermark_pdf_adds_svg_watermark_as_vector_xobject() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
     let svg = simple_svg();
 
     let watermarked = watermark_pdf_artifacts(
@@ -618,7 +618,7 @@ fn watermark_pdf_adds_svg_watermark_as_vector_xobject() {
 
 #[test]
 fn watermark_pdf_rasterizes_svg_only_when_requested() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
     let svg = simple_svg();
 
     let watermarked = watermark_pdf_artifacts(
@@ -646,7 +646,7 @@ fn watermark_pdf_rasterizes_svg_only_when_requested() {
 
 #[test]
 fn watermark_pdf_rejects_malformed_svg_without_panic() {
-    let pdf = include_bytes!("../../../tests/test.pdf");
+    let pdf = fixture_pdf();
 
     let err = watermark_pdf_artifacts(
         &[Artifact::pdf(pdf), Artifact::svg(b"<svg><broken>")],
