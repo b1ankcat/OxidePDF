@@ -70,12 +70,12 @@ fn validate_compression_options(options: &CompressionOptions) -> Result<(), Oxid
                         .to_owned(),
                 });
             }
-            if let Some(quality) = images.quality {
-                if !(1..=100).contains(&quality) {
-                    return Err(OxideError::InvalidInput {
-                        reason: "image quality must be between 1 and 100".to_owned(),
-                    });
-                }
+            if let Some(quality) = images.quality
+                && !(1..=100).contains(&quality)
+            {
+                return Err(OxideError::InvalidInput {
+                    reason: "image quality must be between 1 and 100".to_owned(),
+                });
             }
         }
     }

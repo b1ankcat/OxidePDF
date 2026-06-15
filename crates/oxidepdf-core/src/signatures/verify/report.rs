@@ -128,16 +128,14 @@ fn discover_pdf_signature_dictionaries(
     document: &lopdf::Document,
 ) -> Result<Vec<DiscoveredSignatureDictionary<'_>>, OxideError> {
     let mut signatures = Vec::new();
-    if let Ok(catalog) = document.catalog() {
-        if let Ok(acroform) = catalog
+    if let Ok(catalog) = document.catalog()
+        && let Ok(acroform) = catalog
             .get(b"AcroForm")
             .and_then(|object| deref_dictionary(document, object))
-        {
-            if let Ok(fields) = acroform.get(b"Fields").and_then(lopdf::Object::as_array) {
-                for field in fields {
-                    collect_signature_fields(document, field, None, &mut signatures)?;
-                }
-            }
+        && let Ok(fields) = acroform.get(b"Fields").and_then(lopdf::Object::as_array)
+    {
+        for field in fields {
+            collect_signature_fields(document, field, None, &mut signatures)?;
         }
     }
     for (_, page_id) in document.get_pages() {

@@ -32,3 +32,6 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace
+
+      - name: Run benchmark smoke tests
+        run: scripts/bench-smoke.sh

@@ -36,7 +36,7 @@ rsa = { version = "0.9.10", default-features = false, features = ["std", "sha2"]
 pdf-extract = "0.10.0"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 imageproc = { version = "0.27.0", default-features = false }
-pdf-writer = "0.15.0"
+pdf-writer = "0.12.1"
 svg2pdf = { version = "0.13.0", default-features = false }
 usvg = { version = "0.45.1", default-features = false }
 resvg = { version = "0.45.1", default-features = false }

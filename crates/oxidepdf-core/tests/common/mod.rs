@@ -1184,15 +1184,15 @@ fn collect_form_xobject_operators(
     {
         return;
     }
-    if let Ok(content) = stream.get_plain_content() {
-        if let Ok(content) = lopdf::content::Content::decode(&content) {
-            operators.extend(
-                content
-                    .operations
-                    .into_iter()
-                    .map(|operation| operation.operator),
-            );
-        }
+    if let Ok(content) = stream.get_plain_content()
+        && let Ok(content) = lopdf::content::Content::decode(&content)
+    {
+        operators.extend(
+            content
+                .operations
+                .into_iter()
+                .map(|operation| operation.operator),
+        );
     }
     let Ok(resources) = stream.dict.get(b"Resources").and_then(Object::as_dict) else {
         return;

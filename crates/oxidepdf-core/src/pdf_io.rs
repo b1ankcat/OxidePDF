@@ -70,40 +70,40 @@ pub(crate) fn map_pdf_extract_error(error: pdf_extract::OutputError) -> OxideErr
 }
 
 pub(crate) fn enforce_input_bytes(size: usize, limits: &ResourceLimits) -> Result<(), OxideError> {
-    if let Some(limit) = limits.max_input_bytes {
-        if size as u64 > limit {
-            return Err(resource_limit("max_input_bytes"));
-        }
+    if let Some(limit) = limits.max_input_bytes
+        && size as u64 > limit
+    {
+        return Err(resource_limit("max_input_bytes"));
     }
 
     Ok(())
 }
 
 pub(crate) fn enforce_max_pages(pages: usize, limits: &ResourceLimits) -> Result<(), OxideError> {
-    if let Some(limit) = limits.max_pages {
-        if pages as u32 > limit {
-            return Err(resource_limit("max_pages"));
-        }
+    if let Some(limit) = limits.max_pages
+        && pages as u32 > limit
+    {
+        return Err(resource_limit("max_pages"));
     }
 
     Ok(())
 }
 
 pub(crate) fn enforce_max_pixels(pixels: u64, limits: &ResourceLimits) -> Result<(), OxideError> {
-    if let Some(limit) = limits.max_pixels {
-        if pixels > limit {
-            return Err(resource_limit("max_pixels"));
-        }
+    if let Some(limit) = limits.max_pixels
+        && pixels > limit
+    {
+        return Err(resource_limit("max_pixels"));
     }
 
     Ok(())
 }
 
 pub(crate) fn enforce_output_bytes(size: usize, limits: &ResourceLimits) -> Result<(), OxideError> {
-    if let Some(limit) = limits.max_output_bytes {
-        if size as u64 > limit {
-            return Err(resource_limit("max_output_bytes"));
-        }
+    if let Some(limit) = limits.max_output_bytes
+        && size as u64 > limit
+    {
+        return Err(resource_limit("max_output_bytes"));
     }
 
     Ok(())

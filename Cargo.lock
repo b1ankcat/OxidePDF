@@ -1845,7 +1845,7 @@ dependencies = [
  "lopdf 0.41.0",
  "p256",
  "pdf-extract",
- "pdf-writer 0.15.0",
+ "pdf-writer",
  "pem-rfc7468 1.0.0",
  "rand 0.10.1",
  "rayon",
@@ -1927,18 +1927,6 @@ name = "pdf-writer"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5df03c7d216de06f93f398ef06f1385a60f2c597bb96f8195c8d98e08a26b1d5"
-dependencies = [
- "bitflags 2.13.0",
- "itoa",
- "memchr",
- "ryu",
-]
-
-[[package]]
-name = "pdf-writer"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5e456864a7a304047bff84977dc6fb162bd956475d40ba50b2dcecaada7f753"
 dependencies = [
  "bitflags 2.13.0",
  "itoa",
@@ -2852,7 +2840,7 @@ dependencies = [
  "log",
  "miniz_oxide",
  "once_cell",
- "pdf-writer 0.12.1",
+ "pdf-writer",
  "usvg",
 ]
 

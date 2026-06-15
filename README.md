@@ -112,10 +112,11 @@ Build a static Linux binary:
 cargo zigbuild --release --target x86_64-unknown-linux-musl -p oxidepdf-cli
 ```
 
-Create release zip archives:
+Create release zip archives. By default, archive names use the package version
+from `Cargo.toml`; pass `VERSION=...` only when you need an explicit override:
 
 ```sh
-VERSION=20260101 scripts/release.sh
+scripts/release.sh
 ```
 
 Each zip contains:

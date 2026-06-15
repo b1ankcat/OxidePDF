@@ -110,13 +110,13 @@ fn cms_verification(
 
 fn parse_cms_signed_data(contents: &[u8]) -> Result<SignedData, ()> {
     let contents = der_slice_without_padding(contents).unwrap_or(contents);
-    if let Ok(content_info) = ContentInfo::from_der(contents) {
-        if content_info.content_type == const_oid::db::rfc5911::ID_SIGNED_DATA {
-            return content_info
-                .content
-                .decode_as::<SignedData>()
-                .map_err(|_| ());
-        }
+    if let Ok(content_info) = ContentInfo::from_der(contents)
+        && content_info.content_type == const_oid::db::rfc5911::ID_SIGNED_DATA
+    {
+        return content_info
+            .content
+            .decode_as::<SignedData>()
+            .map_err(|_| ());
     }
 
     SignedData::from_der(contents).map_err(|_| ())
@@ -255,4 +255,3 @@ fn cms_signature_verification(
         signer_info.signature.as_bytes(),
     )
 }
-

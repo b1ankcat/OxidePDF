@@ -5,12 +5,23 @@ TARGETS="${TARGETS:-x86_64-unknown-linux-musl aarch64-unknown-linux-musl}"
 PACKAGE="${PACKAGE:-oxidepdf-cli}"
 BIN="${BIN:-oxidepdf}"
 DIST_DIR="${DIST_DIR:-dist}"
-VERSION="${VERSION:-$(date +%Y%m%d)}"
 
 command -v cargo >/dev/null 2>&1 || {
   echo "cargo is required" >&2
   exit 127
 }
+
+package_version() {
+  cargo metadata --no-deps --format-version 1 \
+    | sed -n "s/.*\"name\":\"$PACKAGE\"[^}]*\"version\":\"\\([^\"]*\\)\".*/\\1/p" \
+    | head -n1
+}
+
+VERSION="${VERSION:-$(package_version)}"
+if [ -z "$VERSION" ]; then
+  echo "Failed to resolve version for package $PACKAGE from Cargo metadata" >&2
+  exit 1
+fi
 
 if ! cargo zigbuild --help >/dev/null 2>&1; then
   echo "cargo-zigbuild is required; install with: cargo install cargo-zigbuild" >&2

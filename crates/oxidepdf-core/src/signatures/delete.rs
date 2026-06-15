@@ -3,16 +3,14 @@ fn signature_field_id_by_name(
     field_name: &str,
 ) -> Result<lopdf::ObjectId, OxideError> {
     let mut matches = Vec::new();
-    if let Ok(catalog) = document.catalog() {
-        if let Ok(acroform) = catalog
+    if let Ok(catalog) = document.catalog()
+        && let Ok(acroform) = catalog
             .get(b"AcroForm")
             .and_then(|object| deref_dictionary(document, object))
-        {
-            if let Ok(fields) = acroform.get(b"Fields").and_then(lopdf::Object::as_array) {
-                for field in fields {
-                    collect_signature_field_ids(document, field, None, field_name, &mut matches)?;
-                }
-            }
+        && let Ok(fields) = acroform.get(b"Fields").and_then(lopdf::Object::as_array)
+    {
+        for field in fields {
+            collect_signature_field_ids(document, field, None, field_name, &mut matches)?;
         }
     }
 
@@ -48,10 +46,9 @@ fn collect_signature_field_ids(
         .or(inherited_name);
     if dictionary.get(b"FT").and_then(lopdf::Object::as_name).ok() == Some(b"Sig")
         && field_name.as_deref() == Some(target_name)
+        && let Some(field_id) = field_id
     {
-        if let Some(field_id) = field_id {
-            matches.push(field_id);
-        }
+        matches.push(field_id);
     }
     if let Ok(kids) = dictionary.get(b"Kids").and_then(lopdf::Object::as_array) {
         for kid in kids {
@@ -126,4 +123,3 @@ fn remove_reference_from_array_entry(
     };
     array.retain(|object| !matches!(object, lopdf::Object::Reference(id) if *id == field_id));
 }
-

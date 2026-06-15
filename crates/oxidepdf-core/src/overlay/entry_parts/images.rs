@@ -11,7 +11,7 @@ pub(crate) fn inspect_images_on_document(
 ) -> Result<TextArtifact, OxideError> {
     let mut images = Vec::new();
     for (page, page_id) in document.get_pages() {
-        for (name, id, dict) in page_image_xobjects(&document, page_id)? {
+        for (name, id, dict) in page_image_xobjects(document, page_id)? {
             let width = required_image_dimension(&dict, b"Width")?;
             let height = required_image_dimension(&dict, b"Height")?;
             images.push(ImageResourceReport {

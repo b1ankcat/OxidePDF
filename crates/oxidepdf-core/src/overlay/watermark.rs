@@ -83,22 +83,21 @@ struct FontMetrics {
 }
 
 fn resolve_watermark_font(options: &OverlayOptions) -> Result<ResolvedFont, OxideError> {
-    if options.font_path.is_none() {
-        if let Some(family) = options
+    if options.font_path.is_none()
+        && let Some(family) = options
             .font
             .as_deref()
             .filter(|family| is_standard_pdf_font(family))
-        {
-            return Ok(ResolvedFont {
-                resource_name: b"OxWmF1".to_vec(),
-                base_font: family.as_bytes().to_vec(),
-                metrics: FontMetrics {
-                    units_per_em: 1000,
-                    ascent: 718,
-                    descent: -207,
-                },
-            });
-        }
+    {
+        return Ok(ResolvedFont {
+            resource_name: b"OxWmF1".to_vec(),
+            base_font: family.as_bytes().to_vec(),
+            metrics: FontMetrics {
+                units_per_em: 1000,
+                ascent: 718,
+                descent: -207,
+            },
+        });
     }
     let (font_bytes, family_name) = if let Some(path) = &options.font_path {
         let bytes = std::fs::read(path).map_err(|_| OxideError::FontResolution)?;
