@@ -4,7 +4,19 @@ version.workspace = true
 edition.workspace = true
 license = "GPL-3.0-or-later"
 rust-version.workspace = true
-description = "Web front end for OxidePDF (placeholder)."
+description = "Web front end for OxidePDF."
+
+[[bin]]
+name = "oxidepdf-web"
+path = "src/main.rs"
 
 [dependencies]
 oxidepdf-core.workspace = true
+axum = { workspace = true, features = ["multipart"] }
+tokio.workspace = true
+rust-embed.workspace = true
+base64.workspace = true
+serde_json.workspace = true
+serde-saphyr.workspace = true
+clap.workspace = true
+tower-http.workspace = true

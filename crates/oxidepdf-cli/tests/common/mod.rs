@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use der::{pem::LineEnding, Decode, Encode, EncodePem};
+use der::{Decode, Encode, EncodePem, pem::LineEnding};
 use lopdf::dictionary;
 use oxidepdf_core::{Artifact, ImageToPdfOptions};
 use p256::pkcs8::EncodePrivateKey;

@@ -1,15 +1,15 @@
 use crate::{
-    enforce_input_bytes, enforce_max_pages, enforce_max_pixels, enforce_output_bytes,
-    extract_text_from_pdf, inspect_pdf_annotations, inspect_pdf_attachments, inspect_pdf_forms,
-    inspect_pdf_metadata, inspect_pdf_outline, load_pdf, page_size, render_pdf_page,
     AnnotationInspectOptions, AttachmentInspectOptions, ExtractTextOptions, FormInspectOptions,
     ImageArtifact, MetadataInspectOptions, OutlineInspectOptions, OxideError, RenderOptions,
-    ResourceLimits, TextArtifact,
+    ResourceLimits, TextArtifact, enforce_input_bytes, enforce_max_pages, enforce_max_pixels,
+    enforce_output_bytes, extract_text_from_pdf, inspect_pdf_annotations, inspect_pdf_attachments,
+    inspect_pdf_forms, inspect_pdf_metadata, inspect_pdf_outline, load_pdf, page_size,
+    render_pdf_page,
 };
 use image::{ImageBuffer, ImageFormat, Rgba, RgbaImage};
 use lopdf::Object;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::io::Cursor;
 

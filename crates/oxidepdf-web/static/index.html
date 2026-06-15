@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OxidePDF</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:800px;margin:2rem auto;padding:0 1rem}
+h1{margin-bottom:.25rem}
+p{margin-top:.25rem;color:#555}
+textarea{width:100%;height:180px;font-family:monospace;font-size:13px;box-sizing:border-box}
+.file-row{display:flex;gap:.5rem;align-items:center;margin:.3rem 0}
+.file-row label{min-width:120px;font-family:monospace}
+button{margin-top:.75rem;padding:.4rem 1.2rem;cursor:pointer}
+#result{margin-top:1rem}
+#result a{display:block;margin:.3rem 0}
+.error{color:#c00}
+</style>
+</head>
+<body>
+<h1>OxidePDF</h1>
+<p>Paste a workflow YAML, upload the input files, then click <strong>Run</strong>.</p>
+<textarea id="wf" spellcheck="false" placeholder="version: 1
+inputs:
+  - id: src
+    path: src.pdf
+outputs:
+  - id: out
+    from: compressed
+    path: out.pdf
+tasks:
+  - id: compressed
+    op:
+      pdf_edit:
+        compression:
+          mode: lossless
+    inputs: [src]"></textarea>
+<div id="files"></div>
+<button onclick="run()">Run</button>
+<div id="result"></div>
+<script>
+const wf=document.getElementById('wf'),files=document.getElementById('files'),result=document.getElementById('result');
+wf.addEventListener('input',refresh);
+
+function parseIds(yaml){
+  const ids=[];let inInputs=false;
+  for(const line of yaml.split('\n')){
+    if(/^inputs\s*:/.test(line)){inInputs=true;continue;}
+    if(inInputs&&/^[a-zA-Z\[]/.test(line))inInputs=false;
+    if(inInputs){const m=line.match(/^\s+-\s+id:\s+(\S+)/);if(m)ids.push(m[1]);}
+  }
+  return ids;
+}
+
+function refresh(){
+  const ids=parseIds(wf.value);
+  files.innerHTML=ids.length?'<strong>Input files:</strong>':'';
+  ids.forEach(id=>{
+    const d=document.createElement('div');d.className='file-row';
+    d.innerHTML=`<label>${id}</label><input type="file" data-id="${id}">`;
+    files.appendChild(d);
+  });
+}
+
+function mime(id){
+  return id.endsWith('.png')?'image/png':id.endsWith('.jpg')||id.endsWith('.jpeg')?'image/jpeg':id.endsWith('.txt')?'text/plain':'application/pdf';
+}
+
+async function run(){
+  result.innerHTML='';
+  const fd=new FormData();fd.append('workflow',wf.value);
+  for(const inp of document.querySelectorAll('#files input')){
+    if(!inp.files[0]){result.innerHTML=`<p class="error">Select a file for '${inp.dataset.id}'</p>`;return;}
+    fd.append(inp.dataset.id,inp.files[0]);
+  }
+  result.textContent='Running…';
+  try{
+    const r=await fetch('/api/run',{method:'POST',body:fd});
+    const d=await r.json();
+    if(!r.ok){result.innerHTML=`<p class="error">${d.error}</p>`;return;}
+    result.innerHTML='<strong>Outputs:</strong>';
+    for(const[id,b64]of Object.entries(d.outputs)){
+      const bin=atob(b64),arr=new Uint8Array(bin.length);
+      for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
+      const url=URL.createObjectURL(new Blob([arr],{type:mime(id)}));
+      const a=document.createElement('a');a.href=url;a.download=id;a.textContent=`Download ${id}`;
+      result.appendChild(a);
+    }
+  }catch(e){result.innerHTML=`<p class="error">${e.message}</p>`;}
+}
+
+refresh();
+</script>
+</body>
+</html>

@@ -19,36 +19,36 @@ mod signatures;
 mod workflow;
 
 pub use annotations::{
-    edit_pdf_annotations, inspect_pdf_annotations, AnnotationEditAction, AnnotationEditOptions,
-    AnnotationInspectOptions,
+    AnnotationEditAction, AnnotationEditOptions, AnnotationInspectOptions, edit_pdf_annotations,
+    inspect_pdf_annotations,
 };
 pub use attachments::{
-    edit_pdf_attachment_artifacts, extract_pdf_attachment, inspect_pdf_attachments,
     AttachmentEditAction, AttachmentEditOptions, AttachmentExtractOptions,
-    AttachmentInspectOptions,
+    AttachmentInspectOptions, edit_pdf_attachment_artifacts, extract_pdf_attachment,
+    inspect_pdf_attachments,
 };
 pub use errors::OxideError;
 pub use forms::{
-    fill_pdf_form, inspect_pdf_forms, remove_pdf_forms, unlock_pdf_form_readonly, FormFieldValue,
-    FormFillOptions, FormInspectOptions,
+    FormFieldValue, FormFillOptions, FormInspectOptions, fill_pdf_form, inspect_pdf_forms,
+    remove_pdf_forms, unlock_pdf_form_readonly,
 };
-pub use interactive::{remove_pdf_interactive_elements, InteractiveRemovalOptions};
+pub use interactive::{InteractiveRemovalOptions, remove_pdf_interactive_elements};
 pub use metadata::{
-    edit_pdf_metadata, inspect_pdf_metadata, MetadataEditAction, MetadataEditOptions,
-    MetadataEntry, MetadataInspectOptions,
+    MetadataEditAction, MetadataEditOptions, MetadataEntry, MetadataInspectOptions,
+    edit_pdf_metadata, inspect_pdf_metadata,
 };
 pub use operators::{PdfEditOptions, PdfInspectOptions, PdfSignOptions};
 pub use outlines::{
-    edit_pdf_outline, inspect_pdf_outline, OutlineEditAction, OutlineEditOptions,
-    OutlineInspectOptions, OutlineItem, OutlineTree,
+    OutlineEditAction, OutlineEditOptions, OutlineInspectOptions, OutlineItem, OutlineTree,
+    edit_pdf_outline, inspect_pdf_outline,
 };
 pub use workflow::{
-    execute_workflow, validate_workflow, Artifact, ArtifactBytes, ArtifactRef, ArtifactStore,
-    BytesArtifact, ExecutionPlan, ExecutionResult, ImageArtifact, InputSpec, OperatorRunner,
-    OperatorSpec, OutputSpec, PdfArtifact, PdfObjectArtifact, PdfOperatorRunner, ResourceLimits,
-    SvgArtifact, TaskId, TaskSpec, TextArtifact, TextExtractionDiagnostic,
-    TextExtractionDiagnosticCode, Workflow, WorkflowMetadata, WorkflowVersion,
-    WORKFLOW_SCHEMA_VERSION,
+    Artifact, ArtifactBytes, ArtifactRef, ArtifactStore, BytesArtifact, ExecutionPlan,
+    ExecutionResult, ImageArtifact, InputSpec, OperatorRunner, OperatorSpec, OutputSpec,
+    PdfArtifact, PdfObjectArtifact, PdfOperatorRunner, ResourceLimits, SvgArtifact, TaskId,
+    TaskSpec, TextArtifact, TextExtractionDiagnostic, TextExtractionDiagnosticCode,
+    WORKFLOW_SCHEMA_VERSION, Workflow, WorkflowMetadata, WorkflowVersion, execute_workflow,
+    validate_workflow,
 };
 
 pub(crate) use pdf_io::{
@@ -59,44 +59,46 @@ pub(crate) use pdf_io::{
 };
 
 pub use compare::{
-    compare_pdf_report, compare_pdf_visual_diff, CompareDifference, CompareDifferenceCode,
-    CompareOptions, CompareReport, ObjectStructureSummary, PageSizeSummary, PdfCompareOptions,
-    PdfCompareSummary, TextSummary, VisualDiffOptions,
+    CompareDifference, CompareDifferenceCode, CompareOptions, CompareReport,
+    ObjectStructureSummary, PageSizeSummary, PdfCompareOptions, PdfCompareSummary, TextSummary,
+    VisualDiffOptions, compare_pdf_report, compare_pdf_visual_diff,
 };
 pub use compression::{
-    compress_pdf, CompressionImageFormat, CompressionImageOptions, CompressionMode,
-    CompressionOptions,
+    CompressionImageFormat, CompressionImageOptions, CompressionMode, CompressionOptions,
+    compress_pdf,
 };
 pub use overlay::{
-    edit_pdf_colors, edit_pdf_images_artifacts, extract_pdf_image, extract_text_from_pdf,
-    image_artifacts_to_pdf, inspect_pdf_images, overlay_pdf_artifacts, render_pdf_page, svg_to_pdf,
-    watermark_pdf_artifacts, ColorEditAction, ColorEditOptions, ExtractTextOptions,
-    ImageEditAction, ImageEditOptions, ImageExtractOptions, ImageInspectOptions, ImageToPdfOptions,
-    OverlayKind, OverlayOptions, RenderOptions, SvgToPdfOptions, WatermarkKind, WatermarkOptions,
+    ColorEditAction, ColorEditOptions, ExtractTextOptions, ImageEditAction, ImageEditOptions,
+    ImageExtractOptions, ImageInspectOptions, ImageToPdfOptions, OverlayKind, OverlayOptions,
+    RenderOptions, SvgToPdfOptions, WatermarkKind, WatermarkOptions, edit_pdf_colors,
+    edit_pdf_images_artifacts, extract_pdf_image, extract_text_from_pdf, image_artifacts_to_pdf,
+    inspect_pdf_images, overlay_pdf_artifacts, render_pdf_page, svg_to_pdf,
+    watermark_pdf_artifacts,
 };
 pub use page_ops::{
-    add_pdf_page_numbers, add_pdf_page_numbers_with_limits, booklet_pdf_pages,
-    booklet_pdf_pages_with_limits, crop_pdf_pages, crop_pdf_pages_with_limits,
-    delete_blank_pdf_pages, delete_blank_pdf_pages_with_limits, delete_pdf_pages,
-    delete_pdf_pages_with_limits, extract_pdf_pages, extract_pdf_pages_with_limits,
-    merge_pdf_artifacts, merge_pdf_artifacts_with_limits, nup_pdf_pages, nup_pdf_pages_with_limits,
-    pdf_to_single_page, pdf_to_single_page_with_limits, reorder_pdf, reorder_pdf_with_limits,
-    rotate_pdf, rotate_pdf_with_limits, scale_pdf_pages, scale_pdf_pages_with_limits, split_pdf,
-    split_pdf_with_limits, BookletOptions, CropPagesOptions, DeleteBlankPagesOptions, MergeOptions,
-    NUpOptions, PageNumberPosition, PageNumbersOptions, PageSelectionOptions, ReorderOptions,
-    RotateOptions, ScalePagesOptions, SinglePageOptions, SplitOptions,
+    BookletOptions, CropPagesOptions, DeleteBlankPagesOptions, MergeOptions, NUpOptions,
+    PageNumberPosition, PageNumbersOptions, PageSelectionOptions, ReorderOptions, RotateOptions,
+    ScalePagesOptions, SinglePageOptions, SplitOptions, add_pdf_page_numbers,
+    add_pdf_page_numbers_with_limits, booklet_pdf_pages, booklet_pdf_pages_with_limits,
+    crop_pdf_pages, crop_pdf_pages_with_limits, delete_blank_pdf_pages,
+    delete_blank_pdf_pages_with_limits, delete_pdf_pages, delete_pdf_pages_with_limits,
+    extract_pdf_pages, extract_pdf_pages_with_limits, merge_pdf_artifacts,
+    merge_pdf_artifacts_with_limits, nup_pdf_pages, nup_pdf_pages_with_limits, pdf_to_single_page,
+    pdf_to_single_page_with_limits, reorder_pdf, reorder_pdf_with_limits, rotate_pdf,
+    rotate_pdf_with_limits, scale_pdf_pages, scale_pdf_pages_with_limits, split_pdf,
+    split_pdf_with_limits,
 };
 pub use security::{
-    decrypt_pdf, encrypt_pdf, inspect_pdf_permissions, set_pdf_permissions, EncryptionAlgorithm,
-    PdfSecurityOptions, PermissionPolicy, PermissionReport, SecurityDecryptOptions,
-    SecurityEncryptOptions, SecurityPermissionGetOptions, SecurityPermissionSetOptions,
+    EncryptionAlgorithm, PdfSecurityOptions, PermissionPolicy, PermissionReport,
+    SecurityDecryptOptions, SecurityEncryptOptions, SecurityPermissionGetOptions,
+    SecurityPermissionSetOptions, decrypt_pdf, encrypt_pdf, inspect_pdf_permissions,
+    set_pdf_permissions,
 };
 pub use signatures::{
-    add_pdf_signature, add_pdf_timestamp, delete_pdf_signature_field,
-    inspect_pdf_signature_markers_for_research, verify_pdf_signatures, ByteRangeResearch,
-    ByteRangeVerification, ContentsVerification, SignatureAddOptions, SignatureCheckState,
-    SignatureCheckStatus, SignatureDeleteFieldOptions, SignatureDiagnostic, SignatureEntryReport,
-    SignatureListEntry, SignatureListReport, SignatureMode, SignatureOptions,
+    ByteRangeResearch, ByteRangeVerification, ContentsVerification, SignatureAddOptions,
+    SignatureCheckState, SignatureCheckStatus, SignatureDeleteFieldOptions, SignatureDiagnostic,
+    SignatureEntryReport, SignatureListEntry, SignatureListReport, SignatureMode, SignatureOptions,
     SignatureResearchReport, SignatureVerdict, SignatureVerificationReport, TimestampAddOptions,
-    TimestampReport,
+    TimestampReport, add_pdf_signature, add_pdf_timestamp, delete_pdf_signature_field,
+    inspect_pdf_signature_markers_for_research, verify_pdf_signatures,
 };

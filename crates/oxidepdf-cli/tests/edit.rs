@@ -505,9 +505,11 @@ fn watermark_text_command_returns_font_resolution_for_missing_font() {
     assert_eq!(code, 70);
     assert_eq!(stdout, b"");
     assert!(!output.exists());
-    assert!(String::from_utf8(stderr)
-        .unwrap()
-        .contains("font_resolution"));
+    assert!(
+        String::from_utf8(stderr)
+            .unwrap()
+            .contains("font_resolution")
+    );
 }
 
 #[test]

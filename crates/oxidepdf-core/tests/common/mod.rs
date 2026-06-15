@@ -5,8 +5,8 @@
 
 #![allow(dead_code)]
 
-use der::{pem::LineEnding, Decode, Encode, EncodePem};
-use lopdf::{dictionary, Dictionary, Object, Stream};
+use der::{Decode, Encode, EncodePem, pem::LineEnding};
+use lopdf::{Dictionary, Object, Stream, dictionary};
 use oxidepdf_core::{
     Artifact, ArtifactRef, MetadataEntry, OperatorRunner, OxideError, TaskSpec, Workflow,
 };

@@ -438,9 +438,10 @@ fn extract_text_from_pdf_rejects_unknown_format() {
     .unwrap_err();
 
     assert!(matches!(err, OxideError::InvalidInput { .. }));
-    assert!(err
-        .to_string()
-        .contains("unsupported text extraction format"));
+    assert!(
+        err.to_string()
+            .contains("unsupported text extraction format")
+    );
 }
 
 #[test]
@@ -608,9 +609,11 @@ fn watermark_pdf_adds_svg_watermark_as_vector_xobject() {
     assert!(page_xobject_subtypes(&document, 3).contains(&b"Form".to_vec()));
     let form_operators = page_form_xobject_operators(&document, 3);
     assert!(form_operators.iter().any(|operator| operator == "f"));
-    assert!(!form_operators
-        .windows(2)
-        .any(|operators| operators == ["re", "S"]));
+    assert!(
+        !form_operators
+            .windows(2)
+            .any(|operators| operators == ["re", "S"])
+    );
 }
 
 #[test]

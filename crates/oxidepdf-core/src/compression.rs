@@ -1,6 +1,6 @@
 use crate::{
-    enforce_input_bytes, enforce_max_pages, enforce_max_pixels, enforce_output_bytes, load_pdf,
-    save_pdf, OxideError, PdfArtifact, ResourceLimits,
+    OxideError, PdfArtifact, ResourceLimits, enforce_input_bytes, enforce_max_pages,
+    enforce_max_pixels, enforce_output_bytes, load_pdf, save_pdf,
 };
 use lopdf::{Dictionary, Object, Stream};
 use serde::{Deserialize, Serialize};

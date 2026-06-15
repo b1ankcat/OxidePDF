@@ -180,9 +180,11 @@ fn commands_with_two_inputs_reject_shared_stdin() {
     );
     assert_eq!(code, 2);
     assert!(!outline_output.exists());
-    assert!(String::from_utf8(stderr.clone())
-        .unwrap()
-        .contains("cannot read both inputs from stdin"));
+    assert!(
+        String::from_utf8(stderr.clone())
+            .unwrap()
+            .contains("cannot read both inputs from stdin")
+    );
 
     stdout.clear();
     stderr.clear();
@@ -205,9 +207,11 @@ fn commands_with_two_inputs_reject_shared_stdin() {
     );
     assert_eq!(code, 2);
     assert!(!attach_output.exists());
-    assert!(String::from_utf8(stderr)
-        .unwrap()
-        .contains("cannot read both inputs from stdin"));
+    assert!(
+        String::from_utf8(stderr)
+            .unwrap()
+            .contains("cannot read both inputs from stdin")
+    );
 }
 
 #[test]

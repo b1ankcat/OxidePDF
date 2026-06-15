@@ -136,9 +136,11 @@ fn bash_completion_rejects_conflicting_destinations() {
 
     assert_eq!(code, 2);
     assert_eq!(stdout, b"");
-    assert!(String::from_utf8(stderr)
-        .unwrap()
-        .contains("cannot be used"));
+    assert!(
+        String::from_utf8(stderr)
+            .unwrap()
+            .contains("cannot be used")
+    );
 }
 
 #[test]
@@ -158,9 +160,11 @@ fn help_returns_success_exit_code() {
 
     assert_eq!(code, 0);
     assert_eq!(stdout, b"");
-    assert!(String::from_utf8(stderr)
-        .unwrap()
-        .contains("Usage: oxidepdf"));
+    assert!(
+        String::from_utf8(stderr)
+            .unwrap()
+            .contains("Usage: oxidepdf")
+    );
 }
 
 #[test]
@@ -172,9 +176,11 @@ fn invalid_arguments_return_usage_exit_code() {
 
     assert_eq!(code, 2);
     assert_eq!(stdout, b"");
-    assert!(String::from_utf8(stderr)
-        .unwrap()
-        .contains("unexpected argument"));
+    assert!(
+        String::from_utf8(stderr)
+            .unwrap()
+            .contains("unexpected argument")
+    );
 }
 
 #[test]
@@ -430,9 +436,11 @@ fn workflow_enforces_total_input_size_limit() {
     assert_eq!(code, 5);
     assert_eq!(stdout, b"");
     assert!(!output.exists());
-    assert!(String::from_utf8(stderr)
-        .unwrap()
-        .contains("max_total_input_bytes"));
+    assert!(
+        String::from_utf8(stderr)
+            .unwrap()
+            .contains("max_total_input_bytes")
+    );
 }
 
 #[test]
@@ -475,9 +483,11 @@ fn workflow_enforces_output_size_limit() {
     assert_eq!(code, 5);
     assert_eq!(stdout, b"");
     assert!(!output.exists());
-    assert!(String::from_utf8(stderr)
-        .unwrap()
-        .contains("max_output_bytes"));
+    assert!(
+        String::from_utf8(stderr)
+            .unwrap()
+            .contains("max_output_bytes")
+    );
 }
 
 #[test]
@@ -620,7 +630,9 @@ fn output_file_is_not_overwritten_without_force() {
 
     assert_eq!(code, 2);
     assert_eq!(fs::read(output).unwrap(), b"existing");
-    assert!(String::from_utf8(stderr)
-        .unwrap()
-        .contains("already exists"));
+    assert!(
+        String::from_utf8(stderr)
+            .unwrap()
+            .contains("already exists")
+    );
 }

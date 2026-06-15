@@ -1,11 +1,11 @@
 use crate::{
-    enforce_input_bytes, enforce_max_pages, enforce_output_bytes, ensure_pdf_magic, OxideError,
-    PdfArtifact, ResourceLimits, TextArtifact,
+    OxideError, PdfArtifact, ResourceLimits, TextArtifact, enforce_input_bytes, enforce_max_pages,
+    enforce_output_bytes, ensure_pdf_magic,
 };
 use lopdf::encryption::crypt_filters::{Aes128CryptFilter, Aes256CryptFilter, CryptFilter};
 use lopdf::xref::XrefEntry;
 use lopdf::{Document, EncryptionState, EncryptionVersion, Object, Permissions};
-use rand::Rng as _;
+use rand::RngExt as _;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;

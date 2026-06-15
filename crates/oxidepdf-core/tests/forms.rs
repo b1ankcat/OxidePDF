@@ -65,10 +65,12 @@ fn forms_fill_unlock_and_remove_without_appearance_fallback() {
         .and_then(|object| filled_document.dereference(object))
         .and_then(|(_, object)| object.as_dict())
         .unwrap();
-    assert!(acroform
-        .get(b"NeedAppearances")
-        .and_then(lopdf::Object::as_bool)
-        .unwrap());
+    assert!(
+        acroform
+            .get(b"NeedAppearances")
+            .and_then(lopdf::Object::as_bool)
+            .unwrap()
+    );
 
     let unlocked = unlock_pdf_form_readonly(&filled.bytes, &ResourceLimits::default()).unwrap();
     let report = inspect_pdf_forms(&unlocked.bytes, &FormInspectOptions::default())

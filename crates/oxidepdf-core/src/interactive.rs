@@ -1,6 +1,6 @@
 use crate::{
-    attachments::remove_embedded_files, enforce_input_bytes, enforce_max_pages,
-    enforce_output_bytes, load_pdf, save_pdf, OxideError, PdfArtifact, ResourceLimits,
+    OxideError, PdfArtifact, ResourceLimits, attachments::remove_embedded_files,
+    enforce_input_bytes, enforce_max_pages, enforce_output_bytes, load_pdf, save_pdf,
 };
 use lopdf::{Dictionary, Object};
 use serde::{Deserialize, Serialize};

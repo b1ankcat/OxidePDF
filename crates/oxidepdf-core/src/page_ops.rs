@@ -1,12 +1,16 @@
 use crate::{
-    add_resource_dict_entry, enforce_input_bytes, enforce_max_pages, enforce_output_bytes,
-    load_pdf, merge_resource_dictionary, object_to_f32, page_size, pdf_bytes, rebuild_pages_tree,
-    remap_imported_references, resource_limit, save_pdf, Artifact, OxideError, PdfArtifact,
-    ResourceLimits,
+    Artifact, OxideError, PdfArtifact, ResourceLimits, add_resource_dict_entry,
+    enforce_input_bytes, enforce_max_pages, enforce_output_bytes, load_pdf,
+    merge_resource_dictionary, object_to_f32, page_size, pdf_bytes, rebuild_pages_tree,
+    remap_imported_references, resource_limit, save_pdf,
 };
-use lopdf::{dictionary, Dictionary, Object, Stream};
+use lopdf::{Dictionary, Object, Stream, dictionary};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+
+mod selection;
+pub(crate) use selection::parse_page_range;
+use selection::selected_or_all_pages;
+use std::collections::BTreeMap;
 
 /// Options for merge.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -770,65 +774,6 @@ pub(crate) fn add_page_numbers_on_document(
             .map_err(|_| OxideError::WritePdf)?;
     }
     Ok(())
-}
-
-pub(crate) fn parse_page_range(pages: &str, page_count: u32) -> Result<Vec<u32>, OxideError> {
-    if pages.trim().is_empty() {
-        return Err(OxideError::InvalidInput {
-            reason: "page range must not be empty".to_owned(),
-        });
-    }
-
-    let mut selected = Vec::new();
-    for part in pages.split(',') {
-        let part = part.trim();
-        if part.is_empty() {
-            return Err(OxideError::InvalidInput {
-                reason: "page range contains an empty item".to_owned(),
-            });
-        }
-
-        if let Some((start, end)) = part.split_once('-') {
-            let start = parse_page_number(start.trim(), page_count)?;
-            let end = parse_page_number(end.trim(), page_count)?;
-            if start > end {
-                return Err(OxideError::InvalidInput {
-                    reason: format!("page range '{part}' must be ascending"),
-                });
-            }
-            selected.extend(start..=end);
-        } else {
-            selected.push(parse_page_number(part, page_count)?);
-        }
-    }
-    let unique_pages = selected.iter().copied().collect::<BTreeSet<_>>();
-    if unique_pages.len() != selected.len() {
-        return Err(OxideError::InvalidInput {
-            reason: "page range must not contain duplicate pages".to_owned(),
-        });
-    }
-
-    Ok(selected)
-}
-
-fn parse_page_number(value: &str, page_count: u32) -> Result<u32, OxideError> {
-    let page = value.parse::<u32>().map_err(|_| OxideError::InvalidInput {
-        reason: format!("invalid page number '{value}'"),
-    })?;
-    if page == 0 || page > page_count {
-        return Err(OxideError::InvalidInput {
-            reason: format!("page {page} is out of range 1-{page_count}"),
-        });
-    }
-
-    Ok(page)
-}
-
-fn selected_or_all_pages(pages: Option<&str>, page_count: u32) -> Result<Vec<u32>, OxideError> {
-    match pages {
-        Some(pages) => parse_page_range(pages, page_count),
-        None => Ok((1..=page_count).collect()),
-    }
 }
 
 fn validated_rect(left: f32, bottom: f32, right: f32, top: f32) -> Result<[f32; 4], OxideError> {

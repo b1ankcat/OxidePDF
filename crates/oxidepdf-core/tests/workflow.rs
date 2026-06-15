@@ -68,7 +68,7 @@ fn parses_example_json_workflow() {
 
 #[test]
 fn parses_example_yaml_workflow() {
-    let workflow: Workflow = serde_yaml::from_str(
+    let workflow: Workflow = serde_saphyr::from_str(
         r#"
             version: 1
             inputs:
@@ -118,7 +118,7 @@ fn parses_example_yaml_workflow() {
 
 #[test]
 fn parses_signature_workflow_operator_schema() {
-    let workflow: Workflow = serde_yaml::from_str(
+    let workflow: Workflow = serde_saphyr::from_str(
         r#"
             version: 1
             inputs:
@@ -160,7 +160,7 @@ fn parses_signature_workflow_operator_schema() {
 
 #[test]
 fn parses_signature_list_workflow_operator_schema() {
-    let workflow: Workflow = serde_yaml::from_str(
+    let workflow: Workflow = serde_saphyr::from_str(
         r#"
             version: 1
             inputs:
@@ -192,7 +192,7 @@ fn parses_signature_list_workflow_operator_schema() {
 
 #[test]
 fn parses_signature_mutation_workflow_operator_schema() {
-    let workflow: Workflow = serde_yaml::from_str(
+    let workflow: Workflow = serde_saphyr::from_str(
         r#"
             version: 1
             inputs:
@@ -251,7 +251,7 @@ fn parses_signature_mutation_workflow_operator_schema() {
 
 #[test]
 fn parses_compare_workflow_operator_schema() {
-    let workflow: Workflow = serde_yaml::from_str(
+    let workflow: Workflow = serde_saphyr::from_str(
         r#"
             version: 1
             inputs:
@@ -285,7 +285,7 @@ fn parses_compare_workflow_operator_schema() {
 
 #[test]
 fn parses_document_interaction_workflow_operator_schema() {
-    let workflow: Workflow = serde_yaml::from_str(
+    let workflow: Workflow = serde_saphyr::from_str(
         r#"
             version: 1
             inputs:
@@ -369,9 +369,10 @@ fn operator_spec_rejects_multiple_operator_keys() {
     )
     .unwrap_err();
 
-    assert!(err
-        .to_string()
-        .contains("operator spec must contain exactly one operator"));
+    assert!(
+        err.to_string()
+            .contains("operator spec must contain exactly one operator")
+    );
 }
 
 #[test]
@@ -728,7 +729,7 @@ fn task_failure_stops_downstream_execution() {
 
 #[test]
 fn parses_overlay_image_color_operator_schema() {
-    let workflow: Workflow = serde_yaml::from_str(
+    let workflow: Workflow = serde_saphyr::from_str(
         r#"
         version: 1
         inputs:
@@ -788,7 +789,7 @@ fn parses_overlay_image_color_operator_schema() {
 
 #[test]
 fn parses_compression_operator_schema() {
-    let workflow: Workflow = serde_yaml::from_str(
+    let workflow: Workflow = serde_saphyr::from_str(
         r#"
         version: 1
         inputs:
@@ -820,7 +821,7 @@ fn parses_compression_operator_schema() {
 
 #[test]
 fn parses_security_operator_schema() {
-    let workflow: Workflow = serde_yaml::from_str(
+    let workflow: Workflow = serde_saphyr::from_str(
         r#"
         version: 1
         inputs:

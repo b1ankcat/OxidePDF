@@ -3,24 +3,23 @@
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, shells::Bash};
 use oxidepdf_core::{
-    execute_workflow, AnnotationEditAction, AnnotationEditOptions, AnnotationInspectOptions,
-    Artifact, ArtifactRef, ArtifactStore, AttachmentEditAction, AttachmentEditOptions,
-    AttachmentExtractOptions, AttachmentInspectOptions, BookletOptions, ColorEditAction,
-    ColorEditOptions, CompareOptions, CompressionImageFormat, CompressionImageOptions,
-    CompressionMode, CompressionOptions, CropPagesOptions, DeleteBlankPagesOptions,
-    ExtractTextOptions, FormFieldValue, FormFillOptions, FormInspectOptions, ImageEditAction,
-    ImageEditOptions, ImageExtractOptions, ImageInspectOptions, ImageToPdfOptions,
-    InteractiveRemovalOptions, MergeOptions, MetadataEditAction, MetadataEditOptions,
-    MetadataEntry, MetadataInspectOptions, NUpOptions, OperatorSpec, OutlineEditAction,
-    OutlineEditOptions, OutlineInspectOptions, OutlineTree, OverlayKind, OverlayOptions,
-    OxideError, PageNumberPosition, PageNumbersOptions, PageSelectionOptions, PdfCompareOptions,
-    PdfEditOptions, PdfInspectOptions, PdfOperatorRunner, PdfSecurityOptions, PdfSignOptions,
-    PermissionPolicy, RenderOptions, ReorderOptions, RotateOptions, ScalePagesOptions,
-    SecurityDecryptOptions, SecurityEncryptOptions, SecurityPermissionGetOptions,
-    SecurityPermissionSetOptions, SignatureAddOptions, SignatureDeleteFieldOptions,
-    SignatureOptions, SinglePageOptions, SplitOptions, SvgToPdfOptions, TaskId, TaskSpec,
-    TimestampAddOptions, VisualDiffOptions, WatermarkKind, WatermarkOptions, Workflow,
-    WorkflowMetadata, WorkflowVersion,
+    AnnotationEditAction, AnnotationEditOptions, AnnotationInspectOptions, Artifact, ArtifactRef,
+    ArtifactStore, AttachmentEditAction, AttachmentEditOptions, AttachmentExtractOptions,
+    AttachmentInspectOptions, BookletOptions, ColorEditAction, ColorEditOptions, CompareOptions,
+    CompressionImageFormat, CompressionImageOptions, CompressionMode, CompressionOptions,
+    CropPagesOptions, DeleteBlankPagesOptions, ExtractTextOptions, FormFieldValue, FormFillOptions,
+    FormInspectOptions, ImageEditAction, ImageEditOptions, ImageExtractOptions,
+    ImageInspectOptions, ImageToPdfOptions, InteractiveRemovalOptions, MergeOptions,
+    MetadataEditAction, MetadataEditOptions, MetadataEntry, MetadataInspectOptions, NUpOptions,
+    OperatorSpec, OutlineEditAction, OutlineEditOptions, OutlineInspectOptions, OutlineTree,
+    OverlayKind, OverlayOptions, OxideError, PageNumberPosition, PageNumbersOptions,
+    PageSelectionOptions, PdfCompareOptions, PdfEditOptions, PdfInspectOptions, PdfOperatorRunner,
+    PdfSecurityOptions, PdfSignOptions, PermissionPolicy, RenderOptions, ReorderOptions,
+    RotateOptions, ScalePagesOptions, SecurityDecryptOptions, SecurityEncryptOptions,
+    SecurityPermissionGetOptions, SecurityPermissionSetOptions, SignatureAddOptions,
+    SignatureDeleteFieldOptions, SignatureOptions, SinglePageOptions, SplitOptions,
+    SvgToPdfOptions, TaskId, TaskSpec, TimestampAddOptions, VisualDiffOptions, WatermarkKind,
+    WatermarkOptions, Workflow, WorkflowMetadata, WorkflowVersion, execute_workflow,
 };
 use std::fs;
 use std::io::{self, Read, Write};
@@ -240,7 +239,7 @@ fn parse_workflow(bytes: &[u8], path: &Path) -> Result<Workflow, CliError> {
     if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
         serde_json::from_slice(bytes).map_err(|error| CliError::Workflow(error.to_string()))
     } else {
-        serde_yaml::from_slice(bytes).map_err(|error| CliError::Workflow(error.to_string()))
+        serde_saphyr::from_slice(bytes).map_err(|error| CliError::Workflow(error.to_string()))
     }
 }
 

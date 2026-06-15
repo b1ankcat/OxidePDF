@@ -1,8 +1,8 @@
 use crate::{
-    enforce_input_bytes, enforce_max_pages, enforce_output_bytes, load_pdf, pdf_bytes, save_pdf,
     Artifact, BytesArtifact, OxideError, PdfArtifact, ResourceLimits, TextArtifact,
+    enforce_input_bytes, enforce_max_pages, enforce_output_bytes, load_pdf, pdf_bytes, save_pdf,
 };
-use lopdf::{dictionary, Dictionary, Object, Stream};
+use lopdf::{Dictionary, Object, Stream, dictionary};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

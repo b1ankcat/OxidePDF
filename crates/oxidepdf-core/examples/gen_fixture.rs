@@ -2,7 +2,7 @@
 //! each with a Resources dict and a content stream) to match the integration
 //! test expectations. Run with: cargo run -p oxidepdf-core --example gen_fixture
 use lopdf::content::{Content, Operation};
-use lopdf::{dictionary, Object, Stream};
+use lopdf::{Object, Stream, dictionary};
 
 fn main() {
     let mut document = lopdf::Document::with_version("1.7");

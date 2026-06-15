@@ -58,10 +58,12 @@ fn signature_field_delete_removes_field_when_destructive_is_explicit() {
 
     assert_eq!(report.verdict, SignatureVerdict::Indeterminate);
     assert!(report.signatures.is_empty());
-    assert!(report
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == "no_signatures"));
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "no_signatures")
+    );
 }
 
 #[test]
@@ -173,10 +175,12 @@ fn timestamp_add_reports_invalid_explicit_token_without_modifying_pdf() {
 
     assert_eq!(report.status.status, SignatureCheckState::Failed);
     assert!(report.input_preserved);
-    assert!(report
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == "timestamp_not_embedded"));
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "timestamp_not_embedded")
+    );
 }
 
 #[test]
@@ -215,10 +219,12 @@ fn verify_pdf_signatures_without_trust_anchors_is_indeterminate_not_trusted() {
 
     assert_ne!(report.verdict, SignatureVerdict::Trusted);
     assert_eq!(report.trust_anchor_count, 0);
-    assert!(report
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == "trust_anchors_missing"));
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "trust_anchors_missing")
+    );
 }
 
 #[test]
@@ -308,10 +314,12 @@ fn verify_pdf_signatures_reports_malformed_byte_range_as_invalid() {
 
     assert_eq!(report.verdict, SignatureVerdict::Invalid);
     assert_eq!(report.signatures.len(), 1);
-    assert!(report.signatures[0]
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == "byte_range_not_ordered"));
+    assert!(
+        report.signatures[0]
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "byte_range_not_ordered")
+    );
 }
 
 #[test]
@@ -336,10 +344,12 @@ fn verify_pdf_signatures_reports_unknown_subfilter_as_unsupported() {
 
     assert_eq!(report.verdict, SignatureVerdict::Unsupported);
     assert_eq!(report.signatures.len(), 1);
-    assert!(report.signatures[0]
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == "unsupported_subfilter"));
+    assert!(
+        report.signatures[0]
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "unsupported_subfilter")
+    );
 }
 
 #[test]

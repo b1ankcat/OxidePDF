@@ -144,7 +144,7 @@ OxidePDF includes a YAML/JSON-based workflow engine for multi-step document auto
 - **Workflow document**: a YAML or JSON file that declares inputs, tasks, outputs, and optional resource limits.
 - **Tasks**: units of work, each referencing an operator (edit, inspect, sign, security, compare) and its input artifacts.
 - **Artifacts**: named references to PDFs, images, text, or raw bytes that flow between tasks.
-- **DAG execution**: tasks are topologically sorted by their artifact dependencies and run serially. Cycles are detected and rejected.
+- **DAG execution**: tasks are topologically sorted by their artifact dependencies. Dependency layers run in order, while independent tasks within the same layer may run in parallel. Cycles are detected and rejected.
 - **Resource limits**: enforce bounds on input bytes, total input bytes, page count, pixel count, output bytes, and execution time.
 
 ### Running a Workflow
@@ -263,7 +263,7 @@ The workflow engine is re-exported from `oxidepdf-core` for Rust embedders. Cons
 ```rust
 use oxidepdf_core::{Workflow, execute_workflow, PdfOperatorRunner, ArtifactStore};
 
-let workflow: Workflow = serde_yaml::from_str(yaml_str)?;
+let workflow: Workflow = serde_saphyr::from_str(yaml_str)?;
 let store = ArtifactStore::new();
 let runner = PdfOperatorRunner::default();
 let result = execute_workflow(&workflow, store, &runner)?;

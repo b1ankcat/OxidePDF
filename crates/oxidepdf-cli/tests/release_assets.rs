@@ -32,8 +32,10 @@ fn dockerfile_uses_prebuilt_static_cli_binary() {
 
     assert!(dockerfile.contains("FROM scratch"));
     assert!(dockerfile.contains("COPY target/x86_64-unknown-linux-musl/release/oxidepdf"));
-    assert!(dockerfile
-        .contains("COPY target/x86_64-unknown-linux-musl/release/completions/oxidepdf.bash"));
+    assert!(
+        dockerfile
+            .contains("COPY target/x86_64-unknown-linux-musl/release/completions/oxidepdf.bash")
+    );
     assert!(dockerfile.contains("COPY --from=certs /etc/ssl/certs/ca-certificates.crt"));
     assert!(dockerfile.contains("ENTRYPOINT [\"/oxidepdf\"]"));
 }

@@ -63,7 +63,9 @@ fn extract_text_command_rejects_pdf_without_text_layer() {
     assert_eq!(code, 3);
     assert_eq!(stdout, b"");
     assert!(!output.exists());
-    assert!(String::from_utf8(stderr)
-        .unwrap()
-        .contains("no extractable text layer"));
+    assert!(
+        String::from_utf8(stderr)
+            .unwrap()
+            .contains("no extractable text layer")
+    );
 }
