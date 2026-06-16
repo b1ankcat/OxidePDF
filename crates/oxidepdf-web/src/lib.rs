@@ -1,11 +1,13 @@
 use axum::{
     Json, Router,
     body::Body,
-    extract::{DefaultBodyLimit, Multipart, Path, State},
+    extract::{DefaultBodyLimit, FromRequestParts, Multipart, Path, Request, State},
     http::{HeaderMap, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use axum_auth::AuthBasic;
 use oxidepdf_core::*;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -36,14 +38,41 @@ const BODY_LIMIT: usize = 512 * 1024 * 1024;
 /// Upper bound on the number of artifacts (uploads + results) retained in
 /// memory at once. The oldest are evicted first once exceeded.
 const MAX_ARTIFACTS: usize = 256;
-/// Upper bound on the total on-disk size of retained artifacts. The oldest are
-/// evicted first once exceeded.
-const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// Default ceiling on the total on-disk size of retained artifacts when none is
+/// configured. The oldest are evicted first once exceeded.
+const DEFAULT_MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// Artifacts untouched for this long are swept regardless of the count/size
 /// caps, so idle uploads don't linger indefinitely.
 const ARTIFACT_TTL: Duration = Duration::from_secs(30 * 60);
 /// How often the background sweeper runs.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+/// Parse a human-readable byte size such as `2G`, `1024M`, `100K`, or `512MiB`.
+/// Suffixes are binary (1 K = 1024). A bare number is bytes. An optional
+/// trailing `B`/`iB` is accepted. Case-insensitive.
+pub fn parse_size(s: &str) -> Result<u64, String> {
+    let t = s.trim();
+    if t.is_empty() {
+        return Err("empty size".into());
+    }
+    // Split into leading digits and the unit suffix.
+    let split = t.find(|c: char| !c.is_ascii_digit()).unwrap_or(t.len());
+    let (num, unit) = t.split_at(split);
+    let value: u64 = num
+        .parse()
+        .map_err(|_| format!("invalid size number in {s:?}"))?;
+    let mult = match unit.trim().to_ascii_lowercase().as_str() {
+        "" | "b" => 1,
+        "k" | "kb" | "kib" => 1024,
+        "m" | "mb" | "mib" => 1024 * 1024,
+        "g" | "gb" | "gib" => 1024 * 1024 * 1024,
+        "t" | "tb" | "tib" => 1024_u64 * 1024 * 1024 * 1024,
+        other => return Err(format!("unknown size unit {other:?} in {s:?}")),
+    };
+    value
+        .checked_mul(mult)
+        .ok_or_else(|| format!("size {s:?} overflows u64"))
+}
 
 /// How an uploaded/produced artifact should be reconstructed and served.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -128,10 +157,21 @@ struct StoredArtifact {
     last_access: Instant,
 }
 
-#[derive(Default)]
 struct Store {
     artifacts: HashMap<String, StoredArtifact>,
     total_bytes: u64,
+    /// Configured ceiling for `total_bytes` before oldest-first eviction.
+    max_total_bytes: u64,
+}
+
+impl Default for Store {
+    fn default() -> Self {
+        Self {
+            artifacts: HashMap::new(),
+            total_bytes: 0,
+            max_total_bytes: DEFAULT_MAX_TOTAL_BYTES,
+        }
+    }
 }
 
 impl Store {
@@ -145,7 +185,7 @@ impl Store {
         if let Some(old) = self.artifacts.insert(id, artifact) {
             self.total_bytes -= old.size;
         }
-        while self.artifacts.len() > MAX_ARTIFACTS || self.total_bytes > MAX_TOTAL_BYTES {
+        while self.artifacts.len() > MAX_ARTIFACTS || self.total_bytes > self.max_total_bytes {
             let Some(oldest) = self
                 .artifacts
                 .iter()
@@ -188,9 +228,14 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new() -> Self {
+    /// Create state with the given total-storage ceiling (bytes) for artifact
+    /// eviction.
+    pub fn new(max_total_bytes: u64) -> Self {
         Self {
-            store: Arc::new(Mutex::new(Store::default())),
+            store: Arc::new(Mutex::new(Store {
+                max_total_bytes,
+                ..Store::default()
+            })),
             seq: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -247,7 +292,7 @@ impl AppState {
 
 impl Default for AppState {
     fn default() -> Self {
-        Self::new()
+        Self::new(DEFAULT_MAX_TOTAL_BYTES)
     }
 }
 
@@ -603,12 +648,55 @@ async fn api_delete_file(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub fn router(state: AppState) -> Router {
+/// Optional HTTP Basic credentials. When set, every request must present a
+/// matching `Authorization: Basic` header.
+#[derive(Clone)]
+pub struct Auth {
+    pub username: String,
+    pub password: String,
+}
+
+/// Constant-time string compare so credential checks don't leak length-prefix
+/// matches via timing. (Length itself is not hidden, which is fine here.)
+fn ct_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.bytes()
+        .zip(b.bytes())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
+}
+
+/// 401 with a `WWW-Authenticate` challenge so browsers show a login prompt.
+fn unauthorized() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        [(header::WWW_AUTHENTICATE, "Basic realm=\"oxidepdf-web\"")],
+        "unauthorized",
+    )
+        .into_response()
+}
+
+/// Middleware enforcing HTTP Basic auth against the configured credentials.
+async fn require_auth(State(auth): State<Auth>, request: Request, next: Next) -> Response {
+    let (mut parts, body) = request.into_parts();
+    let Ok(AuthBasic((user, pass))) = AuthBasic::from_request_parts(&mut parts, &()).await else {
+        return unauthorized();
+    };
+    if ct_eq(&user, &auth.username) && ct_eq(pass.as_deref().unwrap_or(""), &auth.password) {
+        next.run(Request::from_parts(parts, body)).await
+    } else {
+        unauthorized()
+    }
+}
+
+pub fn router(state: AppState, auth: Option<Auth>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
-    Router::new()
+    let mut app = Router::new()
         .route("/", get(index))
         .route("/static/{file}", get(static_asset))
         .route("/api/schema", get(api_schema))
@@ -619,9 +707,11 @@ pub fn router(state: AppState) -> Router {
             "/api/file/{id}",
             get(api_file).head(api_head_file).delete(api_delete_file),
         )
-        .layer(DefaultBodyLimit::max(BODY_LIMIT))
-        .layer(cors)
-        .with_state(state)
+        .layer(DefaultBodyLimit::max(BODY_LIMIT));
+    if let Some(auth) = auth {
+        app = app.layer(middleware::from_fn_with_state(auth, require_auth));
+    }
+    app.layer(cors).with_state(state)
 }
 
 #[cfg(test)]
@@ -686,10 +776,12 @@ mod tests {
 
     #[test]
     fn size_cap_evicts_until_under_limit() {
-        let mut store = Store::default();
-        let big = MAX_TOTAL_BYTES / 2;
-        store.insert("a".into(), artifact(big, 0));
-        store.insert("b".into(), artifact(big, 1));
+        let mut store = Store {
+            max_total_bytes: 1000,
+            ..Store::default()
+        };
+        store.insert("a".into(), artifact(500, 0));
+        store.insert("b".into(), artifact(500, 1));
         // Both fit exactly at the cap.
         assert_eq!(store.artifacts.len(), 2);
         // One more byte over the cap evicts the oldest.
@@ -697,7 +789,30 @@ mod tests {
         assert!(!store.artifacts.contains_key("a"));
         assert!(store.artifacts.contains_key("b"));
         assert!(store.artifacts.contains_key("c"));
-        assert!(store.total_bytes <= MAX_TOTAL_BYTES);
+        assert!(store.total_bytes <= store.max_total_bytes);
+    }
+
+    #[test]
+    fn parse_size_handles_units_and_overflow() {
+        assert_eq!(parse_size("100").unwrap(), 100);
+        assert_eq!(parse_size("100B").unwrap(), 100);
+        assert_eq!(parse_size("100K").unwrap(), 100 * 1024);
+        assert_eq!(parse_size("1024M").unwrap(), 1024 * 1024 * 1024);
+        assert_eq!(parse_size("2g").unwrap(), 2 * 1024 * 1024 * 1024);
+        assert_eq!(parse_size("512MiB").unwrap(), 512 * 1024 * 1024);
+        assert_eq!(parse_size("  4 GB ").unwrap(), 4 * 1024 * 1024 * 1024);
+        assert!(parse_size("").is_err());
+        assert!(parse_size("abc").is_err());
+        assert!(parse_size("10X").is_err());
+        assert!(parse_size("99999999999999999999G").is_err());
+    }
+
+    #[test]
+    fn ct_eq_matches_only_identical_strings() {
+        assert!(ct_eq("secret", "secret"));
+        assert!(!ct_eq("secret", "secres"));
+        assert!(!ct_eq("secret", "secre"));
+        assert!(ct_eq("", ""));
     }
 
     #[test]

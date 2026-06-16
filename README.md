@@ -140,6 +140,17 @@ docker run --rm -p 19898:19898 oxidepdf:local
 # then open http://localhost:19898
 ```
 
+Because the container binds `0.0.0.0`, enable auth when exposing it. Every flag
+also has an environment variable, so the same options work via `docker run -e`:
+
+```sh
+docker run --rm -p 19898:19898 \
+  -e OXIDEPDF_AUTH_USER=admin \
+  -e OXIDEPDF_AUTH_PASS=change-me \
+  -e OXIDEPDF_MAX_STORAGE=1G \
+  oxidepdf:local
+```
+
 ## Advanced Workflow Orchestration
 
 OxidePDF includes a YAML/JSON-based workflow engine for multi-step document automation. Instead of chaining CLI invocations together with shell scripts, you can declare an entire pipeline as a single workflow document — inputs, tasks, dependencies, and outputs — and let OxidePDF validate, plan, and execute it in one shot.
@@ -291,13 +302,22 @@ cargo run -p oxidepdf-web
 # then open http://localhost:19898
 ```
 
-> ⚠️ The server has **no authentication**. It binds to loopback by default;
-> passing `--addr 0.0.0.0` (or any non-loopback address) exposes an
-> unauthenticated upload/process/download service to the network and prints a
-> startup warning. Only do so on a trusted network or behind a reverse proxy
-> that adds auth. Uploaded and produced files are held in temp storage and
-> evicted automatically (oldest-first past 256 files / 2 GiB, and after 30
-> minutes idle).
+Configuration (every flag has a matching environment variable):
+
+| Flag | Env | Default | Purpose |
+|------|-----|---------|---------|
+| `--addr` | `OXIDEPDF_ADDR` | `127.0.0.1` | Bind address |
+| `--port` | `OXIDEPDF_PORT` | `19898` | Port |
+| `--max-storage` | `OXIDEPDF_MAX_STORAGE` | `2G` | Total artifact cap (`2G`, `1024M`, `100K`, binary units) before oldest-first eviction |
+| `--auth-user` | `OXIDEPDF_AUTH_USER` | — | HTTP Basic username (enables auth with `--auth-pass`) |
+| `--auth-pass` | `OXIDEPDF_AUTH_PASS` | — | HTTP Basic password |
+
+> ⚠️ Auth is **off** unless both `--auth-user` and `--auth-pass` are set; then
+> every request requires HTTP Basic credentials. The server binds to loopback by
+> default — binding to a non-loopback address without auth exposes an
+> unauthenticated upload/process/download service and prints a startup warning.
+> Uploaded and produced files are held in temp storage and evicted automatically
+> (oldest-first past 256 files / the storage cap, and after 30 minutes idle).
 
 Features:
 

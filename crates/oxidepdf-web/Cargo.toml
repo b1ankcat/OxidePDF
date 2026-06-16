@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 axum = { workspace = true }
+axum-auth = { workspace = true }
 clap = { workspace = true }
 tower-http = { workspace = true }
 uuid = { workspace = true }
