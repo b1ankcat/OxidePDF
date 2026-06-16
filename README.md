@@ -1,22 +1,18 @@
 # OxidePDF 🦀📄
 
-OxidePDF is a pure Rust PDF toolkit with a modular CLI and workflow engine. It focuses on practical document automation: editing pages, inspecting structure, extracting content, signing, comparing, compressing, and packaging PDFs from scripts or CI jobs.
+OxidePDF is a Rust PDF toolkit for editing, inspecting, signing, comparing, and automating document workflows. It ships as a CLI, a workflow engine, and a web UI.
 
 ## Highlights ✨
 
-- 🧩 **Modular commands**: `pdf_edit`, `pdf_inspect`, `pdf_security`, `pdf_compare`, `pdf_sign`, and `pdf_adv` (metadata, outline, attach, annot, form, image), mirroring the workflow operator families.
-- 🛠️ **PDF editing**: merge, page selection, reorder, rotate, delete, crop, scale, n-up, booklet, page numbers, image-to-PDF, SVG-to-PDF, watermarks, and compression.
-- 🔍 **Inspection**: render pages to PNG and extract text.
-- 🔐 **Security and signatures**: encrypt, decrypt, inspect/set permissions, add/list/verify/delete signature fields, add visual signature appearances, and attach explicit timestamp material.
-- 📦 **Static Linux releases**: musl builds via `cargo zigbuild`.
-- 🧭 **Bash completion**: generated at build time and available from the CLI.
-- ⚙️ **Workflow orchestration**: YAML/JSON pipeline documents with DAG-based task scheduling, retries, rate limits, timeouts, resource limits, and programmatic API.
-- 🌐 **Web UI**: a single static binary (`oxidepdf-web`) serving a three-column workflow builder with schema-generated parameter forms, multi-file inputs, and inline result preview.
-- 🐳 **Container-friendly**: static binary copied into a `scratch` runtime image.
+- 🧩 **CLI families**: `pdf_edit`, `pdf_inspect`, `pdf_security`, `pdf_compare`, `pdf_sign`, and `pdf_adv`
+- ⚙️ **Workflow orchestration**: YAML/JSON DAG execution with retries, limits, and timeouts
+- 🌐 **Web UI**: static `oxidepdf-web` with schema-generated forms and file previews
+- 📦 **Releases**: musl binaries, bash completion, and `cargo zigbuild`
+- 🐳 **Container-ready**: static binary in a `scratch` image
 
 ## Quick Start 🚀
 
-Build locally:
+Build the CLI:
 
 ```sh
 cargo build -p oxidepdf-cli
@@ -120,6 +116,9 @@ from `Cargo.toml`; pass `VERSION=...` only when you need an explicit override:
 scripts/release.sh
 ```
 
+The release script rejects empty or whitespace-only `TARGETS` and accepts
+standard Cargo version strings, including build metadata.
+
 Each zip contains:
 
 ```text
@@ -139,6 +138,7 @@ docker build -t oxidepdf:local .
 docker run --rm -p 19898:19898 \
   -e OXIDEPDF_AUTH_USER=admin \
   -e OXIDEPDF_AUTH_PASS=change-me \
+  -v "$PWD/oxidepdf-upload:/var/lib/oxidepdf/upload" \
   oxidepdf:local
 # then open http://localhost:19898
 ```
@@ -153,21 +153,27 @@ docker run --rm -p 19898:19898 \
   -e OXIDEPDF_AUTH_PASS=change-me \
   -e OXIDEPDF_MAX_STORAGE=1G \
   -e OXIDEPDF_MAX_UPLOAD=256M \
+  -v "$PWD/oxidepdf-upload:/var/lib/oxidepdf/upload" \
   oxidepdf:local
 ```
 
-## Advanced Workflow Orchestration
+`OXIDEPDF_MAX_UPLOAD` limits each uploaded file and matching workflow resource
+limits. The HTTP request body allows a small multipart overhead above that
+value. The web server stores uploaded and produced artifacts under `upload/`
+relative to its current working directory; the Docker image runs from
+`/var/lib/oxidepdf` and declares `/var/lib/oxidepdf/upload` as a volume.
 
-OxidePDF includes a YAML/JSON-based workflow engine for multi-step document automation. Instead of chaining CLI invocations together with shell scripts, you can declare an entire pipeline as a single workflow document — inputs, tasks, dependencies, and outputs — and let OxidePDF validate, plan, and execute it in one shot.
+## Workflows ⚙️
+
+Declare multi-step PDF automation as YAML or JSON: inputs, tasks, dependencies,
+outputs, and optional limits. OxidePDF validates the graph, detects cycles, and
+runs ready tasks as soon as their dependencies finish.
 
 ### Concepts
 
-- **Workflow document**: a YAML or JSON file that declares inputs, tasks, outputs, and optional resource limits.
-- **Tasks**: units of work, each referencing an operator (edit, inspect, sign, security, compare) and its input artifacts.
-- **Artifacts**: named references to PDFs, images, text, or raw bytes that flow between tasks.
-- **DAG execution**: tasks are topologically sorted by artifact dependencies. Ready tasks are scheduled as soon as their dependencies finish, so independent branches run concurrently without layer barriers. Cycles are detected and rejected.
-- **Reliability controls**: workflows can declare task retries, task start rate limits, and timeouts. `timeout_ms` is enforced before and after task work and through the Apalis timeout layer; it stops downstream scheduling, but synchronous PDF work already running may finish before observing the timeout.
-- **Resource limits**: enforce bounds on input bytes, total input bytes, page count, pixel count, output bytes, and artifact spill thresholds.
+- **Tasks** reference one operator and one or more artifacts.
+- **Artifacts** are named PDFs, images, text, or raw byte payloads.
+- **Limits** bound input bytes, pages, pixels, output bytes, retries, rate, and timeouts.
 
 ### Running a Workflow
 
@@ -208,9 +214,9 @@ tasks:
     inputs: [source]
 ```
 
-### Multi-Step Pipeline Example
+### Multi-Step Example
 
-This workflow merges two PDFs, rotates the first two pages, and renders the result to PNG — all in one pass:
+Merge two PDFs, rotate the first two pages, and render a preview:
 
 ```yaml
 version: 1
@@ -255,25 +261,11 @@ tasks:
 | `pdf_security` | encrypt, decrypt, permissions |
 | `pdf_compare` | report, visual-diff |
 
-The CLI groups commands under the same families: `pdf_edit`, `pdf_inspect`, `pdf_security`, `pdf_compare`, `pdf_sign`, plus `pdf_adv` for metadata, outline, attachment, annotation, form, and image operations.
-
-Each task specifies exactly one operator. The engine validates references, detects cycles, and enforces limits before any work begins.
-
-### Execution Model
-
-The engine validates the graph, then hands ready work to an Apalis in-memory backend. Completing a task commits its artifact, releases dependent tasks, and wakes the scheduler immediately. This allows global DAG concurrency: a downstream task can start as soon as its own dependencies are ready, without waiting for unrelated tasks from the same dependency depth.
-
-Memory use is kept close to the live working set rather than the full pipeline:
-
-- **Zero-copy artifacts**: artifacts are reference-counted, so handing the same PDF to several tasks shares one buffer instead of copying it per hop.
-- **Eager eviction**: an intermediate artifact is dropped as soon as its last consuming task has run, unless a workflow output references it.
-- **Large-artifact spill**: payloads above 64 MiB are spilled to a memory-mapped temporary file, so very large inputs and outputs do not stay resident in heap.
-
-Encrypted PDFs that store objects in compressed object streams are fully supported on the decrypt path.
+The CLI uses the same operator families: `pdf_edit`, `pdf_inspect`,
+`pdf_security`, `pdf_compare`, `pdf_sign`, plus `pdf_adv` for metadata, outline,
+attachment, annotation, form, and image operations.
 
 ### Scripting and CI Integration
-
-Workflows are designed for headless environments:
 
 - **stdin/stdout**: use `-` as the workflow path or input path to read from stdin.
 - **Exit codes**: 0 on success, 2 for invalid workflow, 3 for input error, 4 for auth error, 5 for resource-limit exceeded, 70 for internal errors.
@@ -293,13 +285,13 @@ let runner = PdfOperatorRunner::default();
 let result = execute_workflow(&workflow, store, runner).await?;
 ```
 
-Individual CLI commands (`pdf_edit merge`, `pdf_inspect render`, etc.) are implemented as single-task workflows internally, so the same validation and execution path serves both interactive use and workflow documents.
+Individual CLI commands (`pdf_edit merge`, `pdf_inspect render`, etc.) use the
+same validation and execution path as workflow documents.
 
-### Web UI
+## Web UI 🌐
 
-`oxidepdf-web` is a self-contained web front end for the workflow engine. It is a
-single static binary (HTML/CSS/JS embedded via `include_str!`, so `cargo zigbuild`
-still produces one musl executable) that serves a three-column UI. It binds to
+`oxidepdf-web` is a self-contained web front end for uploads, single operations,
+visual workflow building, previews, and downloads. It binds to
 `127.0.0.1:19898` by default.
 
 ```sh
@@ -314,7 +306,7 @@ Configuration (every flag has a matching environment variable):
 | `--addr` | `OXIDEPDF_ADDR` | `127.0.0.1` | Bind address |
 | `--port` | `OXIDEPDF_PORT` | `19898` | Port |
 | `--max-storage` | `OXIDEPDF_MAX_STORAGE` | `2G` | Total artifact cap (`2G`, `1024M`, `100K`, binary units) before oldest-first eviction |
-| `--max-upload` | `OXIDEPDF_MAX_UPLOAD` | `128M` | Per-request upload cap and matching web workflow input/output cap |
+| `--max-upload` | `OXIDEPDF_MAX_UPLOAD` | `128M` | Per-file upload cap and matching web workflow input/output cap; the HTTP body allows a small multipart overhead above this |
 | `--auth-user` | `OXIDEPDF_AUTH_USER` | — | HTTP Basic username (enables auth with `--auth-pass`) |
 | `--auth-pass` | `OXIDEPDF_AUTH_PASS` | — | HTTP Basic password |
 | `--allow-unauth-network` | `OXIDEPDF_ALLOW_UNAUTH_NETWORK` | `false` | Explicitly allow unauthenticated non-loopback binds |
@@ -323,47 +315,15 @@ Configuration (every flag has a matching environment variable):
 > every request requires HTTP Basic credentials. The server binds to loopback by
 > default. Binding to a non-loopback address without auth is refused unless
 > `--allow-unauth-network` is set.
-> Uploaded and produced files are held in temp storage and evicted automatically
-> (oldest-first past 256 files / the storage cap, and after 30 minutes idle).
+> Uploaded and produced files are held under `./upload` and evicted
+> automatically (oldest-first past 256 files / the storage cap, and after 30
+> minutes idle).
 
-Features:
-
-- **Operation catalog** driven by the same operator families as the CLI; the
-  parameter form for each op is generated from a JSON Schema derived (via
-  `schemars`) directly from the core option structs, so required and optional
-  fields are always in sync with the engine.
-- **Single-op mode**: upload file(s), pick an operation, fill the generated form,
-  execute, preview, and download the result.
-- **Workflow mode**: build a multi-step pipeline visually. Each step's inputs are
-  the files selected in the file list; after adding a step its predicted output is
-  added as a selectable virtual file, so the next step can consume it or fresh
-  uploads. Multi-input operations (merge, overlay, etc.) accept several selected
-  files, and drag-to-reorder the file list controls input order.
-- **Preview by type**: PDF results render inline, images as `<img>`, text/JSON as
-  text. The HTTP API exposes `GET /api/schema`, `POST /api/upload`,
-  `POST /api/execute/single`, `POST /api/execute/workflow`, and
-  `GET`/`DELETE /api/file/{id}`.
-- **Hardened web surface**: server-local path options are not exposed through the
-  web API. Uploads stream to temp files, and browser-built workflows enforce
-  bounded upload, task-count, per-task-input, output-size, and timeout limits.
-
-## Milestones 🗺️
-
-These are not claimed as supported today:
-
-- Native macOS release archives.
-- Native Windows release archives.
-- More shell completions, such as zsh, fish, and PowerShell.
-- Package-manager distribution, such as Homebrew, APT/RPM, Nix, WinGet, and Scoop.
-- Online TSA requests for timestamping.
-- Full PAdES policy validation.
-- Incremental PDF updates that preserve all original byte layout.
-- OCR for scanned PDFs.
-- PDF/A validation and conversion.
-- Redaction workflows with visual and content-layer removal.
-- More advanced table extraction.
-- WebAssembly bindings.
-- Library API stability guarantees for third-party embedders.
+The web API exposes schema, upload, single-op execution, workflow execution, and
+file download/delete endpoints. Server-local path options are not exposed through
+the web API; uploads stream to files in the server working directory's `upload`
+subdirectory and browser-built workflows enforce bounded upload, task-count,
+per-task-input, output-size, and timeout limits.
 
 ## License
 

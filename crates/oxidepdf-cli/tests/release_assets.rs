@@ -14,6 +14,12 @@ fn release_script_builds_musl_targets_and_checks_linkage() {
     assert!(script.contains("$BIN.bash"));
     assert!(script.contains("README.md"));
     assert!(script.contains("sha256sum"));
+    assert!(script.contains("seen_target=false"));
+    assert!(script.contains("Invalid TARGETS"));
+    assert!(script.contains("validate_component PACKAGE"));
+    assert!(script.contains("validate_version"));
+    assert!(script.contains("*[!A-Za-z0-9._+-]*"));
+    assert!(script.contains("VERSION=\"${VERSION:-$(package_version)}\""));
 }
 
 #[test]
@@ -21,8 +27,10 @@ fn check_script_runs_release_build_for_primary_linux_target() {
     let script = read("scripts/check.sh");
 
     assert!(script.contains("cargo fmt --all -- --check"));
-    assert!(script.contains("cargo clippy --workspace --all-targets"));
-    assert!(script.contains("cargo test --workspace"));
+    assert!(
+        script.contains("cargo clippy --workspace --all-targets --all-features -- -D warnings")
+    );
+    assert!(script.contains("cargo test --workspace --all-targets --all-features"));
     assert!(script.contains("TARGETS=x86_64-unknown-linux-musl scripts/release.sh"));
 }
 
@@ -31,10 +39,14 @@ fn dockerfile_uses_prebuilt_static_web_binary() {
     let dockerfile = read("Dockerfile");
 
     assert!(dockerfile.contains("FROM scratch"));
-    assert!(dockerfile.contains("COPY target/x86_64-unknown-linux-musl/release/oxidepdf-web"));
+    assert!(dockerfile.contains(
+        "COPY target/x86_64-unknown-linux-musl/release/oxidepdf-web /var/lib/oxidepdf/oxidepdf-web"
+    ));
     assert!(dockerfile.contains("COPY --from=certs /etc/ssl/certs/ca-certificates.crt"));
+    assert!(dockerfile.contains("WORKDIR /var/lib/oxidepdf"));
+    assert!(dockerfile.contains("VOLUME [\"/var/lib/oxidepdf/upload\"]"));
     assert!(dockerfile.contains("EXPOSE 19898"));
-    assert!(dockerfile.contains("ENTRYPOINT [\"/oxidepdf-web\"]"));
+    assert!(dockerfile.contains("ENTRYPOINT [\"/var/lib/oxidepdf/oxidepdf-web\"]"));
     assert!(dockerfile.contains("OXIDEPDF_AUTH_USER/OXIDEPDF_AUTH_PASS"));
     assert!(dockerfile.contains("OXIDEPDF_ALLOW_UNAUTH_NETWORK=true"));
 }
@@ -48,11 +60,14 @@ fn readme_documents_open_source_distribution_and_milestones() {
     assert!(readme.contains("oxidepdf completion bash"));
     assert!(readme.contains("Deployment and Distribution"));
     assert!(readme.contains("OXIDEPDF_MAX_UPLOAD=256M"));
+    assert!(readme.contains("/var/lib/oxidepdf/upload"));
+    assert!(readme.contains("under `./upload`"));
+    assert!(readme.contains("small multipart overhead"));
     assert!(readme.contains("--allow-unauth-network"));
     assert!(readme.contains("--max-upload"));
-    assert!(readme.contains("Milestones"));
-    assert!(readme.contains("Native macOS release archives"));
-    assert!(readme.contains("Online TSA requests"));
+    assert!(readme.contains("Each zip contains"));
+    assert!(readme.contains("oxidepdf-web"));
+    assert!(readme.contains("Apache-2.0"));
 }
 
 #[test]

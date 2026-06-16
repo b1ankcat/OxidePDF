@@ -2,6 +2,6 @@
 set -eu
 
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-targets --all-features
 TARGETS=x86_64-unknown-linux-musl scripts/release.sh

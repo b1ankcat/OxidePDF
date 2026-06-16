@@ -17,10 +17,26 @@ validate_component() {
   esac
 }
 
+validate_version() {
+  case "$VERSION" in
+    "" | /* | *..* | *[!A-Za-z0-9._+-]*)
+      echo "Invalid VERSION: $VERSION" >&2
+      exit 2
+      ;;
+  esac
+}
+
 validate_target_list() {
+  # Shell splitting would otherwise treat an all-whitespace value as empty.
+  seen_target=false
   for target in $TARGETS; do
+    seen_target=true
     validate_component TARGETS "$target"
   done
+  if [ "$seen_target" = false ]; then
+    echo "Invalid TARGETS: must contain at least one target" >&2
+    exit 2
+  fi
 }
 
 command -v cargo >/dev/null 2>&1 || {
@@ -34,17 +50,11 @@ package_version() {
     | head -n1
 }
 
-VERSION="${VERSION:-$(package_version)}"
-if [ -z "$VERSION" ]; then
-  echo "Failed to resolve version for package $PACKAGE from Cargo metadata" >&2
-  exit 1
-fi
+validate_target_list
 
 validate_component PACKAGE "$PACKAGE"
 validate_component BIN "$BIN"
 validate_component DIST_DIR "$DIST_DIR"
-validate_component VERSION "$VERSION"
-validate_target_list
 
 if ! cargo zigbuild --help >/dev/null 2>&1; then
   echo "cargo-zigbuild is required; install with: cargo install cargo-zigbuild" >&2
@@ -60,6 +70,14 @@ command -v sha256sum >/dev/null 2>&1 || {
   echo "sha256sum is required" >&2
   exit 127
 }
+
+VERSION="${VERSION:-$(package_version)}"
+if [ -z "$VERSION" ]; then
+  echo "Failed to resolve version for package $PACKAGE from Cargo metadata" >&2
+  exit 1
+fi
+
+validate_version
 
 mkdir -p "$DIST_DIR"
 

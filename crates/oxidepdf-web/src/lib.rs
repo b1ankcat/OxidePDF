@@ -12,7 +12,9 @@ use oxidepdf_core::*;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    io::Write,
+    env, fs,
+    io::{self, Write},
+    path::{Path as FsPath, PathBuf},
     sync::{
         Arc, Mutex, MutexGuard,
         atomic::{AtomicU64, Ordering},
@@ -35,6 +37,9 @@ const APP_JS: &str = include_str!("../static/app.js");
 /// large PDFs while still requiring an explicit deployment choice for very large
 /// uploads.
 pub const DEFAULT_MAX_UPLOAD_BYTES: u64 = 128 * 1024 * 1024;
+/// Extra request-body room for multipart boundaries and headers around uploaded
+/// files. File and workflow resource limits still use `max_upload_bytes`.
+const MULTIPART_BODY_OVERHEAD_BYTES: u64 = 1024 * 1024;
 /// Maximum number of multipart files accepted in one upload request.
 const MAX_UPLOAD_FILES: usize = 16;
 /// Maximum number of input artifacts accepted by a single-op request.
@@ -57,6 +62,9 @@ const DEFAULT_MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const ARTIFACT_TTL: Duration = Duration::from_secs(30 * 60);
 /// How often the background sweeper runs.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(5 * 60);
+/// Directory, under the process current working directory, used for uploaded
+/// and generated artifact temp files.
+const UPLOAD_DIR: &str = "upload";
 
 /// Parse a human-readable byte size such as `2G`, `1024M`, `100K`, or `512MiB`.
 /// Suffixes are binary (1 K = 1024). A bare number is bytes. An optional
@@ -121,7 +129,7 @@ impl Kind {
             Kind::Svg => Artifact::svg(bytes),
             _ => Artifact::pdf(bytes),
         }
-        .map_err(internal)
+        .map_err(core_error)
     }
 }
 
@@ -274,6 +282,11 @@ impl AppState {
         self.max_upload_bytes
     }
 
+    fn max_body_bytes(&self) -> u64 {
+        self.max_upload_bytes
+            .saturating_add(MULTIPART_BODY_OVERHEAD_BYTES)
+    }
+
     /// Store a temp file under a fresh UUID and return that id. Owns the
     /// uuid/seq/insert sequence shared by uploads and produced results.
     fn store_file(
@@ -344,6 +357,29 @@ fn internal(e: impl ToString) -> AppError {
     )
 }
 
+fn core_error(e: OxideError) -> AppError {
+    match e {
+        OxideError::InvalidWorkflow { .. }
+        | OxideError::InvalidInput { .. }
+        | OxideError::UnsupportedPdfFeature { .. }
+        | OxideError::EncryptedPdf
+        | OxideError::IncorrectPassword
+        | OxideError::ParsePdf
+        | OxideError::SvgParse
+        | OxideError::ImageDecode => bad_req(e),
+        OxideError::ResourceLimitExceeded { .. } => {
+            AppError(StatusCode::PAYLOAD_TOO_LARGE, e.to_string())
+        }
+        OxideError::WritePdf
+        | OxideError::RenderPdf
+        | OxideError::ExtractText
+        | OxideError::FontResolution
+        | OxideError::ArtifactStorage
+        | OxideError::Io
+        | OxideError::Internal => internal(e),
+    }
+}
+
 fn artifact_kind(a: &Artifact) -> Kind {
     match a {
         Artifact::Pdf(_) | Artifact::PdfObject(_) => Kind::Pdf,
@@ -352,6 +388,20 @@ fn artifact_kind(a: &Artifact) -> Kind {
         Artifact::Text(_) => Kind::Text,
         Artifact::Bytes(_) => Kind::Bytes,
     }
+}
+
+fn ensure_upload_dir_under(base: &FsPath) -> io::Result<PathBuf> {
+    let dir = base.join(UPLOAD_DIR);
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+fn upload_dir() -> io::Result<PathBuf> {
+    ensure_upload_dir_under(&env::current_dir()?)
+}
+
+fn upload_temp_file() -> io::Result<NamedTempFile> {
+    NamedTempFile::new_in(upload_dir()?)
 }
 
 /// Write bytes to a fresh temp file off the async runtime (blocking I/O).
@@ -369,7 +419,7 @@ where
 
 async fn write_temp(bytes: Vec<u8>) -> Result<(NamedTempFile, u64), AppError> {
     blocking_io(move || {
-        let mut tmp = NamedTempFile::new()?;
+        let mut tmp = upload_temp_file()?;
         tmp.write_all(&bytes)?;
         Ok((tmp, bytes.len() as u64))
     })
@@ -411,7 +461,7 @@ async fn read_stored(
 
 async fn store_artifact(state: &AppState, artifact: Artifact) -> Result<String, AppError> {
     let kind = artifact_kind(&artifact);
-    let bytes = artifact.output_bytes().map_err(internal)?;
+    let bytes = artifact.output_bytes().map_err(core_error)?;
     let (tmp, size) = write_temp(bytes.into_owned()).await?;
     Ok(state.store_file(tmp, kind, kind.content_type(), size))
 }
@@ -440,7 +490,7 @@ async fn run_workflow(
     let runner = PdfOperatorRunner::with_limits(wf.limits.clone());
     let mut result = execute_workflow(&wf, store, runner)
         .await
-        .map_err(internal)?;
+        .map_err(core_error)?;
     result
         .store
         .remove(&from_ref)
@@ -557,7 +607,7 @@ async fn api_upload(
         let filename = field.file_name().unwrap_or("file").to_string();
         let kind = kind_from_filename(&filename);
         let content_type = upload_content_type(&filename, kind);
-        let mut tmp = blocking_io(NamedTempFile::new).await?;
+        let mut tmp = blocking_io(upload_temp_file).await?;
         let mut size = 0u64;
         while let Some(chunk) = field.chunk().await.map_err(bad_req)? {
             size = size
@@ -815,7 +865,7 @@ pub fn router(state: AppState, auth: Option<Auth>) -> Router {
             get(api_file).head(api_head_file).delete(api_delete_file),
         )
         .layer(DefaultBodyLimit::max(
-            usize::try_from(state.max_upload_bytes()).unwrap_or(usize::MAX),
+            usize::try_from(state.max_body_bytes()).unwrap_or(usize::MAX),
         ));
     if let Some(auth) = auth {
         app = app.layer(middleware::from_fn_with_state(auth, require_auth));
@@ -926,6 +976,27 @@ mod tests {
     }
 
     #[test]
+    fn core_invalid_input_is_returned_to_web_clients() {
+        let error = core_error(OxideError::InvalidInput {
+            reason: "merge requires at least two PDF inputs".to_owned(),
+        });
+
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            error.1,
+            "invalid input: merge requires at least two PDF inputs"
+        );
+    }
+
+    #[test]
+    fn core_internal_errors_stay_generic() {
+        let error = core_error(OxideError::Internal);
+
+        assert_eq!(error.0, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.1, "internal server error");
+    }
+
+    #[test]
     fn web_resource_limits_are_stricter_than_core_defaults() {
         let limits = web_resource_limits(DEFAULT_MAX_UPLOAD_BYTES);
 
@@ -961,6 +1032,44 @@ mod tests {
             Some(200 * 1024 * 1024)
         );
         assert_eq!(workflow.limits.max_output_bytes, Some(200 * 1024 * 1024));
+    }
+
+    #[test]
+    fn body_limit_allows_multipart_overhead_above_file_limit() {
+        let state = AppState::with_upload_limit(1024, 100 * 1024 * 1024);
+
+        assert_eq!(state.max_upload_bytes(), 100 * 1024 * 1024);
+        assert_eq!(
+            state.max_body_bytes(),
+            100 * 1024 * 1024 + MULTIPART_BODY_OVERHEAD_BYTES
+        );
+    }
+
+    #[test]
+    fn upload_dir_is_created_under_current_working_directory() {
+        let base = tempfile::tempdir().unwrap();
+
+        let dir = ensure_upload_dir_under(base.path()).unwrap();
+
+        assert_eq!(dir, base.path().join(UPLOAD_DIR));
+        assert!(dir.is_dir());
+    }
+
+    #[test]
+    fn upload_temp_file_uses_upload_directory() {
+        let base = tempfile::tempdir().unwrap();
+        let dir = ensure_upload_dir_under(base.path()).unwrap();
+
+        let file = tempfile::Builder::new()
+            .prefix(".tmp")
+            .tempfile_in(&dir)
+            .unwrap();
+
+        assert_eq!(
+            file.path().parent().unwrap(),
+            dir.as_path(),
+            "tempfile should be created under the upload directory"
+        );
     }
 
     #[test]

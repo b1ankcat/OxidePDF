@@ -24,8 +24,9 @@ struct Cli {
         value_parser = parse_size
     )]
     max_storage: u64,
-    /// Max size of one HTTP request/upload and matching workflow input/output
-    /// limit. Defaults to 128 MiB; raise this for larger PDFs.
+    /// Max size of one uploaded file and the matching workflow input/output
+    /// limit. Defaults to 128 MiB; the HTTP request body allows a small
+    /// multipart overhead above this.
     #[arg(
         long,
         env = "OXIDEPDF_MAX_UPLOAD",
