@@ -22,332 +22,91 @@ pub struct FamilySchema {
     pub ops: Vec<OpMeta>,
 }
 
-pub fn schema() -> Vec<FamilySchema> {
-    let mut families = vec![
-        FamilySchema {
-            name: "PdfEdit",
-            ops: vec![
-                OpMeta {
-                    name: "Merge",
-                    multi_input: true,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "KeepPages",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "ExtractPages",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "ReorderPages",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "RotatePages",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "DeletePages",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "DeleteBlankPages",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "CropPages",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "ScalePages",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "SinglePage",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "NUp",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "Booklet",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "PageNumbers",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "ImageToPdf",
-                    multi_input: true,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "SvgToPdf",
-                    multi_input: true,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "Watermark",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "Overlay",
-                    multi_input: true,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "ImageEdit",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "Color",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "Metadata",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "Outline",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "Attachment",
-                    multi_input: true,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "Annotation",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "FormFill",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "FormUnlockReadonly",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "FormRemove",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "InteractiveRemove",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "Compression",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-            ],
-        },
-        FamilySchema {
-            name: "PdfInspect",
-            ops: vec![
-                OpMeta {
-                    name: "Render",
-                    multi_input: false,
-                    output_type: "image",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "ExtractText",
-                    multi_input: false,
-                    output_type: "text",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "Metadata",
-                    multi_input: false,
-                    output_type: "text",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "Outline",
-                    multi_input: false,
-                    output_type: "text",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "Attachments",
-                    multi_input: false,
-                    output_type: "text",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "AttachmentExtract",
-                    multi_input: false,
-                    output_type: "bytes",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "Annotations",
-                    multi_input: false,
-                    output_type: "text",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "Forms",
-                    multi_input: false,
-                    output_type: "text",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "Images",
-                    multi_input: false,
-                    output_type: "text",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "ImageExtract",
-                    multi_input: false,
-                    output_type: "image",
-                    schema: Value::Null,
-                },
-            ],
-        },
-        FamilySchema {
-            name: "PdfSecurity",
-            ops: vec![
-                OpMeta {
-                    name: "Encrypt",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "Decrypt",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "PermissionsGet",
-                    multi_input: false,
-                    output_type: "text",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "PermissionsSet",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-            ],
-        },
-        FamilySchema {
-            name: "PdfCompare",
-            ops: vec![
-                OpMeta {
-                    name: "Report",
-                    multi_input: true,
-                    output_type: "text",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "VisualDiff",
-                    multi_input: true,
-                    output_type: "image",
-                    schema: Value::Null,
-                },
-            ],
-        },
-        FamilySchema {
-            name: "PdfSign",
-            ops: vec![
-                OpMeta {
-                    name: "Add",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "List",
-                    multi_input: false,
-                    output_type: "text",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "Verify",
-                    multi_input: false,
-                    output_type: "text",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "DeleteField",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-                OpMeta {
-                    name: "Timestamp",
-                    multi_input: false,
-                    output_type: "pdf",
-                    schema: Value::Null,
-                },
-            ],
-        },
-    ];
-    for family in &mut families {
-        for op in &mut family.ops {
-            op.schema = op_schema(family.name, op.name);
-        }
+fn family(name: &'static str, ops: Vec<(&'static str, bool, &'static str)>) -> FamilySchema {
+    FamilySchema {
+        name,
+        ops: ops
+            .into_iter()
+            .map(|(op_name, multi_input, output_type)| OpMeta {
+                name: op_name,
+                multi_input,
+                output_type,
+                schema: op_schema(name, op_name),
+            })
+            .collect(),
     }
-    families
+}
+
+pub fn schema() -> Vec<FamilySchema> {
+    vec![
+        family(
+            "PdfEdit",
+            vec![
+                ("Merge", true, "pdf"),
+                ("KeepPages", false, "pdf"),
+                ("ExtractPages", false, "pdf"),
+                ("ReorderPages", false, "pdf"),
+                ("RotatePages", false, "pdf"),
+                ("DeletePages", false, "pdf"),
+                ("DeleteBlankPages", false, "pdf"),
+                ("CropPages", false, "pdf"),
+                ("ScalePages", false, "pdf"),
+                ("SinglePage", false, "pdf"),
+                ("NUp", false, "pdf"),
+                ("Booklet", false, "pdf"),
+                ("PageNumbers", false, "pdf"),
+                ("ImageToPdf", true, "pdf"),
+                ("SvgToPdf", true, "pdf"),
+                ("Watermark", false, "pdf"),
+                ("Overlay", true, "pdf"),
+                ("ImageEdit", false, "pdf"),
+                ("Color", false, "pdf"),
+                ("Metadata", false, "pdf"),
+                ("Outline", false, "pdf"),
+                ("Attachment", true, "pdf"),
+                ("Annotation", false, "pdf"),
+                ("FormFill", false, "pdf"),
+                ("FormUnlockReadonly", false, "pdf"),
+                ("FormRemove", false, "pdf"),
+                ("InteractiveRemove", false, "pdf"),
+                ("Compression", false, "pdf"),
+            ],
+        ),
+        family(
+            "PdfInspect",
+            vec![
+                ("Render", false, "image"),
+                ("ExtractText", false, "text"),
+                ("Metadata", false, "text"),
+                ("Outline", false, "text"),
+                ("Attachments", false, "text"),
+                ("AttachmentExtract", false, "bytes"),
+                ("Annotations", false, "text"),
+                ("Forms", false, "text"),
+                ("Images", false, "text"),
+                ("ImageExtract", false, "image"),
+            ],
+        ),
+        family(
+            "PdfSecurity",
+            vec![
+                ("Encrypt", false, "pdf"),
+                ("Decrypt", false, "pdf"),
+                ("PermissionsGet", false, "text"),
+                ("PermissionsSet", false, "pdf"),
+            ],
+        ),
+        family(
+            "PdfCompare",
+            vec![("Report", true, "text"), ("VisualDiff", true, "image")],
+        ),
+        family(
+            "PdfSign",
+            vec![
+                ("List", false, "text"),
+                ("Verify", false, "text"),
+                ("DeleteField", false, "pdf"),
+            ],
+        ),
+    ]
 }

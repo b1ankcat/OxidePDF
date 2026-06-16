@@ -136,18 +136,23 @@ The image bundles the web front end and serves it on port 19898:
 ```sh
 cargo zigbuild --release --target x86_64-unknown-linux-musl -p oxidepdf-web
 docker build -t oxidepdf:local .
-docker run --rm -p 19898:19898 oxidepdf:local
+docker run --rm -p 19898:19898 \
+  -e OXIDEPDF_AUTH_USER=admin \
+  -e OXIDEPDF_AUTH_PASS=change-me \
+  oxidepdf:local
 # then open http://localhost:19898
 ```
 
-Because the container binds `0.0.0.0`, enable auth when exposing it. Every flag
-also has an environment variable, so the same options work via `docker run -e`:
+Because the container binds `0.0.0.0`, auth is required by default when exposing
+it. Every flag also has an environment variable, so the same options work via
+`docker run -e`:
 
 ```sh
 docker run --rm -p 19898:19898 \
   -e OXIDEPDF_AUTH_USER=admin \
   -e OXIDEPDF_AUTH_PASS=change-me \
   -e OXIDEPDF_MAX_STORAGE=1G \
+  -e OXIDEPDF_MAX_UPLOAD=256M \
   oxidepdf:local
 ```
 
@@ -309,13 +314,15 @@ Configuration (every flag has a matching environment variable):
 | `--addr` | `OXIDEPDF_ADDR` | `127.0.0.1` | Bind address |
 | `--port` | `OXIDEPDF_PORT` | `19898` | Port |
 | `--max-storage` | `OXIDEPDF_MAX_STORAGE` | `2G` | Total artifact cap (`2G`, `1024M`, `100K`, binary units) before oldest-first eviction |
+| `--max-upload` | `OXIDEPDF_MAX_UPLOAD` | `128M` | Per-request upload cap and matching web workflow input/output cap |
 | `--auth-user` | `OXIDEPDF_AUTH_USER` | — | HTTP Basic username (enables auth with `--auth-pass`) |
 | `--auth-pass` | `OXIDEPDF_AUTH_PASS` | — | HTTP Basic password |
+| `--allow-unauth-network` | `OXIDEPDF_ALLOW_UNAUTH_NETWORK` | `false` | Explicitly allow unauthenticated non-loopback binds |
 
 > ⚠️ Auth is **off** unless both `--auth-user` and `--auth-pass` are set; then
 > every request requires HTTP Basic credentials. The server binds to loopback by
-> default — binding to a non-loopback address without auth exposes an
-> unauthenticated upload/process/download service and prints a startup warning.
+> default. Binding to a non-loopback address without auth is refused unless
+> `--allow-unauth-network` is set.
 > Uploaded and produced files are held in temp storage and evicted automatically
 > (oldest-first past 256 files / the storage cap, and after 30 minutes idle).
 
@@ -336,6 +343,9 @@ Features:
   text. The HTTP API exposes `GET /api/schema`, `POST /api/upload`,
   `POST /api/execute/single`, `POST /api/execute/workflow`, and
   `GET`/`DELETE /api/file/{id}`.
+- **Hardened web surface**: server-local path options are not exposed through the
+  web API. Uploads stream to temp files, and browser-built workflows enforce
+  bounded upload, task-count, per-task-input, output-size, and timeout limits.
 
 ## Milestones 🗺️
 

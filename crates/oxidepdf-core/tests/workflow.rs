@@ -1302,7 +1302,7 @@ async fn execute_workflow_timeout_stops_downstream_tasks() {
                 }
               ],
               "outputs": [{ "id": "final", "from": "downstream", "path": "out.bin" }],
-              "limits": { "timeout_ms": 1 }
+              "limits": { "timeout_ms": 20 }
             }
             "#,
     );
@@ -1310,22 +1310,37 @@ async fn execute_workflow_timeout_stops_downstream_tasks() {
     store.insert(artifact_ref("source"), Artifact::bytes(b"input").unwrap());
 
     #[derive(Clone)]
-    struct SlowRecordingRunner(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+    struct SlowRecordingRunner {
+        executed: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        barrier: std::sync::Arc<std::sync::Barrier>,
+    }
     impl OperatorRunner for SlowRecordingRunner {
         fn run(&self, task: TaskSpec, _inputs: Vec<Artifact>) -> oxidepdf_core::OperatorFuture {
-            let executed = self.0.clone();
+            let executed = self.executed.clone();
+            let barrier = self.barrier.clone();
             Box::pin(async move {
                 executed.lock().unwrap().push(task.id.as_str().to_owned());
-                std::thread::sleep(std::time::Duration::from_millis(5));
+                barrier.wait();
+                std::thread::sleep(std::time::Duration::from_millis(50));
                 Artifact::bytes(task.id.as_str().as_bytes())
             })
         }
     }
 
-    let runner = SlowRecordingRunner(std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
+    let runner = SlowRecordingRunner {
+        executed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        barrier: std::sync::Arc::new(std::sync::Barrier::new(2)),
+    };
+    let release = runner.barrier.clone();
+    let keep_running = tokio::spawn(async move {
+        tokio::task::spawn_blocking(move || release.wait())
+            .await
+            .unwrap();
+    });
     let err = execute_workflow(&workflow, store, runner.clone())
         .await
         .unwrap_err();
+    keep_running.await.unwrap();
 
     assert_eq!(
         err,
@@ -1333,7 +1348,7 @@ async fn execute_workflow_timeout_stops_downstream_tasks() {
             limit: "timeout_ms".to_owned()
         }
     );
-    assert_eq!(runner.0.lock().unwrap().as_slice(), ["slow"]);
+    assert_eq!(runner.executed.lock().unwrap().as_slice(), ["slow"]);
 }
 
 #[tokio::test]

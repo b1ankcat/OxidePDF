@@ -6,6 +6,23 @@ PACKAGE="${PACKAGE:-oxidepdf-cli}"
 BIN="${BIN:-oxidepdf}"
 DIST_DIR="${DIST_DIR:-dist}"
 
+validate_component() {
+  name="$1"
+  value="$2"
+  case "$value" in
+    "" | /* | *..* | *[!A-Za-z0-9._-]*)
+      echo "Invalid $name: $value" >&2
+      exit 2
+      ;;
+  esac
+}
+
+validate_target_list() {
+  for target in $TARGETS; do
+    validate_component TARGETS "$target"
+  done
+}
+
 command -v cargo >/dev/null 2>&1 || {
   echo "cargo is required" >&2
   exit 127
@@ -22,6 +39,12 @@ if [ -z "$VERSION" ]; then
   echo "Failed to resolve version for package $PACKAGE from Cargo metadata" >&2
   exit 1
 fi
+
+validate_component PACKAGE "$PACKAGE"
+validate_component BIN "$BIN"
+validate_component DIST_DIR "$DIST_DIR"
+validate_component VERSION "$VERSION"
+validate_target_list
 
 if ! cargo zigbuild --help >/dev/null 2>&1; then
   echo "cargo-zigbuild is required; install with: cargo install cargo-zigbuild" >&2

@@ -17,6 +17,52 @@ impl std::fmt::Display for ParseOpError {
 
 impl std::error::Error for ParseOpError {}
 
+fn is_standard_pdf_font(family: &str) -> bool {
+    matches!(
+        family,
+        "Courier"
+            | "Courier-Bold"
+            | "Courier-Oblique"
+            | "Courier-BoldOblique"
+            | "Helvetica"
+            | "Helvetica-Bold"
+            | "Helvetica-Oblique"
+            | "Helvetica-BoldOblique"
+            | "Times-Roman"
+            | "Times-Bold"
+            | "Times-Italic"
+            | "Times-BoldItalic"
+            | "Symbol"
+            | "ZapfDingbats"
+    )
+}
+
+fn rejected_font_family(family: Option<&str>) -> bool {
+    family.is_some_and(|family| !is_standard_pdf_font(family))
+}
+
+fn sanitize_watermark_options(options: &WatermarkOptions) -> Result<(), ParseOpError> {
+    if options.font_path.is_some() || rejected_font_family(options.font.as_deref()) {
+        return Err(ParseOpError::UnknownOp);
+    }
+    Ok(())
+}
+
+fn sanitize_overlay_options(options: &OverlayOptions) -> Result<(), ParseOpError> {
+    if options.font_path.is_some() || rejected_font_family(options.font.as_deref()) {
+        return Err(ParseOpError::UnknownOp);
+    }
+    Ok(())
+}
+
+fn signature_options_without_trust_anchors(json: &str) -> Result<SignatureOptions, ParseOpError> {
+    let options: SignatureOptions = serde_json::from_str(json).map_err(ParseOpError::Json)?;
+    if options.trust_anchors.is_some() {
+        return Err(ParseOpError::UnknownOp);
+    }
+    Ok(options)
+}
+
 pub fn parse_op(family: &str, op: &str, json: &str) -> Result<OperatorSpec, ParseOpError> {
     fn de<T: serde::de::DeserializeOwned>(j: &str) -> Result<T, ParseOpError> {
         serde_json::from_str(j).map_err(ParseOpError::Json)
@@ -43,8 +89,16 @@ pub fn parse_op(family: &str, op: &str, json: &str) -> Result<OperatorSpec, Pars
         ("PdfEdit", "PageNumbers") => OperatorSpec::PdfEdit(PdfEditOptions::PageNumbers(de(json)?)),
         ("PdfEdit", "ImageToPdf") => OperatorSpec::PdfEdit(PdfEditOptions::ImageToPdf(de(json)?)),
         ("PdfEdit", "SvgToPdf") => OperatorSpec::PdfEdit(PdfEditOptions::SvgToPdf(de(json)?)),
-        ("PdfEdit", "Watermark") => OperatorSpec::PdfEdit(PdfEditOptions::Watermark(de(json)?)),
-        ("PdfEdit", "Overlay") => OperatorSpec::PdfEdit(PdfEditOptions::Overlay(de(json)?)),
+        ("PdfEdit", "Watermark") => {
+            let options = de(json)?;
+            sanitize_watermark_options(&options)?;
+            OperatorSpec::PdfEdit(PdfEditOptions::Watermark(options))
+        }
+        ("PdfEdit", "Overlay") => {
+            let options = de(json)?;
+            sanitize_overlay_options(&options)?;
+            OperatorSpec::PdfEdit(PdfEditOptions::Overlay(options))
+        }
         ("PdfEdit", "ImageEdit") => OperatorSpec::PdfEdit(PdfEditOptions::ImageEdit(de(json)?)),
         ("PdfEdit", "Color") => OperatorSpec::PdfEdit(PdfEditOptions::Color(de(json)?)),
         ("PdfEdit", "Metadata") => OperatorSpec::PdfEdit(PdfEditOptions::Metadata(de(json)?)),
@@ -104,12 +158,62 @@ pub fn parse_op(family: &str, op: &str, json: &str) -> Result<OperatorSpec, Pars
             OperatorSpec::PdfCompare(PdfCompareOptions::VisualDiff(de(json)?))
         }
 
-        ("PdfSign", "Add") => OperatorSpec::PdfSign(PdfSignOptions::Add(de(json)?)),
-        ("PdfSign", "List") => OperatorSpec::PdfSign(PdfSignOptions::List(de(json)?)),
-        ("PdfSign", "Verify") => OperatorSpec::PdfSign(PdfSignOptions::Verify(de(json)?)),
+        ("PdfSign", "List") => OperatorSpec::PdfSign(PdfSignOptions::List(
+            signature_options_without_trust_anchors(json)?,
+        )),
+        ("PdfSign", "Verify") => OperatorSpec::PdfSign(PdfSignOptions::Verify(
+            signature_options_without_trust_anchors(json)?,
+        )),
         ("PdfSign", "DeleteField") => OperatorSpec::PdfSign(PdfSignOptions::DeleteField(de(json)?)),
-        ("PdfSign", "Timestamp") => OperatorSpec::PdfSign(PdfSignOptions::Timestamp(de(json)?)),
 
         _ => return Err(ParseOpError::UnknownOp),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_web_ops_that_read_server_local_paths() {
+        let cases = [
+            (
+                "PdfSign",
+                "Add",
+                r#"{"field_name":"sig","certificate":"/etc/passwd","private_key":"/etc/shadow"}"#,
+            ),
+            ("PdfSign", "List", r#"{"trust_anchors":"/etc/passwd"}"#),
+            ("PdfSign", "Verify", r#"{"trust_anchors":"/etc/passwd"}"#),
+            ("PdfSign", "Timestamp", r#"{"token":"/etc/passwd"}"#),
+            (
+                "PdfEdit",
+                "Watermark",
+                r#"{"kind":"text","text":"x","font_path":"/etc/passwd"}"#,
+            ),
+            (
+                "PdfEdit",
+                "Overlay",
+                r#"{"kind":"text","text":"x","font_path":"/etc/passwd"}"#,
+            ),
+        ];
+
+        for (family, op, json) in cases {
+            assert!(
+                matches!(parse_op(family, op, json), Err(ParseOpError::UnknownOp)),
+                "{family}/{op} should not be accepted by the web API"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_text_watermark_with_standard_font_only() {
+        assert!(
+            parse_op(
+                "PdfEdit",
+                "Watermark",
+                r#"{"kind":"text","text":"DRAFT","font":"Helvetica"}"#
+            )
+            .is_ok()
+        );
+    }
 }

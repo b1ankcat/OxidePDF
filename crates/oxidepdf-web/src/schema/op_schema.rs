@@ -2,6 +2,25 @@ use oxidepdf_core::*;
 use schemars::schema_for;
 use serde_json::Value;
 
+fn without_properties(mut schema: Value, names: &[&str]) -> Value {
+    let Some(properties) = schema
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return schema;
+    };
+    for name in names {
+        properties.remove(*name);
+    }
+    if let Some(required) = schema
+        .get_mut("required")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        required.retain(|value| !names.iter().any(|name| value.as_str() == Some(name)));
+    }
+    schema
+}
+
 /// JSON Schema for an op's leaf options struct. Ops with no options (unit
 /// variants / empty structs) get an empty-object schema.
 pub fn op_schema(family: &str, op: &str) -> Value {
@@ -27,8 +46,8 @@ pub fn op_schema(family: &str, op: &str) -> Value {
         ("PdfEdit", "PageNumbers") => s!(PageNumbersOptions),
         ("PdfEdit", "ImageToPdf") => s!(ImageToPdfOptions),
         ("PdfEdit", "SvgToPdf") => s!(SvgToPdfOptions),
-        ("PdfEdit", "Watermark") => s!(WatermarkOptions),
-        ("PdfEdit", "Overlay") => s!(OverlayOptions),
+        ("PdfEdit", "Watermark") => without_properties(s!(WatermarkOptions), &["font_path"]),
+        ("PdfEdit", "Overlay") => without_properties(s!(OverlayOptions), &["font_path"]),
         ("PdfEdit", "ImageEdit") => s!(ImageEditOptions),
         ("PdfEdit", "Color") => s!(ColorEditOptions),
         ("PdfEdit", "Metadata") => s!(MetadataEditOptions),
@@ -60,11 +79,9 @@ pub fn op_schema(family: &str, op: &str) -> Value {
         ("PdfCompare", "Report") => s!(CompareOptions),
         ("PdfCompare", "VisualDiff") => s!(VisualDiffOptions),
 
-        ("PdfSign", "Add") => s!(SignatureAddOptions),
-        ("PdfSign", "List") => s!(SignatureOptions),
-        ("PdfSign", "Verify") => s!(SignatureOptions),
+        ("PdfSign", "List") => without_properties(s!(SignatureOptions), &["trust_anchors"]),
+        ("PdfSign", "Verify") => without_properties(s!(SignatureOptions), &["trust_anchors"]),
         ("PdfSign", "DeleteField") => s!(SignatureDeleteFieldOptions),
-        ("PdfSign", "Timestamp") => s!(TimestampAddOptions),
 
         _ => empty(),
     }

@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use clap::Parser;
-use oxidepdf_web::{Auth, parse_size};
+use oxidepdf_web::{Auth, DEFAULT_MAX_UPLOAD_BYTES, parse_size};
 use std::net::{IpAddr, SocketAddr};
 
 /// Web front end for OxidePDF.
@@ -24,6 +24,15 @@ struct Cli {
         value_parser = parse_size
     )]
     max_storage: u64,
+    /// Max size of one HTTP request/upload and matching workflow input/output
+    /// limit. Defaults to 128 MiB; raise this for larger PDFs.
+    #[arg(
+        long,
+        env = "OXIDEPDF_MAX_UPLOAD",
+        default_value_t = DEFAULT_MAX_UPLOAD_BYTES,
+        value_parser = parse_size
+    )]
+    max_upload: u64,
     /// Username for HTTP Basic auth. Enables auth only when paired with
     /// --auth-pass; otherwise the server runs unauthenticated.
     #[arg(long, env = "OXIDEPDF_AUTH_USER")]
@@ -31,6 +40,10 @@ struct Cli {
     /// Password for HTTP Basic auth. See --auth-user.
     #[arg(long, env = "OXIDEPDF_AUTH_PASS")]
     auth_pass: Option<String>,
+    /// Explicitly allow binding an unauthenticated server to a non-loopback
+    /// address. Use only behind a trusted network boundary.
+    #[arg(long, env = "OXIDEPDF_ALLOW_UNAUTH_NETWORK", default_value_t = false)]
+    allow_unauth_network: bool,
 }
 
 #[tokio::main]
@@ -47,23 +60,25 @@ async fn main() {
         }
     };
 
-    if auth.is_none() && !cli.addr.is_loopback() {
+    if auth.is_none() && !cli.addr.is_loopback() && !cli.allow_unauth_network {
         eprintln!(
-            "WARNING: binding to {} exposes an UNAUTHENTICATED server to the network. \
-             Anyone who can reach this address can upload, process, and download files. \
-             Set --auth-user/--auth-pass, or bind to 127.0.0.1, unless this is intentional.",
+            "error: refusing to bind unauthenticated server to {}. \
+             Set --auth-user/--auth-pass, bind to 127.0.0.1, or pass \
+             --allow-unauth-network if this is intentionally protected elsewhere.",
             cli.addr
         );
+        std::process::exit(2);
     }
 
-    let state = oxidepdf_web::AppState::new(cli.max_storage);
+    let state = oxidepdf_web::AppState::with_upload_limit(cli.max_storage, cli.max_upload);
     state.spawn_sweeper();
     let app = oxidepdf_web::router(state, auth.clone());
     let listener = tokio::net::TcpListener::bind(socket).await.unwrap();
     println!(
-        "oxidepdf-web listening on http://{socket} (auth: {}, max storage: {} bytes)",
+        "oxidepdf-web listening on http://{socket} (auth: {}, max storage: {} bytes, max upload: {} bytes)",
         if auth.is_some() { "on" } else { "off" },
-        cli.max_storage
+        cli.max_storage,
+        cli.max_upload
     );
     axum::serve(listener, app).await.unwrap();
 }

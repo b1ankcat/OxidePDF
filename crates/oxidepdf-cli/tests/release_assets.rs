@@ -35,6 +35,8 @@ fn dockerfile_uses_prebuilt_static_web_binary() {
     assert!(dockerfile.contains("COPY --from=certs /etc/ssl/certs/ca-certificates.crt"));
     assert!(dockerfile.contains("EXPOSE 19898"));
     assert!(dockerfile.contains("ENTRYPOINT [\"/oxidepdf-web\"]"));
+    assert!(dockerfile.contains("OXIDEPDF_AUTH_USER/OXIDEPDF_AUTH_PASS"));
+    assert!(dockerfile.contains("OXIDEPDF_ALLOW_UNAUTH_NETWORK=true"));
 }
 
 #[test]
@@ -45,6 +47,9 @@ fn readme_documents_open_source_distribution_and_milestones() {
     assert!(readme.contains("GPLv3"));
     assert!(readme.contains("oxidepdf completion bash"));
     assert!(readme.contains("Deployment and Distribution"));
+    assert!(readme.contains("OXIDEPDF_MAX_UPLOAD=256M"));
+    assert!(readme.contains("--allow-unauth-network"));
+    assert!(readme.contains("--max-upload"));
     assert!(readme.contains("Milestones"));
     assert!(readme.contains("Native macOS release archives"));
     assert!(readme.contains("Online TSA requests"));

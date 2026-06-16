@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    body::Body,
+    body::{Body, Bytes},
     extract::{DefaultBodyLimit, FromRequestParts, Multipart, Path, Request, State},
     http::{HeaderMap, StatusCode, header},
     middleware::{self, Next},
@@ -31,10 +31,21 @@ const STYLE_CSS: &str = include_str!("../static/style.css");
 const FORM_JS: &str = include_str!("../static/form.js");
 const APP_JS: &str = include_str!("../static/app.js");
 
-/// Body limit for uploads. Matches the core `ResourceLimits` input ceiling
-/// (512 MiB) so uploads aren't capped by axum's 2 MiB default before the
-/// handler runs.
-const BODY_LIMIT: usize = 512 * 1024 * 1024;
+/// Default HTTP body ceiling for the browser-facing service. This accepts common
+/// large PDFs while still requiring an explicit deployment choice for very large
+/// uploads.
+pub const DEFAULT_MAX_UPLOAD_BYTES: u64 = 128 * 1024 * 1024;
+/// Maximum number of multipart files accepted in one upload request.
+const MAX_UPLOAD_FILES: usize = 16;
+/// Maximum number of input artifacts accepted by a single-op request.
+const MAX_SINGLE_INPUTS: usize = 16;
+/// Maximum number of tasks accepted by a browser-built workflow.
+const MAX_WORKFLOW_TASKS: usize = 32;
+/// Maximum number of input references accepted by any one workflow task.
+const MAX_TASK_INPUTS: usize = 8;
+/// Web workflows run with a bounded wall-clock deadline unless a caller adds a
+/// narrower limit inside core in the future.
+const WEB_WORKFLOW_TIMEOUT_MS: u64 = 120_000;
 /// Upper bound on the number of artifacts (uploads + results) retained in
 /// memory at once. The oldest are evicted first once exceeded.
 const MAX_ARTIFACTS: usize = 256;
@@ -61,6 +72,9 @@ pub fn parse_size(s: &str) -> Result<u64, String> {
     let value: u64 = num
         .parse()
         .map_err(|_| format!("invalid size number in {s:?}"))?;
+    if value == 0 {
+        return Err(format!("size {s:?} must be greater than zero"));
+    }
     let mult = match unit.trim().to_ascii_lowercase().as_str() {
         "" | "b" => 1,
         "k" | "kb" | "kib" => 1024,
@@ -225,18 +239,24 @@ impl Store {
 pub struct AppState {
     store: Arc<Mutex<Store>>,
     seq: Arc<AtomicU64>,
+    max_upload_bytes: u64,
 }
 
 impl AppState {
     /// Create state with the given total-storage ceiling (bytes) for artifact
     /// eviction.
     pub fn new(max_total_bytes: u64) -> Self {
+        Self::with_upload_limit(max_total_bytes, DEFAULT_MAX_UPLOAD_BYTES)
+    }
+
+    pub fn with_upload_limit(max_total_bytes: u64, max_upload_bytes: u64) -> Self {
         Self {
             store: Arc::new(Mutex::new(Store {
                 max_total_bytes,
                 ..Store::default()
             })),
             seq: Arc::new(AtomicU64::new(0)),
+            max_upload_bytes,
         }
     }
 
@@ -248,6 +268,10 @@ impl AppState {
 
     fn next_seq(&self) -> u64 {
         self.seq.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn max_upload_bytes(&self) -> u64 {
+        self.max_upload_bytes
     }
 
     /// Store a temp file under a fresh UUID and return that id. Owns the
@@ -331,15 +355,33 @@ fn artifact_kind(a: &Artifact) -> Kind {
 }
 
 /// Write bytes to a fresh temp file off the async runtime (blocking I/O).
+async fn blocking_io<T>(
+    f: impl FnOnce() -> std::io::Result<T> + Send + 'static,
+) -> Result<T, AppError>
+where
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(internal)?
+        .map_err(internal)
+}
+
 async fn write_temp(bytes: Vec<u8>) -> Result<(NamedTempFile, u64), AppError> {
-    tokio::task::spawn_blocking(move || {
+    blocking_io(move || {
         let mut tmp = NamedTempFile::new()?;
         tmp.write_all(&bytes)?;
-        Ok::<_, std::io::Error>((tmp, bytes.len() as u64))
+        Ok((tmp, bytes.len() as u64))
     })
     .await
-    .map_err(internal)?
-    .map_err(internal)
+}
+
+async fn write_temp_chunk(mut tmp: NamedTempFile, chunk: Bytes) -> Result<NamedTempFile, AppError> {
+    blocking_io(move || {
+        tmp.write_all(&chunk)?;
+        Ok(tmp)
+    })
+    .await
 }
 
 /// Read a stored artifact's bytes off the async runtime, refreshing its access
@@ -407,7 +449,22 @@ async fn run_workflow(
 
 /// Assemble a `Workflow` from input refs and task specs, with the single output
 /// taken from `last`. Shared by the single-op and workflow execute paths.
-fn build_workflow(inputs: Vec<InputSpec>, tasks: Vec<TaskSpec>, last: ArtifactRef) -> Workflow {
+fn web_resource_limits(max_bytes: u64) -> ResourceLimits {
+    ResourceLimits {
+        max_input_bytes: Some(max_bytes),
+        max_total_input_bytes: Some(max_bytes),
+        max_output_bytes: Some(max_bytes),
+        timeout_ms: Some(WEB_WORKFLOW_TIMEOUT_MS),
+        ..ResourceLimits::default()
+    }
+}
+
+fn build_workflow(
+    inputs: Vec<InputSpec>,
+    tasks: Vec<TaskSpec>,
+    last: ArtifactRef,
+    max_bytes: u64,
+) -> Workflow {
     Workflow {
         version: WorkflowVersion::V1,
         inputs,
@@ -417,9 +474,43 @@ fn build_workflow(inputs: Vec<InputSpec>, tasks: Vec<TaskSpec>, last: ArtifactRe
             from: last,
             path: "out".into(),
         }],
-        limits: ResourceLimits::default(),
+        limits: web_resource_limits(max_bytes),
         metadata: WorkflowMetadata::default(),
     }
+}
+
+fn validate_single_request(req: &SingleReq) -> Result<(), AppError> {
+    if req.artifact_ids.is_empty() {
+        return Err(bad_req("artifact_ids is empty"));
+    }
+    if req.artifact_ids.len() > MAX_SINGLE_INPUTS {
+        return Err(bad_req(format!(
+            "too many input artifacts: max {MAX_SINGLE_INPUTS}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_workflow_request(req: &WorkflowReq) -> Result<(), AppError> {
+    if req.tasks.is_empty() {
+        return Err(bad_req("tasks is empty"));
+    }
+    if req.tasks.len() > MAX_WORKFLOW_TASKS {
+        return Err(bad_req(format!(
+            "too many workflow tasks: max {MAX_WORKFLOW_TASKS}"
+        )));
+    }
+    for (index, task) in req.tasks.iter().enumerate() {
+        if task.inputs.is_empty() {
+            return Err(bad_req(format!("task {index} has no inputs")));
+        }
+        if task.inputs.len() > MAX_TASK_INPUTS {
+            return Err(bad_req(format!(
+                "task {index} has too many inputs: max {MAX_TASK_INPUTS}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 // GET /
@@ -459,12 +550,27 @@ async fn api_upload(
     }
 
     let mut files = Vec::new();
-    while let Some(field) = mp.next_field().await.map_err(bad_req)? {
+    while let Some(mut field) = mp.next_field().await.map_err(bad_req)? {
+        if files.len() >= MAX_UPLOAD_FILES {
+            return Err(bad_req(format!("too many files: max {MAX_UPLOAD_FILES}")));
+        }
         let filename = field.file_name().unwrap_or("file").to_string();
         let kind = kind_from_filename(&filename);
         let content_type = upload_content_type(&filename, kind);
-        let bytes = field.bytes().await.map_err(bad_req)?;
-        let (tmp, size) = write_temp(bytes.to_vec()).await?;
+        let mut tmp = blocking_io(NamedTempFile::new).await?;
+        let mut size = 0u64;
+        while let Some(chunk) = field.chunk().await.map_err(bad_req)? {
+            size = size
+                .checked_add(chunk.len() as u64)
+                .ok_or_else(|| bad_req("file too large"))?;
+            let max_upload_bytes = state.max_upload_bytes();
+            if size > max_upload_bytes {
+                return Err(bad_req(format!(
+                    "file too large: max {max_upload_bytes} bytes"
+                )));
+            }
+            tmp = write_temp_chunk(tmp, chunk).await?;
+        }
         let id = state.store_file(tmp, kind, content_type, size);
         files.push(FileRef { id, filename });
     }
@@ -484,6 +590,7 @@ async fn api_execute_single(
     State(state): State<AppState>,
     Json(req): Json<SingleReq>,
 ) -> Result<impl IntoResponse, AppError> {
+    validate_single_request(&req)?;
     let op_spec = schema::parse_op(&req.family, &req.op, &req.options_json).map_err(bad_req)?;
     let (in_refs, store) = build_store(&state, &req.artifact_ids).await?;
     let task_ref = ArtifactRef::new("t0");
@@ -500,7 +607,7 @@ async fn api_execute_single(
         op: op_spec,
         inputs: in_refs,
     }];
-    let wf = build_workflow(inputs, tasks, task_ref.clone());
+    let wf = build_workflow(inputs, tasks, task_ref.clone(), state.max_upload_bytes());
     let artifact = run_workflow(wf, store, task_ref).await?;
     let result_id = store_artifact(&state, artifact).await?;
     Ok(Json(serde_json::json!({ "result_id": result_id })))
@@ -557,9 +664,7 @@ async fn api_execute_workflow(
     State(state): State<AppState>,
     Json(req): Json<WorkflowReq>,
 ) -> Result<impl IntoResponse, AppError> {
-    if req.tasks.is_empty() {
-        return Err(bad_req("tasks is empty"));
-    }
+    validate_workflow_request(&req)?;
 
     // Pre-populate the store with every referenced uploaded file, keyed by a
     // sanitized ref derived from the file id, and declare each as a workflow input.
@@ -581,9 +686,6 @@ async fn api_execute_workflow(
     for (ti, task) in req.tasks.iter().enumerate() {
         let op_spec =
             schema::parse_op(&task.family, &task.op, &task.options_json).map_err(bad_req)?;
-        if task.inputs.is_empty() {
-            return Err(bad_req(format!("task {ti} has no inputs")));
-        }
         let mut task_inputs = Vec::with_capacity(task.inputs.len());
         for input in &task.inputs {
             let r = match input {
@@ -607,7 +709,12 @@ async fn api_execute_workflow(
     }
 
     let last_id = ArtifactRef::new(format!("t{}", n - 1));
-    let wf = build_workflow(inputs_specs, task_specs, last_id.clone());
+    let wf = build_workflow(
+        inputs_specs,
+        task_specs,
+        last_id.clone(),
+        state.max_upload_bytes(),
+    );
     let artifact = run_workflow(wf, store, last_id).await?;
     let result_id = store_artifact(&state, artifact).await?;
     Ok(Json(serde_json::json!({ "result_id": result_id })))
@@ -707,7 +814,9 @@ pub fn router(state: AppState, auth: Option<Auth>) -> Router {
             "/api/file/{id}",
             get(api_file).head(api_head_file).delete(api_delete_file),
         )
-        .layer(DefaultBodyLimit::max(BODY_LIMIT));
+        .layer(DefaultBodyLimit::max(
+            usize::try_from(state.max_upload_bytes()).unwrap_or(usize::MAX),
+        ));
     if let Some(auth) = auth {
         app = app.layer(middleware::from_fn_with_state(auth, require_auth));
     }
@@ -802,6 +911,7 @@ mod tests {
         assert_eq!(parse_size("512MiB").unwrap(), 512 * 1024 * 1024);
         assert_eq!(parse_size("  4 GB ").unwrap(), 4 * 1024 * 1024 * 1024);
         assert!(parse_size("").is_err());
+        assert!(parse_size("0").is_err());
         assert!(parse_size("abc").is_err());
         assert!(parse_size("10X").is_err());
         assert!(parse_size("99999999999999999999G").is_err());
@@ -813,6 +923,96 @@ mod tests {
         assert!(!ct_eq("secret", "secres"));
         assert!(!ct_eq("secret", "secre"));
         assert!(ct_eq("", ""));
+    }
+
+    #[test]
+    fn web_resource_limits_are_stricter_than_core_defaults() {
+        let limits = web_resource_limits(DEFAULT_MAX_UPLOAD_BYTES);
+
+        assert_eq!(DEFAULT_MAX_UPLOAD_BYTES, 128 * 1024 * 1024);
+        assert_eq!(limits.max_input_bytes, Some(DEFAULT_MAX_UPLOAD_BYTES));
+        assert_eq!(limits.max_total_input_bytes, Some(DEFAULT_MAX_UPLOAD_BYTES));
+        assert_eq!(limits.max_output_bytes, Some(DEFAULT_MAX_UPLOAD_BYTES));
+        assert_eq!(limits.timeout_ms, Some(WEB_WORKFLOW_TIMEOUT_MS));
+    }
+
+    #[test]
+    fn app_state_custom_upload_limit_flows_into_workflow_limits() {
+        let state = AppState::with_upload_limit(1024, 200 * 1024 * 1024);
+        let workflow = build_workflow(
+            vec![InputSpec {
+                id: ArtifactRef::new("input"),
+                path: "input".into(),
+            }],
+            vec![TaskSpec {
+                id: TaskId::new("task"),
+                op: OperatorSpec::PdfInspect(PdfInspectOptions::Metadata(
+                    MetadataInspectOptions::default(),
+                )),
+                inputs: vec![ArtifactRef::new("input")],
+            }],
+            ArtifactRef::new("task"),
+            state.max_upload_bytes(),
+        );
+
+        assert_eq!(workflow.limits.max_input_bytes, Some(200 * 1024 * 1024));
+        assert_eq!(
+            workflow.limits.max_total_input_bytes,
+            Some(200 * 1024 * 1024)
+        );
+        assert_eq!(workflow.limits.max_output_bytes, Some(200 * 1024 * 1024));
+    }
+
+    #[test]
+    fn single_request_rejects_empty_and_excessive_inputs() {
+        let empty = SingleReq {
+            artifact_ids: Vec::new(),
+            family: "PdfInspect".to_owned(),
+            op: "Metadata".to_owned(),
+            options_json: "{}".to_owned(),
+        };
+        assert!(validate_single_request(&empty).is_err());
+
+        let excessive = SingleReq {
+            artifact_ids: vec!["id".to_owned(); MAX_SINGLE_INPUTS + 1],
+            family: "PdfEdit".to_owned(),
+            op: "Merge".to_owned(),
+            options_json: "{}".to_owned(),
+        };
+        assert!(validate_single_request(&excessive).is_err());
+    }
+
+    #[test]
+    fn workflow_request_rejects_empty_excessive_and_wide_tasks() {
+        assert!(validate_workflow_request(&WorkflowReq { tasks: Vec::new() }).is_err());
+
+        let too_many_tasks = WorkflowReq {
+            tasks: (0..=MAX_WORKFLOW_TASKS)
+                .map(|_| WfTask {
+                    family: "PdfInspect".to_owned(),
+                    op: "Metadata".to_owned(),
+                    options_json: "{}".to_owned(),
+                    inputs: vec![WfInput::File {
+                        id: "file".to_owned(),
+                    }],
+                })
+                .collect(),
+        };
+        assert!(validate_workflow_request(&too_many_tasks).is_err());
+
+        let too_many_inputs = WorkflowReq {
+            tasks: vec![WfTask {
+                family: "PdfEdit".to_owned(),
+                op: "Merge".to_owned(),
+                options_json: "{}".to_owned(),
+                inputs: (0..=MAX_TASK_INPUTS)
+                    .map(|index| WfInput::File {
+                        id: format!("file{index}"),
+                    })
+                    .collect(),
+            }],
+        };
+        assert!(validate_workflow_request(&too_many_inputs).is_err());
     }
 
     #[test]
