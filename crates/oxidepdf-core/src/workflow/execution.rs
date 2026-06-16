@@ -152,7 +152,17 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    tokio::spawn(future)
+    // Run on a blocking thread so that futures containing std::thread::sleep
+    // (or other blocking calls) don't stall the shared async executor — a
+    // single current_thread runtime (e.g. #[tokio::test]) would serialize all
+    // tasks if tokio::spawn were used here.
+    tokio::task::spawn_blocking(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("workflow sub-runtime")
+            .block_on(future)
+    })
 }
 
 impl apalis::prelude::Backend for WorkflowBackend {

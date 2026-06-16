@@ -1,6 +1,6 @@
 use super::kind::Artifact;
-use crate::workflow::ArtifactRef;
 use crate::OxideError;
+use crate::workflow::ArtifactRef;
 use std::collections::HashMap;
 
 /// In-memory artifact store used by the executor.
@@ -53,7 +53,9 @@ impl ArtifactStore {
                 // the artifact can be restored if spilling fails (disk pressure).
                 let backup = artifact.clone();
                 match artifact.spilled_to_threshold(threshold) {
-                    Ok(rethresholded) => { self.artifacts.insert(id, rethresholded); }
+                    Ok(rethresholded) => {
+                        self.artifacts.insert(id, rethresholded);
+                    }
                     Err(e) => {
                         self.artifacts.insert(id, backup);
                         return Err(e);
