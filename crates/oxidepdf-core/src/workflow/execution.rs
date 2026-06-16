@@ -32,6 +32,8 @@ where
 {
     let plan = validate_workflow(workflow)?;
     enforce_workflow_input_limits(workflow, &store)?;
+    let mut store = store;
+    store.rethreshold(workflow.limits.spill_threshold_bytes)?;
     if workflow.tasks.is_empty() {
         return Ok(ExecutionResult { plan, store });
     }
@@ -113,10 +115,16 @@ where
         };
         match event {
             Event::Error(error) => {
-                if timeout.is_some_and(|timeout| started_at.elapsed() >= timeout) {
+                let err = workflow_event_error(&error);
+                // Classify untyped apalis errors (e.g. from TimeoutLayer) as
+                // timeout when we are at or past the deadline; preserve typed
+                // OxideErrors (ParsePdf, ResourceLimitExceeded, …) as-is.
+                if matches!(err, OxideError::Internal)
+                    && timeout.is_some_and(|t| started_at.elapsed() >= t)
+                {
                     return Err(resource_limit("timeout_ms"));
                 }
-                return Err(workflow_event_error(&error));
+                return Err(err);
             }
             Event::Success
             | Event::Start
@@ -144,8 +152,7 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    let handle = tokio::runtime::Handle::current();
-    tokio::task::spawn_blocking(move || handle.block_on(future))
+    tokio::spawn(future)
 }
 
 impl apalis::prelude::Backend for WorkflowBackend {
@@ -266,12 +273,7 @@ fn commit_workflow_task(
 }
 
 fn initial_ready_tasks(plan: &ExecutionPlan) -> VecDeque<usize> {
-    plan.layers
-        .first()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .collect()
+    plan.layers.first().into_iter().flatten().copied().collect()
 }
 
 fn artifact_consumer_counts(workflow: &Workflow) -> BTreeMap<ArtifactRef, usize> {
@@ -555,7 +557,7 @@ fn text_artifact_size(text: &TextArtifact) -> usize {
 }
 
 fn enforce_timeout(started_at: Instant, timeout: Option<Duration>) -> Result<(), OxideError> {
-    if timeout.is_some_and(|timeout| started_at.elapsed() > timeout) {
+    if timeout.is_some_and(|timeout| started_at.elapsed() >= timeout) {
         return Err(resource_limit("timeout_ms"));
     }
 

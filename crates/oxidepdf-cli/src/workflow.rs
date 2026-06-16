@@ -54,7 +54,7 @@ pub(crate) async fn run_workflow(
             "output_bytes": output_bytes,
             "task_count": workflow.tasks.len() as u64,
             "peak_rss_bytes": peak_rss_bytes,
-            "peak_rss_source": "/proc/self/status:VmHWM",
+            "peak_rss_source": peak_rss_bytes.map(|_| "/proc/self/status:VmHWM"),
         });
         write_metrics_output(&path, &metrics, args.force)?;
     }
@@ -84,7 +84,7 @@ fn check_metrics_output_path(path: &Path, force: bool) -> Result<(), CliError> {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_peak_rss_bytes() -> Result<u64, CliError> {
+fn linux_peak_rss_bytes() -> Result<Option<u64>, CliError> {
     let status = fs::read_to_string("/proc/self/status")
         .map_err(|_| CliError::Core(OxideError::ArtifactStorage))?;
     for line in status.lines() {
@@ -105,12 +105,13 @@ fn linux_peak_rss_bytes() -> Result<u64, CliError> {
         }
         return value
             .checked_mul(1024)
-            .ok_or(CliError::Core(OxideError::ArtifactStorage));
+            .ok_or(CliError::Core(OxideError::ArtifactStorage))
+            .map(Some);
     }
-    Err(CliError::Core(OxideError::ArtifactStorage))
+    Ok(None) // VmHWM absent from /proc/self/status (some container runtimes)
 }
 
 #[cfg(not(target_os = "linux"))]
-fn linux_peak_rss_bytes() -> Result<u64, CliError> {
-    Err(CliError::Core(OxideError::ArtifactStorage))
+fn linux_peak_rss_bytes() -> Result<Option<u64>, CliError> {
+    Ok(None)
 }

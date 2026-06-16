@@ -1,5 +1,6 @@
 use super::kind::Artifact;
 use crate::workflow::ArtifactRef;
+use crate::OxideError;
 use std::collections::HashMap;
 
 /// In-memory artifact store used by the executor.
@@ -37,6 +38,30 @@ impl ArtifactStore {
     /// set rather than the full set of every artifact ever produced.
     pub fn remove(&mut self, id: &ArtifactRef) -> Option<Artifact> {
         self.artifacts.remove(id)
+    }
+
+    /// Re-evaluates every artifact in the store against `threshold`, spilling
+    /// oversized inline payloads to temp files and pulling previously-spilled
+    /// payloads back inline when they now fit. Called once at workflow startup
+    /// so the workflow-configured threshold is applied to inputs that were built
+    /// with the default threshold.
+    pub(crate) fn rethreshold(&mut self, threshold: Option<u64>) -> Result<(), OxideError> {
+        let ids: Vec<ArtifactRef> = self.artifacts.keys().cloned().collect();
+        for id in ids {
+            if let Some(artifact) = self.artifacts.remove(&id) {
+                // Clone is O(1): ArtifactBytes is Arc-backed. Keep a copy so
+                // the artifact can be restored if spilling fails (disk pressure).
+                let backup = artifact.clone();
+                match artifact.spilled_to_threshold(threshold) {
+                    Ok(rethresholded) => { self.artifacts.insert(id, rethresholded); }
+                    Err(e) => {
+                        self.artifacts.insert(id, backup);
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 

@@ -56,16 +56,9 @@ pub fn reorder_pdf_with_limits(
     pages: &str,
     limits: &ResourceLimits,
 ) -> Result<PdfArtifact, OxideError> {
-    enforce_input_bytes(input.len(), limits)?;
-    let mut document = load_pdf(input)?;
-    // Reorder and split share the same primitive: select pages in the given
-    // order. `keep_pages` preserves input order, so this reorders too.
-    split_on_document(&mut document, pages, limits)?;
-    let bytes = save_pdf(document)?;
-    enforce_output_bytes(bytes.len(), limits)?;
-    Ok(PdfArtifact {
-        bytes: crate::ArtifactBytes::from_vec(bytes)?,
-    })
+    // Reorder and split share the same primitive: keep_pages preserves the
+    // supplied order, so passing the reorder sequence selects and reorders.
+    split_pdf_with_limits(input, pages, limits)
 }
 
 /// Rotates selected PDF pages by 90, 180, or 270 degrees.
@@ -152,16 +145,17 @@ pub(crate) fn delete_pages_on_document(
     pages: &str,
     limits: &ResourceLimits,
 ) -> Result<(), OxideError> {
-    let page_count = document.get_pages().len() as u32;
-    enforce_max_pages(page_count as usize, limits)?;
-    let deleted_pages = parse_page_range(pages, page_count)?;
-    if deleted_pages.len() as u32 == page_count {
+    let page_count = document.get_pages().len();
+    enforce_max_pages(page_count, limits)?;
+    let deleted_pages = parse_page_range(pages, page_count as u32)?;
+    if deleted_pages.len() == page_count {
         return Err(OxideError::InvalidInput {
             reason: "delete_pages must leave at least one page".to_owned(),
         });
     }
-    let kept_pages = (1..=page_count)
-        .filter(|page| !deleted_pages.contains(page))
+    let deleted_set = deleted_pages.into_iter().collect::<std::collections::HashSet<_>>();
+    let kept_pages = (1..=page_count as u32)
+        .filter(|page| !deleted_set.contains(page))
         .collect::<Vec<_>>();
     keep_pages(document, &kept_pages)
 }
@@ -196,11 +190,10 @@ pub(crate) fn delete_blank_pages_on_document(
     _options: &DeleteBlankPagesOptions,
     limits: &ResourceLimits,
 ) -> Result<(), OxideError> {
-    let page_count = document.get_pages().len() as u32;
-    enforce_max_pages(page_count as usize, limits)?;
-    let page_map = document.get_pages();
+    let page_count = document.get_pages().len();
+    enforce_max_pages(page_count, limits)?;
     let mut blank_pages = Vec::new();
-    for (page_number, page_id) in page_map {
+    for (page_number, page_id) in document.get_pages() {
         if page_is_structurally_blank(document, page_id)? {
             blank_pages.push(page_number);
         }
@@ -210,13 +203,14 @@ pub(crate) fn delete_blank_pages_on_document(
             reason: "PDF contains no structurally blank pages".to_owned(),
         });
     }
-    if blank_pages.len() as u32 == page_count {
+    if blank_pages.len() == page_count {
         return Err(OxideError::InvalidInput {
             reason: "delete_blank_pages must leave at least one page".to_owned(),
         });
     }
-    let kept_pages = (1..=page_count)
-        .filter(|page| !blank_pages.contains(page))
+    let blank_set = blank_pages.into_iter().collect::<std::collections::HashSet<_>>();
+    let kept_pages = (1..=page_count as u32)
+        .filter(|page| !blank_set.contains(page))
         .collect::<Vec<_>>();
     keep_pages(document, &kept_pages)
 }

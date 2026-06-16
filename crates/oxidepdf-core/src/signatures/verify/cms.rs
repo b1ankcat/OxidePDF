@@ -166,13 +166,19 @@ fn signed_bytes(input: &[u8], byte_range: &ByteRangeVerification) -> Option<Vec<
     Some(bytes)
 }
 
-fn cms_digest_verification(signed_data: &SignedData, signed_bytes: &[u8]) -> SignatureCheckStatus {
-    let Some(signer_info) = signed_data.signer_infos.0.iter().next() else {
-        return signature_check(
-            SignatureCheckState::Failed,
-            "CMS SignedData contains no signerInfo entries",
-        );
-    };
+fn worst_check(a: SignatureCheckStatus, b: SignatureCheckStatus) -> SignatureCheckStatus {
+    fn rank(s: &SignatureCheckState) -> u8 {
+        match s {
+            SignatureCheckState::Passed => 0,
+            SignatureCheckState::Unsupported => 1,
+            SignatureCheckState::Indeterminate => 2,
+            SignatureCheckState::Failed => 3,
+        }
+    }
+    if rank(&b.status) > rank(&a.status) { b } else { a }
+}
+
+fn check_one_signer_digest(signer_info: &cms::signed_data::SignerInfo, signed_bytes: &[u8]) -> SignatureCheckStatus {
     let Some(signed_attrs) = signer_info.signed_attrs.as_ref() else {
         return signature_check(
             SignatureCheckState::Unsupported,
@@ -185,68 +191,40 @@ fn cms_digest_verification(signed_data: &SignedData, signed_bytes: &[u8]) -> Sig
             "CMS signerInfo signed attributes are missing messageDigest",
         );
     };
-
-    let Some(computed_digest) = digest_for_algorithm(&signer_info.digest_alg.oid, signed_bytes)
-    else {
+    let Some(computed_digest) = digest_for_algorithm(&signer_info.digest_alg.oid, signed_bytes) else {
         return signature_check(
             SignatureCheckState::Unsupported,
-            format!(
-                "unsupported CMS digest algorithm {}",
-                signer_info.digest_alg.oid
-            ),
+            format!("unsupported CMS digest algorithm {}", signer_info.digest_alg.oid),
         );
     };
-
     if computed_digest == message_digest {
-        signature_check(
-            SignatureCheckState::Passed,
-            "CMS messageDigest matches signed bytes",
-        )
+        signature_check(SignatureCheckState::Passed, "CMS messageDigest matches signed bytes")
     } else {
-        signature_check(
-            SignatureCheckState::Failed,
-            "CMS messageDigest does not match signed bytes",
-        )
+        signature_check(SignatureCheckState::Failed, "CMS messageDigest does not match signed bytes")
     }
 }
 
-fn cms_signature_verification(
-    signed_data: &SignedData,
+fn check_one_signer_signature(
+    signer_info: &cms::signed_data::SignerInfo,
+    certificates: &cms::signed_data::CertificateSet,
     signed_bytes: &[u8],
 ) -> SignatureCheckStatus {
-    let Some(signer_info) = signed_data.signer_infos.0.iter().next() else {
-        return signature_check(
-            SignatureCheckState::Failed,
-            "CMS SignedData contains no signerInfo entries",
-        );
-    };
-    let Some(certificates) = signed_data.certificates.as_ref() else {
-        return signature_check(
-            SignatureCheckState::Failed,
-            "CMS SignedData contains no embedded certificates",
-        );
-    };
     let Some(certificate) = signer_certificate(certificates, &signer_info.sid) else {
         return signature_check(
             SignatureCheckState::Failed,
             "CMS signer certificate was not found in embedded certificates",
         );
     };
-
-    let signature_input = if let Some(signed_attrs) = signer_info.signed_attrs.as_ref() {
-        match signed_attributes_signature_input(signed_attrs) {
+    let signature_input = match signer_info.signed_attrs.as_ref() {
+        Some(signed_attrs) => match signed_attributes_signature_input(signed_attrs) {
             Some(input) => input,
-            None => {
-                return signature_check(
-                    SignatureCheckState::Indeterminate,
-                    "CMS signed attributes could not be re-encoded for signature verification",
-                );
-            }
-        }
-    } else {
-        signed_bytes.to_vec()
+            None => return signature_check(
+                SignatureCheckState::Indeterminate,
+                "CMS signed attributes could not be re-encoded for signature verification",
+            ),
+        },
+        None => signed_bytes.to_vec(),
     };
-
     verify_signer_signature(
         &certificate.tbs_certificate.subject_public_key_info,
         &signer_info.signature_algorithm.oid,
@@ -254,4 +232,33 @@ fn cms_signature_verification(
         &signature_input,
         signer_info.signature.as_bytes(),
     )
+}
+
+fn cms_digest_verification(signed_data: &SignedData, signed_bytes: &[u8]) -> SignatureCheckStatus {
+    signed_data
+        .signer_infos
+        .0
+        .iter()
+        .map(|si| check_one_signer_digest(si, signed_bytes))
+        .reduce(worst_check)
+        .unwrap_or_else(|| signature_check(SignatureCheckState::Failed, "CMS SignedData contains no signerInfo entries"))
+}
+
+fn cms_signature_verification(
+    signed_data: &SignedData,
+    signed_bytes: &[u8],
+) -> SignatureCheckStatus {
+    let Some(certificates) = signed_data.certificates.as_ref() else {
+        return signature_check(
+            SignatureCheckState::Failed,
+            "CMS SignedData contains no embedded certificates",
+        );
+    };
+    signed_data
+        .signer_infos
+        .0
+        .iter()
+        .map(|si| check_one_signer_signature(si, certificates, signed_bytes))
+        .reduce(worst_check)
+        .unwrap_or_else(|| signature_check(SignatureCheckState::Failed, "CMS SignedData contains no signerInfo entries"))
 }

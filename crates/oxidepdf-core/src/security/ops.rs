@@ -357,6 +357,14 @@ fn parse_single_indirect_object(
     object_id: lopdf::ObjectId,
     generation: u16,
 ) -> Result<Object, OxideError> {
+    // Wrap the raw object bytes in the minimal valid PDF envelope required by
+    // lopdf's load_mem. Layout (bytes):
+    //   [0..9)   %PDF-1.7\n          (9-byte header)
+    //   [9..end) <raw object bytes>   object_offset = 9
+    //   \n
+    //   xref table at xref_start = 9 + raw.len() + 1
+    // The xref entry points to offset 9 where the object begins. This layout
+    // is tight: any change to what is prepended must update object_offset.
     let header = b"%PDF-1.7\n";
     let object_offset = header.len();
     let xref_start = object_offset + raw.len() + 1;
@@ -405,7 +413,9 @@ fn map_lopdf_security_error(error: lopdf::Error) -> OxideError {
         lopdf::Error::NotEncrypted => OxideError::InvalidInput {
             reason: "PDF is not encrypted".to_owned(),
         },
-        lopdf::Error::Decryption(_) => OxideError::EncryptedPdf,
+        lopdf::Error::Decryption(_) => OxideError::InvalidInput {
+            reason: "PDF decryption failed".to_owned(),
+        },
         _ => OxideError::ParsePdf,
     }
 }
