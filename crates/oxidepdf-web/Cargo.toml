@@ -11,3 +11,13 @@ name = "oxidepdf-web"
 path = "src/main.rs"
 
 [dependencies]
+axum = { workspace = true }
+clap = { workspace = true }
+tower-http = { workspace = true }
+uuid = { workspace = true }
+oxidepdf-core = { workspace = true }
+schemars = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }

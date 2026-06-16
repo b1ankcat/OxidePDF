@@ -27,17 +27,14 @@ fn check_script_runs_release_build_for_primary_linux_target() {
 }
 
 #[test]
-fn dockerfile_uses_prebuilt_static_cli_binary() {
+fn dockerfile_uses_prebuilt_static_web_binary() {
     let dockerfile = read("Dockerfile");
 
     assert!(dockerfile.contains("FROM scratch"));
-    assert!(dockerfile.contains("COPY target/x86_64-unknown-linux-musl/release/oxidepdf"));
-    assert!(
-        dockerfile
-            .contains("COPY target/x86_64-unknown-linux-musl/release/completions/oxidepdf.bash")
-    );
+    assert!(dockerfile.contains("COPY target/x86_64-unknown-linux-musl/release/oxidepdf-web"));
     assert!(dockerfile.contains("COPY --from=certs /etc/ssl/certs/ca-certificates.crt"));
-    assert!(dockerfile.contains("ENTRYPOINT [\"/oxidepdf\"]"));
+    assert!(dockerfile.contains("EXPOSE 19898"));
+    assert!(dockerfile.contains("ENTRYPOINT [\"/oxidepdf-web\"]"));
 }
 
 #[test]

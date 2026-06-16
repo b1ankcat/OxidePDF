@@ -11,6 +11,7 @@ OxidePDF is a pure Rust PDF toolkit with a modular CLI and workflow engine. It f
 - 📦 **Static Linux releases**: musl builds via `cargo zigbuild`.
 - 🧭 **Bash completion**: generated at build time and available from the CLI.
 - ⚙️ **Workflow orchestration**: YAML/JSON pipeline documents with DAG-based task scheduling, retries, rate limits, timeouts, resource limits, and programmatic API.
+- 🌐 **Web UI**: a single static binary (`oxidepdf-web`) serving a three-column workflow builder with schema-generated parameter forms, multi-file inputs, and inline result preview.
 - 🐳 **Container-friendly**: static binary copied into a `scratch` runtime image.
 
 ## Quick Start 🚀
@@ -130,10 +131,13 @@ README.md
 
 Run from Docker:
 
+The image bundles the web front end and serves it on port 19898:
+
 ```sh
-cargo zigbuild --release --target x86_64-unknown-linux-musl -p oxidepdf-cli
+cargo zigbuild --release --target x86_64-unknown-linux-musl -p oxidepdf-web
 docker build -t oxidepdf:local .
-docker run --rm oxidepdf:local --help
+docker run --rm -p 19898:19898 oxidepdf:local
+# then open http://localhost:19898
 ```
 
 ## Advanced Workflow Orchestration
@@ -275,9 +279,34 @@ let result = execute_workflow(&workflow, store, runner).await?;
 
 Individual CLI commands (`pdf_edit merge`, `pdf_inspect render`, etc.) are implemented as single-task workflows internally, so the same validation and execution path serves both interactive use and workflow documents.
 
-### Web Crate
+### Web UI
 
-`oxidepdf-web` is currently a placeholder crate. The browser/server-facing interface will be built on top of the same `oxidepdf-core` workflow engine later.
+`oxidepdf-web` is a self-contained web front end for the workflow engine. It is a
+single static binary (HTML/CSS/JS embedded via `include_str!`, so `cargo zigbuild`
+still produces one musl executable) that serves a three-column UI on `0.0.0.0:19898`.
+
+```sh
+cargo run -p oxidepdf-web
+# then open http://localhost:19898
+```
+
+Features:
+
+- **Operation catalog** driven by the same operator families as the CLI; the
+  parameter form for each op is generated from a JSON Schema derived (via
+  `schemars`) directly from the core option structs, so required and optional
+  fields are always in sync with the engine.
+- **Single-op mode**: upload file(s), pick an operation, fill the generated form,
+  execute, preview, and download the result.
+- **Workflow mode**: build a multi-step pipeline visually. Each step's inputs are
+  the files selected in the file list; after adding a step its predicted output is
+  added as a selectable virtual file, so the next step can consume it or fresh
+  uploads. Multi-input operations (merge, overlay, etc.) accept several selected
+  files, and drag-to-reorder the file list controls input order.
+- **Preview by type**: PDF results render inline, images as `<img>`, text/JSON as
+  text. The HTTP API exposes `GET /api/schema`, `POST /api/upload`,
+  `POST /api/execute/single`, `POST /api/execute/workflow`, and
+  `GET`/`DELETE /api/file/{id}`.
 
 ## Milestones 🗺️
 

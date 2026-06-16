@@ -1,5 +1,5 @@
 /// Options for image-to-PDF conversion.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ImageToPdfOptions {
     /// Layout mode such as `fit`, `fill`, or `original_size`.
@@ -7,7 +7,7 @@ pub struct ImageToPdfOptions {
 }
 
 /// Options for SVG-to-PDF conversion.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SvgToPdfOptions {
     /// User-selected rasterization mode. Defaults to vector output when false.
@@ -15,7 +15,7 @@ pub struct SvgToPdfOptions {
 }
 
 /// Options for text extraction.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ExtractTextOptions {
     /// Output format, initially `plain`.
@@ -23,7 +23,7 @@ pub struct ExtractTextOptions {
 }
 
 /// Options for watermarking.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WatermarkOptions {
     /// Watermark kind.
     pub kind: WatermarkKind,
@@ -51,7 +51,7 @@ pub struct WatermarkOptions {
 }
 
 /// Watermark content kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WatermarkKind {
     /// Text watermark.
@@ -63,7 +63,7 @@ pub enum WatermarkKind {
 }
 
 /// Unified overlay content kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OverlayKind {
     /// Existing watermark semantics.
@@ -83,7 +83,7 @@ pub enum OverlayKind {
 }
 
 /// Options for the unified overlay engine.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OverlayOptions {
     /// Overlay kind.
@@ -114,19 +114,19 @@ pub struct OverlayOptions {
 }
 
 /// Image resource inspection options.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct ImageInspectOptions {}
 
 /// Image extraction options.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ImageExtractOptions {
     pub name: String,
 }
 
 /// Image resource edit options.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ImageEditOptions {
     pub action: ImageEditAction,
@@ -135,7 +135,7 @@ pub struct ImageEditOptions {
 }
 
 /// Image resource edit action.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageEditAction {
     Add,
@@ -144,7 +144,7 @@ pub enum ImageEditAction {
 }
 
 /// Color content stream edit options.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ColorEditOptions {
     pub action: ColorEditAction,
@@ -157,7 +157,7 @@ pub struct ColorEditOptions {
 }
 
 /// Color content stream edit action.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ColorEditAction {
     Contrast,
@@ -166,7 +166,7 @@ pub enum ColorEditAction {
 }
 
 /// Options for rendering.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RenderOptions {
     /// One-based page number.
     pub page: u32,

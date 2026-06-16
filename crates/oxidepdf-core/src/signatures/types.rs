@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Options for adding a digital signature.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct SignatureAddOptions {
     /// Signature field name to create or fill.
@@ -18,7 +18,7 @@ pub struct SignatureAddOptions {
 }
 
 /// Options for deleting a signature field.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct SignatureDeleteFieldOptions {
     /// Signature field name to delete.
@@ -28,7 +28,7 @@ pub struct SignatureDeleteFieldOptions {
 }
 
 /// Options for adding or reporting a timestamp token.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct TimestampAddOptions {
     /// Explicit TSA endpoint. Live TSA requests are not performed by this offline build.
@@ -38,7 +38,7 @@ pub struct TimestampAddOptions {
 }
 
 /// Timestamp operation report emitted as JSON.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TimestampReport {
     /// Timestamp status.
     pub status: SignatureCheckStatus,
@@ -49,7 +49,7 @@ pub struct TimestampReport {
 }
 
 /// Options for signature and certificate operations.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SignatureOptions {
     /// Requested signature operation.
@@ -59,7 +59,9 @@ pub struct SignatureOptions {
 }
 
 /// Requested signature operation.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum SignatureMode {
     /// List PDF signatures without performing trust validation.
@@ -70,7 +72,7 @@ pub enum SignatureMode {
 }
 
 /// Top-level signature verification report emitted as JSON.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SignatureVerificationReport {
     /// Overall verification verdict.
     pub verdict: SignatureVerdict,
@@ -83,7 +85,7 @@ pub struct SignatureVerificationReport {
 }
 
 /// Top-level signature listing report emitted as JSON.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SignatureListReport {
     /// Per-signature structural summaries.
     pub signatures: Vec<SignatureListEntry>,
@@ -92,7 +94,7 @@ pub struct SignatureListReport {
 }
 
 /// Per-signature list entry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SignatureListEntry {
     /// Optional field name from the PDF form tree.
     pub field_name: Option<String>,
@@ -105,7 +107,7 @@ pub struct SignatureListEntry {
 }
 
 /// Stable signature verification verdict.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SignatureVerdict {
     /// All required checks completed and the signature chains to a trust anchor.
@@ -119,7 +121,7 @@ pub enum SignatureVerdict {
 }
 
 /// Per-signature report.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SignatureEntryReport {
     /// Optional field name from the PDF form tree.
     pub field_name: Option<String>,
@@ -146,7 +148,7 @@ pub struct SignatureEntryReport {
 }
 
 /// ByteRange check result.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ByteRangeVerification {
     /// Parsed ByteRange values.
     pub values: Option<[u64; 4]>,
@@ -161,7 +163,7 @@ pub struct ByteRangeVerification {
 }
 
 /// Contents coverage check result.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ContentsVerification {
     /// Number of bytes in the signature Contents value.
     pub byte_len: Option<usize>,
@@ -170,7 +172,7 @@ pub struct ContentsVerification {
 }
 
 /// Status for an individual signature check.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SignatureCheckStatus {
     /// Stable status code.
     pub status: SignatureCheckState,
@@ -179,7 +181,7 @@ pub struct SignatureCheckStatus {
 }
 
 /// Stable signature check state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SignatureCheckState {
     /// Check completed successfully.
@@ -193,7 +195,7 @@ pub enum SignatureCheckState {
 }
 
 /// Non-sensitive signature diagnostic.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SignatureDiagnostic {
     /// Stable diagnostic code.
     pub code: String,

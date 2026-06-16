@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// PDF comparison operations.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(try_from = "PdfCompareOptionsDef", into = "PdfCompareOptionsDef")]
 pub enum PdfCompareOptions {
     /// Generate a structured JSON comparison report.
@@ -13,7 +13,7 @@ pub enum PdfCompareOptions {
     VisualDiff(VisualDiffOptions),
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 struct PdfCompareOptionsDef {
     report: Option<CompareOptions>,
@@ -62,7 +62,7 @@ impl From<PdfCompareOptions> for PdfCompareOptionsDef {
 }
 
 /// Options for structured PDF comparison reports.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct CompareOptions {
     /// Include extractable text summaries in the comparison.
@@ -81,7 +81,7 @@ impl Default for CompareOptions {
 }
 
 /// Options for rendered page visual differences.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct VisualDiffOptions {
     /// One-based page number to render from both documents.
@@ -100,7 +100,7 @@ impl Default for VisualDiffOptions {
 }
 
 /// Structured comparison report.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CompareReport {
     /// True when no differences were found.
     pub equal: bool,
@@ -113,7 +113,7 @@ pub struct CompareReport {
 }
 
 /// Stable machine-readable comparison difference.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CompareDifference {
     /// Stable difference code.
     pub code: CompareDifferenceCode,
@@ -126,7 +126,7 @@ pub struct CompareDifference {
 }
 
 /// Stable difference codes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CompareDifferenceCode {
     PageCountMismatch,
@@ -141,7 +141,7 @@ pub enum CompareDifferenceCode {
 }
 
 /// Summary fields used by structured PDF comparison.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PdfCompareSummary {
     pub page_count: usize,
     pub page_sizes: Vec<PageSizeSummary>,
@@ -154,20 +154,20 @@ pub struct PdfCompareSummary {
     pub object_structure: ObjectStructureSummary,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PageSizeSummary {
     pub page: u32,
     pub width: f32,
     pub height: f32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TextSummary {
     pub char_count: usize,
     pub sample: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ObjectStructureSummary {
     pub object_count: usize,
     pub stream_count: usize,

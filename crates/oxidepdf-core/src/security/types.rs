@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// PDF password, encryption, and permission operations.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(try_from = "PdfSecurityOptionsDef", into = "PdfSecurityOptionsDef")]
 pub enum PdfSecurityOptions {
     /// Encrypt a PDF with Standard Security Handler passwords.
@@ -34,7 +34,7 @@ impl fmt::Debug for PdfSecurityOptions {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 struct PdfSecurityOptionsDef {
     encrypt: Option<SecurityEncryptOptions>,
@@ -104,7 +104,9 @@ impl From<PdfSecurityOptions> for PdfSecurityOptionsDef {
 }
 
 /// Supported encryption algorithms for newly written PDFs.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum EncryptionAlgorithm {
     /// AES-256 Standard Security Handler, revision 6.
@@ -117,7 +119,7 @@ pub enum EncryptionAlgorithm {
 }
 
 /// Explicit document permission policy.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct PermissionPolicy {
     pub print: bool,
@@ -178,7 +180,7 @@ impl PermissionPolicy {
 }
 
 /// Options for encrypting a PDF.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct SecurityEncryptOptions {
     pub owner_password: String,
@@ -211,7 +213,7 @@ impl fmt::Debug for SecurityEncryptOptions {
 }
 
 /// Options for decrypting a PDF.
-#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct SecurityDecryptOptions {
     pub password: Option<String>,
@@ -227,7 +229,7 @@ impl fmt::Debug for SecurityDecryptOptions {
 }
 
 /// Options for inspecting permissions.
-#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct SecurityPermissionGetOptions {
     pub password: Option<String>,
@@ -243,7 +245,7 @@ impl fmt::Debug for SecurityPermissionGetOptions {
 }
 
 /// Options for replacing permissions.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct SecurityPermissionSetOptions {
     pub owner_password: String,
@@ -276,7 +278,7 @@ impl fmt::Debug for SecurityPermissionSetOptions {
 }
 
 /// JSON permission report emitted by `permissions get`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PermissionReport {
     pub encrypted: bool,
     pub handler: Option<String>,

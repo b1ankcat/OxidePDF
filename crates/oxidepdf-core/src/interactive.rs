@@ -5,7 +5,7 @@ use crate::{
 use lopdf::{Dictionary, Object};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct InteractiveRemovalOptions {
     pub annotations: bool,

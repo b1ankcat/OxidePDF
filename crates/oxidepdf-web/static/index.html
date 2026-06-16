@@ -1,94 +1,67 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OxidePDF</title>
-<style>
-body{font-family:system-ui,sans-serif;max-width:800px;margin:2rem auto;padding:0 1rem}
-h1{margin-bottom:.25rem}
-p{margin-top:.25rem;color:#555}
-textarea{width:100%;height:180px;font-family:monospace;font-size:13px;box-sizing:border-box}
-.file-row{display:flex;gap:.5rem;align-items:center;margin:.3rem 0}
-.file-row label{min-width:120px;font-family:monospace}
-button{margin-top:.75rem;padding:.4rem 1.2rem;cursor:pointer}
-#result{margin-top:1rem}
-#result a{display:block;margin:.3rem 0}
-.error{color:#c00}
-</style>
+<link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <h1>OxidePDF</h1>
-<p>Paste a workflow YAML, upload the input files, then click <strong>Run</strong>.</p>
-<textarea id="wf" spellcheck="false" placeholder="version: 1
-inputs:
-  - id: src
-    path: src.pdf
-outputs:
-  - id: out
-    from: compressed
-    path: out.pdf
-tasks:
-  - id: compressed
-    op:
-      pdf_edit:
-        compression:
-          mode: lossless
-    inputs: [src]"></textarea>
-<div id="files"></div>
-<button onclick="run()">Run</button>
-<div id="result"></div>
-<script>
-const wf=document.getElementById('wf'),files=document.getElementById('files'),result=document.getElementById('result');
-wf.addEventListener('input',refresh);
+<div id="app">
+  <div class="col" id="c1">
+    <div class="col-title">Family</div>
+    <div id="families"></div>
+    <div id="wf-entry">
+      <div class="item" id="wf-toggle">⚙ Workflow</div>
+    </div>
+  </div>
+  <div class="col" id="c2">
+    <div id="c2-single">
+      <div class="col-title">Operation</div>
+      <div id="ops"></div>
+    </div>
+    <div id="c2-workflow" style="display:none">
+      <div class="col-title">Workflow</div>
+      <div style="padding:.4rem .5rem"><button class="btn-sm" id="btn-add-step">＋ Add step</button></div>
+      <div id="chain"></div>
+      <div style="padding:.5rem"><button class="btn-primary" id="btn-exec-wf">Execute Workflow</button></div>
+    </div>
+  </div>
+  <div id="c3">
+    <div id="file-row">
+      <button class="btn-sm" id="btn-upload">⬆ Upload</button>
+      <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg,.svg" multiple hidden>
+      <div id="file-select">
+        <button class="btn-sm" id="file-dropdown-btn">Files ▾</button>
+        <div id="file-list"></div>
+      </div>
+      <a id="dl-btn" class="btn-sm" style="visibility:hidden" download="result">⬇ Download output</a>
+    </div>
 
-function parseIds(yaml){
-  const ids=[];let inInputs=false;
-  for(const line of yaml.split('\n')){
-    if(/^inputs\s*:/.test(line)){inInputs=true;continue;}
-    if(inInputs&&/^[a-zA-Z\[]/.test(line))inInputs=false;
-    if(inInputs){const m=line.match(/^\s+-\s+id:\s+(\S+)/);if(m)ids.push(m[1]);}
-  }
-  return ids;
-}
+    <div id="op-panel" style="display:none">
+      <div class="section-label" id="op-title"></div>
+      <div id="form-fields"></div>
+      <div style="display:flex;gap:.5rem;margin-top:.4rem">
+        <button class="btn-primary" id="btn-single">Execute</button>
+        <button class="btn-sm" id="btn-add-to-wf" style="display:none">Add to workflow</button>
+      </div>
+    </div>
 
-function refresh(){
-  const ids=parseIds(wf.value);
-  files.innerHTML=ids.length?'<strong>Input files:</strong>':'';
-  ids.forEach(id=>{
-    const d=document.createElement('div');d.className='file-row';
-    d.innerHTML=`<label>${id}</label><input type="file" data-id="${id}">`;
-    files.appendChild(d);
-  });
-}
+    <div id="error-msg" class="error"></div>
+    <div id="preview-area"><span class="placeholder">Upload and select a file to preview</span></div>
+  </div>
+</div>
 
-function mime(id){
-  return id.endsWith('.png')?'image/png':id.endsWith('.jpg')||id.endsWith('.jpeg')?'image/jpeg':id.endsWith('.txt')?'text/plain':'application/pdf';
-}
+<div id="op-picker">
+  <div class="panel">
+    <h3>Add a step</h3>
+    <div id="picker-body"></div>
+    <div style="text-align:right;margin-top:.5rem"><button class="btn-sm" id="picker-close">Cancel</button></div>
+  </div>
+</div>
 
-async function run(){
-  result.innerHTML='';
-  const fd=new FormData();fd.append('workflow',wf.value);
-  for(const inp of document.querySelectorAll('#files input')){
-    if(!inp.files[0]){result.innerHTML=`<p class="error">Select a file for '${inp.dataset.id}'</p>`;return;}
-    fd.append(inp.dataset.id,inp.files[0]);
-  }
-  result.textContent='Running…';
-  try{
-    const r=await fetch('/api/run',{method:'POST',body:fd});
-    const d=await r.json();
-    if(!r.ok){result.innerHTML=`<p class="error">${d.error}</p>`;return;}
-    result.innerHTML='<strong>Outputs:</strong>';
-    for(const[id,b64]of Object.entries(d.outputs)){
-      const bin=atob(b64),arr=new Uint8Array(bin.length);
-      for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
-      const url=URL.createObjectURL(new Blob([arr],{type:mime(id)}));
-      const a=document.createElement('a');a.href=url;a.download=id;a.textContent=`Download ${id}`;
-      result.appendChild(a);
-    }
-  }catch(e){result.innerHTML=`<p class="error">${e.message}</p>`;}
-}
-
-refresh();
-</script>
+<script src="/static/form.js"></script>
+<script src="/static/app.js"></script>
 </body>
 </html>

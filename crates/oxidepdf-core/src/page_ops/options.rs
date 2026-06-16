@@ -1,25 +1,25 @@
 use serde::{Deserialize, Serialize};
 
 /// Options for merge.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct MergeOptions {}
 
 /// Options for split.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SplitOptions {
     /// Page range, for example `1,3-5`.
     pub pages: String,
 }
 
 /// Options for reorder.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ReorderOptions {
     /// Explicit page sequence, for example `3,1,2`.
     pub pages: String,
 }
 
 /// Options for rotate.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RotateOptions {
     /// Page range, for example `1,3-5`.
     pub pages: String,
@@ -28,19 +28,19 @@ pub struct RotateOptions {
 }
 
 /// Options for page-selection edits.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PageSelectionOptions {
     /// Page range, for example `1,3-5`.
     pub pages: String,
 }
 
 /// Options for deleting structurally blank pages.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct DeleteBlankPagesOptions {}
 
 /// Options for cropping pages.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CropPagesOptions {
     /// Page range, for example `1,3-5`.
@@ -56,7 +56,7 @@ pub struct CropPagesOptions {
 }
 
 /// Options for scaling pages.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ScalePagesOptions {
     /// Page range, for example `1,3-5`.
@@ -66,12 +66,12 @@ pub struct ScalePagesOptions {
 }
 
 /// Options for combining pages into one tall page.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct SinglePageOptions {}
 
 /// Options for N-up page layout.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NUpOptions {
     /// Number of columns on each output page.
@@ -81,12 +81,12 @@ pub struct NUpOptions {
 }
 
 /// Options for booklet imposition.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct BookletOptions {}
 
 /// Options for adding page numbers.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct PageNumbersOptions {
     /// Page range, for example `1,3-5`. Defaults to all pages.
@@ -117,7 +117,7 @@ impl Default for PageNumbersOptions {
 }
 
 /// Page number placement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PageNumberPosition {
     /// Top-left corner.
