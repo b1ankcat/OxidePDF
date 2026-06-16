@@ -283,12 +283,21 @@ Individual CLI commands (`pdf_edit merge`, `pdf_inspect render`, etc.) are imple
 
 `oxidepdf-web` is a self-contained web front end for the workflow engine. It is a
 single static binary (HTML/CSS/JS embedded via `include_str!`, so `cargo zigbuild`
-still produces one musl executable) that serves a three-column UI on `0.0.0.0:19898`.
+still produces one musl executable) that serves a three-column UI. It binds to
+`127.0.0.1:19898` by default.
 
 ```sh
 cargo run -p oxidepdf-web
 # then open http://localhost:19898
 ```
+
+> ⚠️ The server has **no authentication**. It binds to loopback by default;
+> passing `--addr 0.0.0.0` (or any non-loopback address) exposes an
+> unauthenticated upload/process/download service to the network and prints a
+> startup warning. Only do so on a trusted network or behind a reverse proxy
+> that adds auth. Uploaded and produced files are held in temp storage and
+> evicted automatically (oldest-first past 256 files / 2 GiB, and after 30
+> minutes idle).
 
 Features:
 

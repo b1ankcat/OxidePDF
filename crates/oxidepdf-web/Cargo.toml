@@ -17,7 +17,7 @@ tower-http = { workspace = true }
 uuid = { workspace = true }
 oxidepdf-core = { workspace = true }
 schemars = { workspace = true }
-tokio = { workspace = true, features = ["net"] }
+tokio = { workspace = true, features = ["net", "fs", "rt"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
