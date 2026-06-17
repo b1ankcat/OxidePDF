@@ -21,6 +21,18 @@ fn without_properties(mut schema: Value, names: &[&str]) -> Value {
     schema
 }
 
+fn with_standard_font_default(mut schema: Value) -> Value {
+    if let Some(font) = schema
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+        .and_then(|properties| properties.get_mut("font"))
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        font.insert("default".to_owned(), Value::String("Helvetica".to_owned()));
+    }
+    schema
+}
+
 /// JSON Schema for an op's leaf options struct. Ops with no options (unit
 /// variants / empty structs) get an empty-object schema.
 pub fn op_schema(family: &str, op: &str) -> Value {
@@ -46,8 +58,12 @@ pub fn op_schema(family: &str, op: &str) -> Value {
         ("PdfEdit", "PageNumbers") => s!(PageNumbersOptions),
         ("PdfEdit", "ImageToPdf") => s!(ImageToPdfOptions),
         ("PdfEdit", "SvgToPdf") => s!(SvgToPdfOptions),
-        ("PdfEdit", "Watermark") => without_properties(s!(WatermarkOptions), &["font_path"]),
-        ("PdfEdit", "Overlay") => without_properties(s!(OverlayOptions), &["font_path"]),
+        ("PdfEdit", "Watermark") => {
+            with_standard_font_default(without_properties(s!(WatermarkOptions), &["font_path"]))
+        }
+        ("PdfEdit", "Overlay") => {
+            with_standard_font_default(without_properties(s!(OverlayOptions), &["font_path"]))
+        }
         ("PdfEdit", "ImageEdit") => s!(ImageEditOptions),
         ("PdfEdit", "Color") => s!(ColorEditOptions),
         ("PdfEdit", "Metadata") => s!(MetadataEditOptions),
@@ -84,5 +100,22 @@ pub fn op_schema(family: &str, op: &str) -> Value {
         ("PdfSign", "DeleteField") => s!(SignatureDeleteFieldOptions),
 
         _ => empty(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_overlay_schemas_default_to_standard_pdf_font() {
+        for op in ["Watermark", "Overlay"] {
+            let schema = op_schema("PdfEdit", op);
+            assert_eq!(
+                schema["properties"]["font"]["default"],
+                Value::String("Helvetica".to_owned()),
+                "{op} should not depend on system fonts in the web UI"
+            );
+        }
     }
 }

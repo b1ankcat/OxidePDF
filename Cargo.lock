@@ -1743,7 +1743,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "oxidepdf-cli"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -1763,7 +1763,7 @@ dependencies = [
 
 [[package]]
 name = "oxidepdf-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "apalis",
  "cms",
@@ -1803,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "oxidepdf-web"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "axum",
  "axum-auth",

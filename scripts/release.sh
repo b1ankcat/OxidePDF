@@ -4,6 +4,8 @@ set -eu
 TARGETS="${TARGETS:-x86_64-unknown-linux-musl aarch64-unknown-linux-musl}"
 PACKAGE="${PACKAGE:-oxidepdf-cli}"
 BIN="${BIN:-oxidepdf}"
+WEB_PACKAGE="${WEB_PACKAGE:-oxidepdf-web}"
+WEB_BIN="${WEB_BIN:-oxidepdf-web}"
 DIST_DIR="${DIST_DIR:-dist}"
 
 validate_component() {
@@ -54,6 +56,8 @@ validate_target_list
 
 validate_component PACKAGE "$PACKAGE"
 validate_component BIN "$BIN"
+validate_component WEB_PACKAGE "$WEB_PACKAGE"
+validate_component WEB_BIN "$WEB_BIN"
 validate_component DIST_DIR "$DIST_DIR"
 
 if ! cargo zigbuild --help >/dev/null 2>&1; then
@@ -71,6 +75,11 @@ command -v sha256sum >/dev/null 2>&1 || {
   exit 127
 }
 
+command -v ldd >/dev/null 2>&1 || {
+  echo "ldd is required" >&2
+  exit 127
+}
+
 VERSION="${VERSION:-$(package_version)}"
 if [ -z "$VERSION" ]; then
   echo "Failed to resolve version for package $PACKAGE from Cargo metadata" >&2
@@ -82,18 +91,29 @@ validate_version
 mkdir -p "$DIST_DIR"
 
 for target in $TARGETS; do
-  echo "Building $BIN for $target"
+  echo "Building $BIN and $WEB_BIN for $target"
   if ! cargo zigbuild --release --target "$target" -p "$PACKAGE"; then
     echo "Failed to build $target. Ensure the Rust target is installed with:" >&2
     echo "  rustup target add $target" >&2
     echo "and Zig is available on PATH for cargo-zigbuild." >&2
     exit 1
   fi
+  if ! cargo zigbuild --release --target "$target" -p "$WEB_PACKAGE"; then
+    echo "Failed to build $WEB_BIN for $target. Ensure the Rust target is installed with:" >&2
+    echo "  rustup target add $target" >&2
+    echo "and Zig is available on PATH for cargo-zigbuild." >&2
+    exit 1
+  fi
 
   binary="target/$target/release/$BIN"
+  web_binary="target/$target/release/$WEB_BIN"
   completion="target/$target/release/completions/$BIN.bash"
   if [ ! -x "$binary" ]; then
     echo "Expected release binary not found: $binary" >&2
+    exit 1
+  fi
+  if [ ! -x "$web_binary" ]; then
+    echo "Expected release binary not found: $web_binary" >&2
     exit 1
   fi
   if [ ! -f "$completion" ]; then
@@ -101,24 +121,23 @@ for target in $TARGETS; do
     exit 1
   fi
 
-  if command -v ldd >/dev/null 2>&1; then
-    ldd_output="$(ldd "$binary" 2>&1 || true)"
+  for release_binary in "$binary" "$web_binary"; do
+    ldd_output="$(ldd "$release_binary" 2>&1 || true)"
     case "$ldd_output" in
       *"not a dynamic executable"* | *"statically linked"*) ;;
       *)
-        echo "Expected $binary to be static; ldd reported:" >&2
+        echo "Expected $release_binary to be static; ldd reported:" >&2
         echo "$ldd_output" >&2
         exit 1
         ;;
     esac
-  else
-    echo "ldd not found; skipping static linkage check for $binary" >&2
-  fi
+  done
 
   package_dir="$DIST_DIR/$BIN-$VERSION-$target"
   rm -rf "$package_dir"
   mkdir -p "$package_dir"
   cp "$binary" "$package_dir/$BIN"
+  cp "$web_binary" "$package_dir/$WEB_BIN"
   cp "$completion" "$package_dir/$BIN.bash"
   cp LICENSE "$package_dir/LICENSE"
   cp README.md "$package_dir/README.md"

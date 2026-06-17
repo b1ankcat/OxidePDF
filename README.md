@@ -1,13 +1,13 @@
 # OxidePDF 🦀📄
 
-OxidePDF is a Rust PDF toolkit for editing, inspecting, signing, comparing, and automating document workflows. It ships as a CLI, a workflow engine, and a web UI.
+OxidePDF 0.4.1 is a Rust PDF toolkit for editing, inspecting, signing, comparing, and automating document workflows. It ships as a CLI, a workflow engine, and a web UI.
 
 ## Highlights ✨
 
 - 🧩 **CLI families**: `pdf_edit`, `pdf_inspect`, `pdf_security`, `pdf_compare`, `pdf_sign`, and `pdf_adv`
 - ⚙️ **Workflow orchestration**: YAML/JSON DAG execution with retries, limits, and timeouts
-- 🌐 **Web UI**: static `oxidepdf-web` with schema-generated forms and file previews
-- 📦 **Releases**: musl binaries, bash completion, and `cargo zigbuild`
+- 🌐 **Web UI**: static `oxidepdf-web` with schema-generated forms, bilingual UI, drag-and-drop upload, and file previews
+- 📦 **Releases**: CLI + web musl binaries, bash completion, and `cargo zigbuild`
 - 🐳 **Container-ready**: static binary in a `scratch` image
 
 ## Quick Start 🚀
@@ -123,14 +123,18 @@ Each zip contains:
 
 ```text
 oxidepdf
+oxidepdf-web
 oxidepdf.bash
 LICENSE
 README.md
 ```
 
+GitHub tag releases publish the same combined archive layout.
+
 Run from Docker:
 
-The image bundles the web front end and serves it on port 19898:
+The image bundles the web front end, DejaVu and Noto CJK system fonts for
+English/Chinese text watermarks and overlays, and serves it on port 19898:
 
 ```sh
 cargo zigbuild --release --target x86_64-unknown-linux-musl -p oxidepdf-web
@@ -291,7 +295,8 @@ same validation and execution path as workflow documents.
 ## Web UI 🌐
 
 `oxidepdf-web` is a self-contained web front end for uploads, single operations,
-visual workflow building, previews, and downloads. It binds to
+visual workflow building, previews, and downloads. The interface supports
+English and Chinese, includes a drag-and-drop upload preview zone, and binds to
 `127.0.0.1:19898` by default.
 
 ```sh

@@ -45,23 +45,25 @@ function analyze(prop, root) {
 }
 
 // Build one field control. Returns {el, read} where read() returns the value or undefined.
-function buildField(key, prop, required, root) {
+function buildField(key, prop, required, root, labels) {
   const { prop: p, types, enumVals } = analyze(prop, root);
   const wrap = document.createElement('div');
   wrap.className = 'field';
 
   const label = document.createElement('label');
-  label.textContent = key;
+  label.textContent = labels.fieldLabel(key);
+  label.title = key;
   const tag = document.createElement('span');
   tag.className = 'tag ' + (required ? 'req' : 'opt');
-  tag.textContent = required ? 'required' : 'optional';
+  tag.textContent = required ? labels.t('required') : labels.t('optional');
   label.appendChild(tag);
   wrap.appendChild(label);
 
   if (p.description) {
     const d = document.createElement('div');
     d.className = 'fdesc';
-    d.textContent = p.description;
+    d.textContent = labels.fieldDescription(p.description);
+    d.title = p.description;
     wrap.appendChild(d);
   }
 
@@ -69,7 +71,7 @@ function buildField(key, prop, required, root) {
 
   if (enumVals) {
     const sel = document.createElement('select');
-    if (!required) sel.appendChild(new Option('— none —', ''));
+    if (!required) sel.appendChild(new Option(labels.t('none'), ''));
     for (const v of enumVals) sel.appendChild(new Option(v, v));
     if (p.default !== undefined) sel.value = p.default;
     wrap.appendChild(sel);
@@ -88,7 +90,7 @@ function buildField(key, prop, required, root) {
     if (p.minimum !== undefined) inp.min = p.minimum;
     if (p.maximum !== undefined) inp.max = p.maximum;
     if (p.default !== undefined) inp.value = p.default;
-    inp.placeholder = required ? '' : '(default)';
+    inp.placeholder = required ? '' : labels.t('defaultValue');
     wrap.appendChild(inp);
     read = () => {
       if (inp.value === '') return undefined;
@@ -100,7 +102,7 @@ function buildField(key, prop, required, root) {
     const subReads = [];
     const subReq = p.required || [];
     for (const [sk, sp] of Object.entries(p.properties)) {
-      const f = buildField(sk, sp, subReq.includes(sk), root);
+      const f = buildField(sk, sp, subReq.includes(sk), root, labels);
       fs.appendChild(f.el);
       subReads.push([sk, f.read]);
     }
@@ -114,7 +116,7 @@ function buildField(key, prop, required, root) {
     // Simple comma-separated array for primitive items; JSON for complex.
     const inp = document.createElement('input');
     inp.type = 'text';
-    inp.placeholder = 'comma,separated';
+    inp.placeholder = labels.t('commaSeparated');
     wrap.appendChild(inp);
     const itemSchema = analyze(p.items || {}, root);
     read = () => {
@@ -130,7 +132,7 @@ function buildField(key, prop, required, root) {
     const inp = document.createElement('input');
     inp.type = 'text';
     if (p.default !== undefined) inp.value = p.default;
-    inp.placeholder = required ? '' : '(default)';
+    inp.placeholder = required ? '' : labels.t('defaultValue');
     wrap.appendChild(inp);
     read = () => inp.value === '' ? undefined : inp.value;
   }
@@ -139,8 +141,14 @@ function buildField(key, prop, required, root) {
 }
 
 // Render a full schema into `container`. Returns a read() that yields the options object.
-function renderForm(schema, container) {
+function renderForm(schema, container, labels) {
   container.innerHTML = '';
+  if (
+    !labels ||
+    typeof labels.t !== 'function' ||
+    typeof labels.fieldLabel !== 'function' ||
+    typeof labels.fieldDescription !== 'function'
+  ) throw new Error('renderForm requires i18n labels');
   const root = schema;
   const props = schema.properties || {};
   const required = schema.required || [];
@@ -149,13 +157,13 @@ function renderForm(schema, container) {
   if (Object.keys(props).length === 0) {
     const p = document.createElement('div');
     p.className = 'placeholder';
-    p.textContent = 'This operation has no parameters.';
+    p.textContent = labels.t('noParameters');
     container.appendChild(p);
     return () => ({});
   }
 
   for (const [key, prop] of Object.entries(props)) {
-    const f = buildField(key, prop, required.includes(key), root);
+    const f = buildField(key, prop, required.includes(key), root, labels);
     container.appendChild(f.el);
     reads.push([key, f.read]);
   }

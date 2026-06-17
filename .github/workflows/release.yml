@@ -16,6 +16,8 @@ jobs:
       TARGET: x86_64-unknown-linux-musl
       PACKAGE: oxidepdf-cli
       BIN: oxidepdf
+      WEB_PACKAGE: oxidepdf-web
+      WEB_BIN: oxidepdf-web
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,8 +40,10 @@ jobs:
         with:
           tool: cargo-zigbuild
 
-      - name: Build static musl binary
-        run: cargo zigbuild --release --target "$TARGET" -p "$PACKAGE"
+      - name: Build static musl binaries
+        run: |
+          cargo zigbuild --release --target "$TARGET" -p "$PACKAGE"
+          cargo zigbuild --release --target "$TARGET" -p "$WEB_PACKAGE"
 
       - name: Compute release version
         id: version
@@ -56,7 +60,7 @@ jobs:
           fi
           echo "value=v${version}" >> "$GITHUB_OUTPUT"
 
-      - name: Package binary and bash completion
+      - name: Package binaries and bash completion
         shell: bash
         run: |
           set -euo pipefail
@@ -64,6 +68,7 @@ jobs:
           package_dir="dist/${BIN}-${release}-${TARGET}"
           mkdir -p "$package_dir"
           cp "target/${TARGET}/release/${BIN}" "$package_dir/${BIN}"
+          cp "target/${TARGET}/release/${WEB_BIN}" "$package_dir/${WEB_BIN}"
           cp "target/${TARGET}/release/completions/${BIN}.bash" "$package_dir/${BIN}.bash"
           cp LICENSE "$package_dir/LICENSE"
           cp README.md "$package_dir/README.md"

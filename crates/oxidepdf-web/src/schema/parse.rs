@@ -41,16 +41,42 @@ fn rejected_font_family(family: Option<&str>) -> bool {
     family.is_some_and(|family| !is_standard_pdf_font(family))
 }
 
-fn sanitize_watermark_options(options: &WatermarkOptions) -> Result<(), ParseOpError> {
+fn text_watermark_needs_font(kind: WatermarkKind) -> bool {
+    kind == WatermarkKind::Text
+}
+
+fn text_overlay_needs_font(kind: OverlayKind) -> bool {
+    matches!(
+        kind,
+        OverlayKind::Watermark
+            | OverlayKind::Text
+            | OverlayKind::Stamp
+            | OverlayKind::SignatureAppearance
+    )
+}
+
+fn apply_standard_font(font: &mut Option<String>) {
+    if font.is_none() {
+        *font = Some("Helvetica".to_owned());
+    }
+}
+
+fn sanitize_watermark_options(options: &mut WatermarkOptions) -> Result<(), ParseOpError> {
     if options.font_path.is_some() || rejected_font_family(options.font.as_deref()) {
         return Err(ParseOpError::UnknownOp);
+    }
+    if text_watermark_needs_font(options.kind) {
+        apply_standard_font(&mut options.font);
     }
     Ok(())
 }
 
-fn sanitize_overlay_options(options: &OverlayOptions) -> Result<(), ParseOpError> {
+fn sanitize_overlay_options(options: &mut OverlayOptions) -> Result<(), ParseOpError> {
     if options.font_path.is_some() || rejected_font_family(options.font.as_deref()) {
         return Err(ParseOpError::UnknownOp);
+    }
+    if text_overlay_needs_font(options.kind) {
+        apply_standard_font(&mut options.font);
     }
     Ok(())
 }
@@ -90,13 +116,13 @@ pub fn parse_op(family: &str, op: &str, json: &str) -> Result<OperatorSpec, Pars
         ("PdfEdit", "ImageToPdf") => OperatorSpec::PdfEdit(PdfEditOptions::ImageToPdf(de(json)?)),
         ("PdfEdit", "SvgToPdf") => OperatorSpec::PdfEdit(PdfEditOptions::SvgToPdf(de(json)?)),
         ("PdfEdit", "Watermark") => {
-            let options = de(json)?;
-            sanitize_watermark_options(&options)?;
+            let mut options = de(json)?;
+            sanitize_watermark_options(&mut options)?;
             OperatorSpec::PdfEdit(PdfEditOptions::Watermark(options))
         }
         ("PdfEdit", "Overlay") => {
-            let options = de(json)?;
-            sanitize_overlay_options(&options)?;
+            let mut options = de(json)?;
+            sanitize_overlay_options(&mut options)?;
             OperatorSpec::PdfEdit(PdfEditOptions::Overlay(options))
         }
         ("PdfEdit", "ImageEdit") => OperatorSpec::PdfEdit(PdfEditOptions::ImageEdit(de(json)?)),
@@ -215,5 +241,23 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn text_watermark_without_font_uses_standard_web_font() {
+        let op = parse_op("PdfEdit", "Watermark", r#"{"kind":"text","text":"DRAFT"}"#).unwrap();
+        let OperatorSpec::PdfEdit(PdfEditOptions::Watermark(options)) = op else {
+            panic!("expected watermark op");
+        };
+        assert_eq!(options.font.as_deref(), Some("Helvetica"));
+    }
+
+    #[test]
+    fn text_overlay_without_font_uses_standard_web_font() {
+        let op = parse_op("PdfEdit", "Overlay", r#"{"kind":"text","text":"DRAFT"}"#).unwrap();
+        let OperatorSpec::PdfEdit(PdfEditOptions::Overlay(options)) = op else {
+            panic!("expected overlay op");
+        };
+        assert_eq!(options.font.as_deref(), Some("Helvetica"));
     }
 }

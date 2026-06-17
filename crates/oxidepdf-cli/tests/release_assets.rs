@@ -8,7 +8,16 @@ fn release_script_builds_musl_targets_and_checks_linkage() {
     assert!(script.contains("x86_64-unknown-linux-musl"));
     assert!(script.contains("aarch64-unknown-linux-musl"));
     assert!(script.contains("cargo zigbuild --release --target"));
+    assert!(script.contains("WEB_PACKAGE=\"${WEB_PACKAGE:-oxidepdf-web}\""));
+    assert!(script.contains("WEB_BIN=\"${WEB_BIN:-oxidepdf-web}\""));
+    assert!(script.contains("validate_component WEB_PACKAGE"));
+    assert!(script.contains("validate_component WEB_BIN"));
+    assert!(script.contains("-p \"$WEB_PACKAGE\""));
+    assert!(script.contains("web_binary=\"target/$target/release/$WEB_BIN\""));
+    assert!(script.contains("for release_binary in \"$binary\" \"$web_binary\""));
+    assert!(script.contains("cp \"$web_binary\" \"$package_dir/$WEB_BIN\""));
     assert!(script.contains("ldd"));
+    assert!(script.contains("ldd is required"));
     assert!(script.contains("not a dynamic executable"));
     assert!(script.contains("zip"));
     assert!(script.contains("$BIN.bash"));
@@ -39,10 +48,14 @@ fn dockerfile_uses_prebuilt_static_web_binary() {
     let dockerfile = read("Dockerfile");
 
     assert!(dockerfile.contains("FROM scratch"));
+    assert!(dockerfile.contains("FROM alpine:3.20 AS fonts"));
+    assert!(dockerfile.contains("apk add --no-cache fontconfig font-noto-cjk ttf-dejavu"));
     assert!(dockerfile.contains(
         "COPY target/x86_64-unknown-linux-musl/release/oxidepdf-web /var/lib/oxidepdf/oxidepdf-web"
     ));
     assert!(dockerfile.contains("COPY --from=certs /etc/ssl/certs/ca-certificates.crt"));
+    assert!(dockerfile.contains("COPY --from=fonts /etc/fonts /etc/fonts"));
+    assert!(dockerfile.contains("COPY --from=fonts /usr/share/fonts /usr/share/fonts"));
     assert!(dockerfile.contains("WORKDIR /var/lib/oxidepdf"));
     assert!(dockerfile.contains("VOLUME [\"/var/lib/oxidepdf/upload\"]"));
     assert!(dockerfile.contains("EXPOSE 19898"));
@@ -60,6 +73,8 @@ fn readme_documents_open_source_distribution_and_milestones() {
     assert!(readme.contains("oxidepdf completion bash"));
     assert!(readme.contains("Deployment and Distribution"));
     assert!(readme.contains("OXIDEPDF_MAX_UPLOAD=256M"));
+    assert!(readme.contains("DejaVu and Noto CJK system fonts"));
+    assert!(readme.contains("English/Chinese text watermarks and overlays"));
     assert!(readme.contains("/var/lib/oxidepdf/upload"));
     assert!(readme.contains("under `./upload`"));
     assert!(readme.contains("small multipart overhead"));
@@ -67,6 +82,9 @@ fn readme_documents_open_source_distribution_and_milestones() {
     assert!(readme.contains("--max-upload"));
     assert!(readme.contains("Each zip contains"));
     assert!(readme.contains("oxidepdf-web"));
+    assert!(readme.contains("GitHub tag releases publish the same combined archive layout."));
+    assert!(readme.contains("English and Chinese"));
+    assert!(readme.contains("drag-and-drop upload preview zone"));
     assert!(readme.contains("Apache-2.0"));
 }
 
@@ -75,9 +93,13 @@ fn github_release_workflow_builds_musl_zip_release() {
     let workflow = read(".github/workflows/release.yml");
 
     assert!(workflow.contains("workflow_dispatch"));
-    assert!(workflow.contains("cargo zigbuild --release --target"));
+    assert!(workflow.contains("WEB_PACKAGE: oxidepdf-web"));
+    assert!(workflow.contains("WEB_BIN: oxidepdf-web"));
+    assert!(workflow.contains("cargo zigbuild --release --target \"$TARGET\" -p \"$PACKAGE\""));
+    assert!(workflow.contains("cargo zigbuild --release --target \"$TARGET\" -p \"$WEB_PACKAGE\""));
     assert!(workflow.contains("x86_64-unknown-linux-musl"));
     assert!(workflow.contains("${BIN}.bash"));
+    assert!(workflow.contains("\"$package_dir/${WEB_BIN}\""));
     assert!(workflow.contains("zip -qr"));
     assert!(workflow.contains("softprops/action-gh-release"));
     assert!(workflow.contains("cargo metadata --no-deps"));
