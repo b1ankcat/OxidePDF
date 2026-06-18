@@ -2,12 +2,21 @@ pub fn inspect_pdf_images(
     input: &[u8],
     _options: &ImageInspectOptions,
 ) -> Result<TextArtifact, OxideError> {
-    let document = load_pdf(input)?;
-    inspect_images_on_document(&document)
+    inspect_pdf_images_with_limits(input, _options, &default_inspect_limits())
+}
+
+pub fn inspect_pdf_images_with_limits(
+    input: &[u8],
+    _options: &ImageInspectOptions,
+    limits: &ResourceLimits,
+) -> Result<TextArtifact, OxideError> {
+    let document = load_pdf_with_limits(input, limits)?;
+    inspect_images_on_document(&document, limits)
 }
 
 pub(crate) fn inspect_images_on_document(
     document: &lopdf::Document,
+    limits: &ResourceLimits,
 ) -> Result<TextArtifact, OxideError> {
     let mut images = Vec::new();
     for (page, page_id) in document.get_pages() {
@@ -30,6 +39,7 @@ pub(crate) fn inspect_images_on_document(
     });
     let text =
         serde_json::to_string_pretty(&ImageReport { images }).map_err(|_| OxideError::Internal)?;
+    enforce_output_bytes(text.len(), limits)?;
     Ok(TextArtifact {
         text,
         diagnostics: Vec::new(),

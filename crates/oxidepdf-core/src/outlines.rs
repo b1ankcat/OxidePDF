@@ -1,6 +1,7 @@
 use crate::{
-    OxideError, PdfArtifact, ResourceLimits, TextArtifact, enforce_input_bytes, enforce_max_pages,
-    enforce_output_bytes, load_pdf, save_pdf,
+    OxideError, PdfArtifact, ResourceLimits, TextArtifact, default_inspect_limits,
+    enforce_input_bytes, enforce_max_pages, enforce_output_bytes, load_pdf, load_pdf_with_limits,
+    save_pdf,
 };
 use lopdf::{Dictionary, Object, dictionary};
 use serde::{Deserialize, Serialize};
@@ -47,15 +48,25 @@ pub fn inspect_pdf_outline(
     input: &[u8],
     _options: &OutlineInspectOptions,
 ) -> Result<TextArtifact, OxideError> {
-    let document = load_pdf(input)?;
-    inspect_outline_on_document(&document)
+    inspect_pdf_outline_with_limits(input, _options, &default_inspect_limits())
+}
+
+pub fn inspect_pdf_outline_with_limits(
+    input: &[u8],
+    _options: &OutlineInspectOptions,
+    limits: &ResourceLimits,
+) -> Result<TextArtifact, OxideError> {
+    let document = load_pdf_with_limits(input, limits)?;
+    inspect_outline_on_document(&document, limits)
 }
 
 pub(crate) fn inspect_outline_on_document(
     document: &lopdf::Document,
+    limits: &ResourceLimits,
 ) -> Result<TextArtifact, OxideError> {
     let tree = read_outline_tree(document)?;
     let text = serde_json::to_string_pretty(&tree).map_err(|_| OxideError::Internal)?;
+    enforce_output_bytes(text.len(), limits)?;
     Ok(TextArtifact {
         text,
         diagnostics: Vec::new(),

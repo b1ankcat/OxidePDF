@@ -1,6 +1,7 @@
 use crate::{
-    OxideError, PdfArtifact, ResourceLimits, TextArtifact, enforce_input_bytes, enforce_max_pages,
-    enforce_output_bytes, interactive::remove_acroform, load_pdf, save_pdf,
+    OxideError, PdfArtifact, ResourceLimits, TextArtifact, default_inspect_limits,
+    enforce_input_bytes, enforce_max_pages, enforce_output_bytes, interactive::remove_acroform,
+    load_pdf, load_pdf_with_limits, save_pdf,
 };
 use lopdf::Object;
 use serde::{Deserialize, Serialize};
@@ -40,17 +41,27 @@ pub fn inspect_pdf_forms(
     input: &[u8],
     _options: &FormInspectOptions,
 ) -> Result<TextArtifact, OxideError> {
-    let document = load_pdf(input)?;
-    inspect_forms_on_document(&document)
+    inspect_pdf_forms_with_limits(input, _options, &default_inspect_limits())
+}
+
+pub fn inspect_pdf_forms_with_limits(
+    input: &[u8],
+    _options: &FormInspectOptions,
+    limits: &ResourceLimits,
+) -> Result<TextArtifact, OxideError> {
+    let document = load_pdf_with_limits(input, limits)?;
+    inspect_forms_on_document(&document, limits)
 }
 
 pub(crate) fn inspect_forms_on_document(
     document: &lopdf::Document,
+    limits: &ResourceLimits,
 ) -> Result<TextArtifact, OxideError> {
     let report = FormReport {
         fields: collect_form_fields(document)?,
     };
     let text = serde_json::to_string_pretty(&report).map_err(|_| OxideError::Internal)?;
+    enforce_output_bytes(text.len(), limits)?;
     Ok(TextArtifact {
         text,
         diagnostics: Vec::new(),

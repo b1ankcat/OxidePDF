@@ -70,3 +70,23 @@ fn metadata_inspection_reports_name_valued_trapped_entry() {
     assert_eq!(report["entries"]["title"], "Sample");
     assert_eq!(report["entries"]["trapped"], "True");
 }
+
+#[test]
+fn metadata_inspection_with_limits_enforces_output_size() {
+    let err = inspect_pdf_metadata_with_limits(
+        &pdf_with_named_info_value(),
+        &MetadataInspectOptions::default(),
+        &ResourceLimits {
+            max_output_bytes: Some(1),
+            ..ResourceLimits::default()
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        err,
+        OxideError::ResourceLimitExceeded {
+            limit: "max_output_bytes".to_owned()
+        }
+    );
+}

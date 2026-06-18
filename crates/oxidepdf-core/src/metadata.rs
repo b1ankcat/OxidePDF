@@ -1,6 +1,7 @@
 use crate::{
-    OxideError, PdfArtifact, ResourceLimits, TextArtifact, enforce_input_bytes, enforce_max_pages,
-    enforce_output_bytes, load_pdf, save_pdf,
+    OxideError, PdfArtifact, ResourceLimits, TextArtifact, default_inspect_limits,
+    enforce_input_bytes, enforce_max_pages, enforce_output_bytes, load_pdf, load_pdf_with_limits,
+    save_pdf,
 };
 use lopdf::{Dictionary, Object};
 use serde::{Deserialize, Serialize};
@@ -45,18 +46,28 @@ pub fn inspect_pdf_metadata(
     input: &[u8],
     _options: &MetadataInspectOptions,
 ) -> Result<TextArtifact, OxideError> {
-    let document = load_pdf(input)?;
-    inspect_metadata_on_document(&document)
+    inspect_pdf_metadata_with_limits(input, _options, &default_inspect_limits())
+}
+
+pub fn inspect_pdf_metadata_with_limits(
+    input: &[u8],
+    _options: &MetadataInspectOptions,
+    limits: &ResourceLimits,
+) -> Result<TextArtifact, OxideError> {
+    let document = load_pdf_with_limits(input, limits)?;
+    inspect_metadata_on_document(&document, limits)
 }
 
 pub(crate) fn inspect_metadata_on_document(
     document: &lopdf::Document,
+    limits: &ResourceLimits,
 ) -> Result<TextArtifact, OxideError> {
     let report = MetadataReport {
         valid: true,
         entries: read_metadata_entries(document)?,
     };
     let text = serde_json::to_string_pretty(&report).map_err(|_| OxideError::Internal)?;
+    enforce_output_bytes(text.len(), limits)?;
     Ok(TextArtifact {
         text,
         diagnostics: Vec::new(),

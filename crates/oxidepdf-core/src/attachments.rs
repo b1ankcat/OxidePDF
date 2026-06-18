@@ -1,6 +1,7 @@
 use crate::{
     Artifact, BytesArtifact, OxideError, PdfArtifact, ResourceLimits, TextArtifact,
-    enforce_input_bytes, enforce_max_pages, enforce_output_bytes, load_pdf, pdf_bytes, save_pdf,
+    default_inspect_limits, enforce_input_bytes, enforce_max_pages, enforce_output_bytes, load_pdf,
+    load_pdf_with_limits, pdf_bytes, save_pdf,
 };
 use lopdf::{Dictionary, Object, Stream, dictionary};
 use serde::{Deserialize, Serialize};
@@ -46,17 +47,27 @@ pub fn inspect_pdf_attachments(
     input: &[u8],
     _options: &AttachmentInspectOptions,
 ) -> Result<TextArtifact, OxideError> {
-    let document = load_pdf(input)?;
-    inspect_attachments_on_document(&document)
+    inspect_pdf_attachments_with_limits(input, _options, &default_inspect_limits())
+}
+
+pub fn inspect_pdf_attachments_with_limits(
+    input: &[u8],
+    _options: &AttachmentInspectOptions,
+    limits: &ResourceLimits,
+) -> Result<TextArtifact, OxideError> {
+    let document = load_pdf_with_limits(input, limits)?;
+    inspect_attachments_on_document(&document, limits)
 }
 
 pub(crate) fn inspect_attachments_on_document(
     document: &lopdf::Document,
+    limits: &ResourceLimits,
 ) -> Result<TextArtifact, OxideError> {
     let report = AttachmentReport {
         attachments: read_attachment_reports(document)?,
     };
     let text = serde_json::to_string_pretty(&report).map_err(|_| OxideError::Internal)?;
+    enforce_output_bytes(text.len(), limits)?;
     Ok(TextArtifact {
         text,
         diagnostics: Vec::new(),

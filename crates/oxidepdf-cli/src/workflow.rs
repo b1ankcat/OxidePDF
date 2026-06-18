@@ -70,7 +70,12 @@ fn write_metrics_output(
     check_metrics_output_path(path, force)?;
     let bytes =
         serde_json::to_vec_pretty(metrics).map_err(|_| CliError::Core(OxideError::Internal))?;
-    fs::write(path, bytes).map_err(CliError::Io)
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(CliError::Io)?;
+    file.write_all(&bytes).map_err(CliError::Io)?;
+    file.persist(path)
+        .map(|_| ())
+        .map_err(|error| CliError::Io(error.error))
 }
 
 fn check_metrics_output_path(path: &Path, force: bool) -> Result<(), CliError> {

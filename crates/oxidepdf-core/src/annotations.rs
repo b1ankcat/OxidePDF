@@ -1,6 +1,7 @@
 use crate::{
-    OxideError, PdfArtifact, ResourceLimits, TextArtifact, enforce_input_bytes, enforce_max_pages,
-    enforce_output_bytes, load_pdf, save_pdf,
+    OxideError, PdfArtifact, ResourceLimits, TextArtifact, default_inspect_limits,
+    enforce_input_bytes, enforce_max_pages, enforce_output_bytes, load_pdf, load_pdf_with_limits,
+    save_pdf,
 };
 use lopdf::{Object, dictionary};
 use serde::{Deserialize, Serialize};
@@ -42,12 +43,21 @@ pub fn inspect_pdf_annotations(
     input: &[u8],
     _options: &AnnotationInspectOptions,
 ) -> Result<TextArtifact, OxideError> {
-    let document = load_pdf(input)?;
-    inspect_annotations_on_document(&document)
+    inspect_pdf_annotations_with_limits(input, _options, &default_inspect_limits())
+}
+
+pub fn inspect_pdf_annotations_with_limits(
+    input: &[u8],
+    _options: &AnnotationInspectOptions,
+    limits: &ResourceLimits,
+) -> Result<TextArtifact, OxideError> {
+    let document = load_pdf_with_limits(input, limits)?;
+    inspect_annotations_on_document(&document, limits)
 }
 
 pub(crate) fn inspect_annotations_on_document(
     document: &lopdf::Document,
+    limits: &ResourceLimits,
 ) -> Result<TextArtifact, OxideError> {
     let mut annotations = Vec::new();
     for (page_number, page_id) in document.get_pages() {
@@ -93,6 +103,7 @@ pub(crate) fn inspect_annotations_on_document(
     });
     let text = serde_json::to_string_pretty(&AnnotationReport { annotations })
         .map_err(|_| OxideError::Internal)?;
+    enforce_output_bytes(text.len(), limits)?;
     Ok(TextArtifact {
         text,
         diagnostics: Vec::new(),

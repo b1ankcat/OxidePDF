@@ -17,6 +17,23 @@ pub(crate) fn load_pdf(input: &[u8]) -> Result<lopdf::Document, OxideError> {
     Ok(document)
 }
 
+pub(crate) fn load_pdf_with_limits(
+    input: &[u8],
+    limits: &ResourceLimits,
+) -> Result<lopdf::Document, OxideError> {
+    enforce_input_bytes(input.len(), limits)?;
+    let document = load_pdf(input)?;
+    enforce_max_pages(document.get_pages().len(), limits)?;
+    Ok(document)
+}
+
+pub(crate) fn default_inspect_limits() -> ResourceLimits {
+    ResourceLimits {
+        max_output_bytes: ResourceLimits::default().max_input_bytes,
+        ..ResourceLimits::default()
+    }
+}
+
 pub(crate) fn ensure_pdf_magic(input: &[u8]) -> Result<(), OxideError> {
     if input.starts_with(b"%PDF-") {
         return Ok(());

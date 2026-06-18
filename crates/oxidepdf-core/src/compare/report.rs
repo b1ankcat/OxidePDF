@@ -6,8 +6,9 @@ use crate::{
     AnnotationInspectOptions, AttachmentInspectOptions, ExtractTextOptions, FormInspectOptions,
     MetadataInspectOptions, OutlineInspectOptions, OxideError, ResourceLimits, TextArtifact,
     enforce_input_bytes, enforce_max_pages, enforce_output_bytes, extract_text_from_pdf,
-    inspect_pdf_annotations, inspect_pdf_attachments, inspect_pdf_forms, inspect_pdf_metadata,
-    inspect_pdf_outline, load_pdf, page_size,
+    inspect_pdf_annotations_with_limits, inspect_pdf_attachments_with_limits,
+    inspect_pdf_forms_with_limits, inspect_pdf_metadata_with_limits,
+    inspect_pdf_outline_with_limits, load_pdf, page_size,
 };
 use lopdf::Object;
 use serde::Serialize;
@@ -70,19 +71,19 @@ fn summarize_pdf(
         page_count: page_sizes.len(),
         page_sizes,
         metadata: inspect_json(input, |bytes| {
-            inspect_pdf_metadata(bytes, &MetadataInspectOptions::default())
+            inspect_pdf_metadata_with_limits(bytes, &MetadataInspectOptions::default(), limits)
         })?,
         outline: inspect_json(input, |bytes| {
-            inspect_pdf_outline(bytes, &OutlineInspectOptions::default())
+            inspect_pdf_outline_with_limits(bytes, &OutlineInspectOptions::default(), limits)
         })?,
         attachments: inspect_json(input, |bytes| {
-            inspect_pdf_attachments(bytes, &AttachmentInspectOptions::default())
+            inspect_pdf_attachments_with_limits(bytes, &AttachmentInspectOptions::default(), limits)
         })?,
         annotations: inspect_json(input, |bytes| {
-            inspect_pdf_annotations(bytes, &AnnotationInspectOptions::default())
+            inspect_pdf_annotations_with_limits(bytes, &AnnotationInspectOptions::default(), limits)
         })?,
         forms: inspect_json(input, |bytes| {
-            inspect_pdf_forms(bytes, &FormInspectOptions::default())
+            inspect_pdf_forms_with_limits(bytes, &FormInspectOptions::default(), limits)
         })?,
         text: if options.include_text {
             Some(text_summary(input, options.text_max_chars, limits))

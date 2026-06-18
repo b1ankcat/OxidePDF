@@ -20,27 +20,27 @@ mod workflow;
 
 pub use annotations::{
     AnnotationEditAction, AnnotationEditOptions, AnnotationInspectOptions, edit_pdf_annotations,
-    inspect_pdf_annotations,
+    inspect_pdf_annotations, inspect_pdf_annotations_with_limits,
 };
 pub use attachments::{
     AttachmentEditAction, AttachmentEditOptions, AttachmentExtractOptions,
     AttachmentInspectOptions, edit_pdf_attachment_artifacts, extract_pdf_attachment,
-    inspect_pdf_attachments,
+    inspect_pdf_attachments, inspect_pdf_attachments_with_limits,
 };
 pub use errors::OxideError;
 pub use forms::{
     FormFieldValue, FormFillOptions, FormInspectOptions, fill_pdf_form, inspect_pdf_forms,
-    remove_pdf_forms, unlock_pdf_form_readonly,
+    inspect_pdf_forms_with_limits, remove_pdf_forms, unlock_pdf_form_readonly,
 };
 pub use interactive::{InteractiveRemovalOptions, remove_pdf_interactive_elements};
 pub use metadata::{
     MetadataEditAction, MetadataEditOptions, MetadataEntry, MetadataInspectOptions,
-    edit_pdf_metadata, inspect_pdf_metadata,
+    edit_pdf_metadata, inspect_pdf_metadata, inspect_pdf_metadata_with_limits,
 };
 pub use operators::{PdfEditOptions, PdfInspectOptions, PdfSignOptions};
 pub use outlines::{
     OutlineEditAction, OutlineEditOptions, OutlineInspectOptions, OutlineItem, OutlineTree,
-    edit_pdf_outline, inspect_pdf_outline,
+    edit_pdf_outline, inspect_pdf_outline, inspect_pdf_outline_with_limits,
 };
 pub use workflow::{
     Artifact, ArtifactBytes, ArtifactRef, ArtifactStore, BytesArtifact, ExecutionPlan,
@@ -52,10 +52,10 @@ pub use workflow::{
 };
 
 pub(crate) use pdf_io::{
-    add_resource_dict_entry, enforce_input_bytes, enforce_max_pages, enforce_max_pixels,
-    enforce_output_bytes, ensure_pdf_magic, load_pdf, map_pdf_extract_error,
-    merge_resource_dictionary, object_to_f32, page_size, pdf_bytes, rebuild_pages_tree,
-    remap_imported_references, resource_limit, save_pdf,
+    add_resource_dict_entry, default_inspect_limits, enforce_input_bytes, enforce_max_pages,
+    enforce_max_pixels, enforce_output_bytes, ensure_pdf_magic, load_pdf, load_pdf_with_limits,
+    map_pdf_extract_error, merge_resource_dictionary, object_to_f32, page_size, pdf_bytes,
+    rebuild_pages_tree, remap_imported_references, resource_limit, save_pdf,
 };
 
 pub use compare::{
@@ -72,8 +72,8 @@ pub use overlay::{
     ImageExtractOptions, ImageInspectOptions, ImageToPdfOptions, OverlayKind, OverlayOptions,
     RenderOptions, SvgToPdfOptions, WatermarkKind, WatermarkOptions, edit_pdf_colors,
     edit_pdf_images_artifacts, extract_pdf_image, extract_text_from_pdf, image_artifacts_to_pdf,
-    inspect_pdf_images, overlay_pdf_artifacts, render_pdf_page, svg_to_pdf,
-    watermark_pdf_artifacts,
+    inspect_pdf_images, inspect_pdf_images_with_limits, overlay_pdf_artifacts, render_pdf_page,
+    svg_to_pdf, watermark_pdf_artifacts,
 };
 pub use page_ops::{
     BookletOptions, CropPagesOptions, DeleteBlankPagesOptions, MergeOptions, NUpOptions,

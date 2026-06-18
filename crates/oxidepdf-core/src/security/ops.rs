@@ -91,6 +91,7 @@ pub fn inspect_pdf_permissions(
     };
 
     let text = serde_json::to_string_pretty(&report).map_err(|_| OxideError::Internal)?;
+    enforce_output_bytes(text.len(), limits)?;
     Ok(TextArtifact {
         text,
         diagnostics: Vec::new(),
