@@ -9,6 +9,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 pub const WORKFLOW_SCHEMA_VERSION: u16 = 1;
+/// Default maximum number of tasks accepted by a workflow.
+pub const DEFAULT_MAX_WORKFLOW_TASKS: usize = 256;
+/// Default maximum number of workflow tasks that may run concurrently.
+pub const DEFAULT_MAX_PARALLEL_TASKS: usize = 8;
 
 /// Supported workflow schema versions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +152,10 @@ pub struct ResourceLimits {
     /// Maximum number of tasks started per second. `None` disables rate
     /// limiting.
     pub rate_limit_per_second: Option<u64>,
+    /// Maximum number of tasks accepted by a workflow.
+    pub max_tasks: Option<usize>,
+    /// Maximum number of workflow tasks running at once.
+    pub max_parallel_tasks: Option<usize>,
 }
 
 impl Default for ResourceLimits {
@@ -162,6 +170,8 @@ impl Default for ResourceLimits {
             spill_threshold_bytes: Some(DEFAULT_SPILL_THRESHOLD_BYTES as u64),
             retry_attempts: None,
             rate_limit_per_second: None,
+            max_tasks: Some(DEFAULT_MAX_WORKFLOW_TASKS),
+            max_parallel_tasks: Some(DEFAULT_MAX_PARALLEL_TASKS),
         }
     }
 }

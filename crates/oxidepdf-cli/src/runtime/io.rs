@@ -183,8 +183,7 @@ pub(crate) fn write_outputs_with_stats(
             let bytes = artifact
                 .write_output_to(&mut file, &workflow.limits)
                 .map_err(CliError::Core)?;
-            file.persist(&output.path)
-                .map_err(|error| CliError::Io(error.error))?;
+            persist_output_file(file, &output.path, force)?;
             total_output_bytes = total_output_bytes
                 .checked_add(bytes)
                 .ok_or(CliError::Core(OxideError::Internal))?;
@@ -234,4 +233,20 @@ fn enforce_cli_input_limits(
 
 pub(crate) fn is_stdio(path: &Path) -> bool {
     path == Path::new("-")
+}
+
+pub(crate) fn persist_output_file(
+    file: NamedTempFile,
+    path: &Path,
+    force: bool,
+) -> Result<(), CliError> {
+    if force {
+        file.persist(path)
+            .map(|_| ())
+            .map_err(|error| CliError::Io(error.error))
+    } else {
+        file.persist_noclobber(path)
+            .map(|_| ())
+            .map_err(|error| CliError::Io(error.error))
+    }
 }

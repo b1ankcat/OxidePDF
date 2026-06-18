@@ -44,6 +44,45 @@ fn run_workflow_file_succeeds() {
 }
 
 #[test]
+fn run_workflow_non_force_does_not_overwrite_existing_output() {
+    let dir = temp_dir("run_workflow_non_force_does_not_overwrite_existing_output");
+    let input = dir.join("input.bin");
+    let output = dir.join("output.bin");
+    let workflow = dir.join("workflow.yaml");
+    fs::write(&input, b"input").unwrap();
+    fs::write(&output, b"existing").unwrap();
+    fs::write(
+        &workflow,
+        format!(
+            r#"
+            version: 1
+            inputs:
+              - id: source
+                path: {}
+            tasks: []
+            outputs:
+              - id: final
+                from: source
+                path: {}
+            "#,
+            input.display(),
+            output.display()
+        ),
+    )
+    .unwrap();
+
+    Command::cargo_bin("oxidepdf")
+        .unwrap()
+        .args(["run", "--workflow", workflow.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .stdout(predicate::eq(""))
+        .stderr(predicate::str::contains("output file already exists"));
+
+    assert_eq!(fs::read(output).unwrap(), b"existing");
+}
+
+#[test]
 fn run_workflow_writes_metrics_json_after_success() {
     let dir = temp_dir("run_workflow_writes_metrics_json_after_success");
     let input = dir.join("input.bin");

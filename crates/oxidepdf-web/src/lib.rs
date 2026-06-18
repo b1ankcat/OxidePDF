@@ -486,6 +486,7 @@ async fn build_store(
     state: &AppState,
     ids: &[String],
 ) -> Result<(Vec<ArtifactRef>, ArtifactStore), AppError> {
+    enforce_total_stored_size(state, ids.iter().map(String::as_str))?;
     let mut store = ArtifactStore::new();
     let mut refs = Vec::with_capacity(ids.len());
     for (i, id) in ids.iter().enumerate() {
@@ -495,6 +496,30 @@ async fn build_store(
         refs.push(r);
     }
     Ok((refs, store))
+}
+
+fn enforce_total_stored_size<'a>(
+    state: &AppState,
+    ids: impl IntoIterator<Item = &'a str>,
+) -> Result<(), AppError> {
+    let guard = state.lock();
+    let mut total = 0u64;
+    for id in ids {
+        let stored = guard.artifacts.get(id).ok_or_else(not_found)?;
+        total = total
+            .checked_add(stored.size)
+            .ok_or_else(max_total_input_bytes_error)?;
+        if total > state.max_upload_bytes() {
+            return Err(max_total_input_bytes_error());
+        }
+    }
+    Ok(())
+}
+
+fn max_total_input_bytes_error() -> AppError {
+    core_error(OxideError::ResourceLimitExceeded {
+        limit: "max_total_input_bytes".to_owned(),
+    })
 }
 
 // from_ref is the last task's ID — the result store keys artifacts by task ID, not OutputSpec.id
@@ -719,6 +744,7 @@ async fn load_file_bytes(
         }
     }
     let mut out = Vec::with_capacity(ids.len());
+    enforce_total_stored_size(state, ids.iter().map(String::as_str))?;
     for id in ids {
         let (bytes, kind, _) = read_stored(state, &id).await?;
         out.push((id, kind, bytes));
@@ -1096,6 +1122,32 @@ mod tests {
             state.max_body_bytes(),
             100 * 1024 * 1024 + MULTIPART_BODY_OVERHEAD_BYTES
         );
+    }
+
+    #[test]
+    fn total_stored_size_rejects_combined_inputs_before_reading() {
+        let state = AppState::with_upload_limit(10_000, 100);
+        state
+            .lock()
+            .insert("a".into(), artifact(60, state.next_seq()));
+        state
+            .lock()
+            .insert("b".into(), artifact(50, state.next_seq()));
+
+        let error = enforce_total_stored_size(&state, ["a", "b"]).unwrap_err();
+
+        assert_eq!(error.0, StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(error.1.contains("max_total_input_bytes"));
+    }
+
+    #[test]
+    fn total_stored_size_counts_distinct_workflow_files_once() {
+        let state = AppState::with_upload_limit(10_000, 100);
+        state
+            .lock()
+            .insert("a".into(), artifact(60, state.next_seq()));
+
+        assert!(enforce_total_stored_size(&state, ["a"]).is_ok());
     }
 
     #[test]

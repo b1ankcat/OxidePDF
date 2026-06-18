@@ -76,6 +76,7 @@ where
 {
     let limits = workflow.limits.clone();
     let timeout = limits.timeout_ms.map(Duration::from_millis);
+    let max_parallel_tasks = limits.max_parallel_tasks.unwrap_or(workflow.tasks.len());
     let (remaining_deps, dependents) = task_dependencies(workflow);
     let state = Arc::new(Mutex::new(WorkflowState {
         store,
@@ -93,6 +94,7 @@ where
     let mut worker = WorkerBuilder::new("oxidepdf-workflow")
         .backend(backend)
         .catch_panic()
+        .concurrency(max_parallel_tasks)
         .option_layer(rate_limit_layer(limits.rate_limit_per_second))
         .retry(apalis::layers::retry::RetryPolicy::retries(
             limits.retry_attempts.unwrap_or(0),
@@ -508,12 +510,25 @@ pub(super) fn check_resource_limit_entrypoint(limits: &ResourceLimits) -> Result
         limits.timeout_ms,
         limits.retry_attempts.map(|value| value as u64),
         limits.rate_limit_per_second,
+        limits.max_tasks.map(|value| value as u64),
+        limits.max_parallel_tasks.map(|value| value as u64),
     ];
 
     if numeric_limits.into_iter().flatten().any(|limit| limit == 0) || limits.max_pages == Some(0) {
         return Err(OxideError::ResourceLimitExceeded {
             limit: "resource limit must be greater than zero".to_owned(),
         });
+    }
+
+    Ok(())
+}
+
+pub(super) fn enforce_task_count_limit(
+    task_count: usize,
+    limits: &ResourceLimits,
+) -> Result<(), OxideError> {
+    if limits.max_tasks.is_some_and(|limit| task_count > limit) {
+        return Err(resource_limit("max_tasks"));
     }
 
     Ok(())

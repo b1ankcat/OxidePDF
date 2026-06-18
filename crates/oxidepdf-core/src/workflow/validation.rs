@@ -1,6 +1,6 @@
 use super::execution::{
-    build_execution_graph, check_resource_limit_entrypoint, collect_ids, invalid_workflow,
-    validate_output_references, validate_task_references,
+    build_execution_graph, check_resource_limit_entrypoint, collect_ids, enforce_task_count_limit,
+    invalid_workflow, validate_output_references, validate_task_references,
 };
 use super::types::{ExecutionPlan, Workflow};
 use crate::OxideError;
@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Validates a workflow and returns a topological execution plan.
 pub fn validate_workflow(workflow: &Workflow) -> Result<ExecutionPlan, OxideError> {
     check_resource_limit_entrypoint(&workflow.limits)?;
+    enforce_task_count_limit(workflow.tasks.len(), &workflow.limits)?;
     let ids = collect_ids(workflow)?;
     validate_task_references(workflow, &ids)?;
     validate_output_references(workflow, &ids)?;

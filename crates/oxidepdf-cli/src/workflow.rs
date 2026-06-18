@@ -73,9 +73,7 @@ fn write_metrics_output(
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let mut file = tempfile::NamedTempFile::new_in(parent).map_err(CliError::Io)?;
     file.write_all(&bytes).map_err(CliError::Io)?;
-    file.persist(path)
-        .map(|_| ())
-        .map_err(|error| CliError::Io(error.error))
+    persist_output_file(file, path, force)
 }
 
 fn check_metrics_output_path(path: &Path, force: bool) -> Result<(), CliError> {
