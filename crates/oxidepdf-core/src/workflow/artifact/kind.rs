@@ -1,5 +1,6 @@
 use super::bytes::ArtifactBytes;
 use crate::{OxideError, save_pdf};
+use std::io::{self, Write};
 use std::sync::Arc;
 
 /// Artifact produced or consumed by workflow tasks.
@@ -85,6 +86,37 @@ impl Artifact {
         }
     }
 
+    /// Writes this artifact to an output boundary without first materializing
+    /// byte-backed artifacts into a new buffer.
+    pub fn write_output_to(
+        &self,
+        writer: impl Write,
+        limits: &crate::ResourceLimits,
+    ) -> Result<u64, OxideError> {
+        let mut writer = LimitWriter::new(writer, limits.max_output_bytes);
+        match self {
+            Self::Pdf(pdf) => writer.write_all(&pdf.bytes).map_err(write_error)?,
+            Self::Image(image) => writer.write_all(&image.bytes).map_err(write_error)?,
+            Self::Svg(svg) => writer.write_all(&svg.bytes).map_err(write_error)?,
+            Self::Bytes(bytes) => writer.write_all(&bytes.bytes).map_err(write_error)?,
+            Self::Text(text) => writer
+                .write_all(text.text.as_bytes())
+                .map_err(write_error)?,
+            Self::PdfObject(artifact) => {
+                let mut document = (*artifact.document).clone();
+                document.prune_objects();
+                document.renumber_objects();
+                if document.save_to(&mut writer).is_err() {
+                    if writer.limit_exceeded() {
+                        return Err(crate::resource_limit("max_output_bytes"));
+                    }
+                    return Err(OxideError::WritePdf);
+                }
+            }
+        }
+        Ok(writer.bytes_written())
+    }
+
     /// Creates an image artifact.
     pub fn image(bytes: impl AsRef<[u8]>) -> Result<Self, OxideError> {
         Ok(Self::Image(ImageArtifact {
@@ -124,6 +156,73 @@ impl Artifact {
             Self::Text(artifact) => Ok(Self::Text(artifact)),
         }
     }
+}
+
+struct LimitWriter<W> {
+    inner: W,
+    max_output_bytes: Option<u64>,
+    written: u64,
+    limit_exceeded: bool,
+}
+
+impl<W> LimitWriter<W> {
+    fn new(inner: W, max_output_bytes: Option<u64>) -> Self {
+        Self {
+            inner,
+            max_output_bytes,
+            written: 0,
+            limit_exceeded: false,
+        }
+    }
+
+    fn bytes_written(&self) -> u64 {
+        self.written
+    }
+
+    fn limit_exceeded(&self) -> bool {
+        self.limit_exceeded
+    }
+}
+
+impl<W: Write> Write for LimitWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let next = self
+            .written
+            .checked_add(buf.len() as u64)
+            .ok_or_else(limit_io_error)?;
+        if self.max_output_bytes.is_some_and(|limit| next > limit) {
+            self.limit_exceeded = true;
+            return Err(limit_io_error());
+        }
+        let written = self.inner.write(buf)?;
+        self.written = self
+            .written
+            .checked_add(written as u64)
+            .ok_or_else(limit_io_error)?;
+        if self
+            .max_output_bytes
+            .is_some_and(|limit| self.written > limit)
+        {
+            self.limit_exceeded = true;
+            return Err(limit_io_error());
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+fn limit_io_error() -> io::Error {
+    io::Error::other("max_output_bytes")
+}
+
+fn write_error(error: io::Error) -> OxideError {
+    if error.kind() == io::ErrorKind::Other && error.to_string() == "max_output_bytes" {
+        return crate::resource_limit("max_output_bytes");
+    }
+    OxideError::WritePdf
 }
 
 /// Default spill threshold when `ResourceLimits::spill_threshold_bytes` is left

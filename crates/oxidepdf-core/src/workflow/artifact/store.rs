@@ -107,4 +107,38 @@ mod tests {
         assert_eq!(inline.as_slice(), &[7, 8, 9]);
         assert!(!inline.is_spilled());
     }
+
+    #[test]
+    fn write_output_to_returns_bytes_written() {
+        let artifact = crate::Artifact::bytes(b"abc").unwrap();
+        let mut output = Vec::new();
+        let written = artifact
+            .write_output_to(&mut output, &crate::ResourceLimits::default())
+            .unwrap();
+
+        assert_eq!(written, 3);
+        assert_eq!(output, b"abc");
+    }
+
+    #[test]
+    fn write_output_to_enforces_output_limit() {
+        let artifact = crate::Artifact::bytes(b"abc").unwrap();
+        let mut output = Vec::new();
+        let error = artifact
+            .write_output_to(
+                &mut output,
+                &crate::ResourceLimits {
+                    max_output_bytes: Some(2),
+                    ..crate::ResourceLimits::default()
+                },
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            crate::OxideError::ResourceLimitExceeded {
+                limit: "max_output_bytes".to_owned()
+            }
+        );
+    }
 }

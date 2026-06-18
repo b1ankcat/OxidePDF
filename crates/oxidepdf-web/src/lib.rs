@@ -2,7 +2,7 @@ use axum::{
     Json, Router,
     body::{Body, Bytes},
     extract::{DefaultBodyLimit, FromRequestParts, Multipart, Path, Request, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -22,7 +22,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tempfile::NamedTempFile;
-use tower_http::cors::{Any, CorsLayer};
+use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 mod schema;
@@ -417,15 +417,6 @@ where
         .map_err(internal)
 }
 
-async fn write_temp(bytes: Vec<u8>) -> Result<(NamedTempFile, u64), AppError> {
-    blocking_io(move || {
-        let mut tmp = upload_temp_file()?;
-        tmp.write_all(&bytes)?;
-        Ok((tmp, bytes.len() as u64))
-    })
-    .await
-}
-
 async fn write_temp_chunk(mut tmp: NamedTempFile, chunk: Bytes) -> Result<NamedTempFile, AppError> {
     blocking_io(move || {
         tmp.write_all(&chunk)?;
@@ -459,10 +450,35 @@ async fn read_stored(
     Ok((bytes, kind, content_type))
 }
 
+async fn open_stored_stream(
+    state: &AppState,
+    id: &str,
+) -> Result<(tokio::fs::File, u64, &'static str), AppError> {
+    let (path, size, content_type) = {
+        let mut guard = state.lock();
+        let stored = guard.artifacts.get_mut(id).ok_or_else(not_found)?;
+        stored.last_access = Instant::now();
+        (
+            stored.file.path().to_path_buf(),
+            stored.size,
+            stored.content_type,
+        )
+    };
+    let file = tokio::fs::File::open(path).await.map_err(internal)?;
+    Ok((file, size, content_type))
+}
+
 async fn store_artifact(state: &AppState, artifact: Artifact) -> Result<String, AppError> {
     let kind = artifact_kind(&artifact);
-    let bytes = artifact.output_bytes().map_err(core_error)?;
-    let (tmp, size) = write_temp(bytes.into_owned()).await?;
+    let limits = web_resource_limits(state.max_upload_bytes());
+    let (tmp, size) = blocking_io(move || {
+        let mut tmp = upload_temp_file()?;
+        let size = artifact
+            .write_output_to(&mut tmp, &limits)
+            .map_err(io::Error::other)?;
+        Ok((tmp, size))
+    })
+    .await?;
     Ok(state.store_file(tmp, kind, kind.content_type(), size))
 }
 
@@ -775,10 +791,11 @@ async fn api_file(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
-    let (bytes, _, ct) = read_stored(&state, &id).await?;
+    let (file, size, ct) = open_stored_stream(&state, &id).await?;
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, ct.parse().unwrap());
-    Ok((headers, Body::from(bytes)).into_response())
+    headers.insert(header::CONTENT_LENGTH, size.into());
+    Ok((headers, Body::from_stream(ReaderStream::new(file))).into_response())
 }
 
 // HEAD /api/file/:id — content type + length without reading the file body,
@@ -848,11 +865,46 @@ async fn require_auth(State(auth): State<Auth>, request: Request, next: Next) ->
     }
 }
 
+fn same_origin(headers: &HeaderMap) -> bool {
+    let Some(host) = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    let Some(origin_or_referer) = headers
+        .get(header::ORIGIN)
+        .or_else(|| headers.get(header::REFERER))
+        .and_then(|value| value.to_str().ok())
+    else {
+        return true;
+    };
+    let Some(origin_host) = origin_or_referer
+        .split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+    else {
+        return false;
+    };
+    origin_host.eq_ignore_ascii_case(host)
+}
+
+async fn require_same_origin(request: Request, next: Next) -> Response {
+    if matches!(
+        *request.method(),
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    ) && !same_origin(request.headers())
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "cross-origin state-changing request rejected",
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
 pub fn router(state: AppState, auth: Option<Auth>) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
     let mut app = Router::new()
         .route("/", get(index))
         .route("/static/{file}", get(static_asset))
@@ -866,11 +918,12 @@ pub fn router(state: AppState, auth: Option<Auth>) -> Router {
         )
         .layer(DefaultBodyLimit::max(
             usize::try_from(state.max_body_bytes()).unwrap_or(usize::MAX),
-        ));
+        ))
+        .layer(middleware::from_fn(require_same_origin));
     if let Some(auth) = auth {
         app = app.layer(middleware::from_fn_with_state(auth, require_auth));
     }
-    app.layer(cors).with_state(state)
+    app.with_state(state)
 }
 
 #[cfg(test)]
@@ -1043,6 +1096,32 @@ mod tests {
             state.max_body_bytes(),
             100 * 1024 * 1024 + MULTIPART_BODY_OVERHEAD_BYTES
         );
+    }
+
+    #[test]
+    fn same_origin_allows_missing_origin_for_non_browser_clients() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, "127.0.0.1:19898".parse().unwrap());
+
+        assert!(same_origin(&headers));
+    }
+
+    #[test]
+    fn same_origin_rejects_cross_site_origin() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, "127.0.0.1:19898".parse().unwrap());
+        headers.insert(header::ORIGIN, "https://example.invalid".parse().unwrap());
+
+        assert!(!same_origin(&headers));
+    }
+
+    #[test]
+    fn same_origin_accepts_matching_origin() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, "127.0.0.1:19898".parse().unwrap());
+        headers.insert(header::ORIGIN, "http://127.0.0.1:19898".parse().unwrap());
+
+        assert!(same_origin(&headers));
     }
 
     #[test]

@@ -7,6 +7,7 @@ use oxidepdf_core::{
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use tempfile::NamedTempFile;
 
 pub(crate) async fn execute_and_write_workflow(
     workflow: Workflow,
@@ -163,13 +164,13 @@ pub(crate) fn write_outputs_with_stats(
                 ),
             })
         })?;
-        let bytes = artifact.output_bytes().map_err(CliError::Core)?;
-        enforce_cli_output_limit(bytes.len(), &workflow.limits)?;
-        total_output_bytes = total_output_bytes
-            .checked_add(bytes.len() as u64)
-            .ok_or(CliError::Core(OxideError::Internal))?;
         if is_stdio(&output.path) {
-            stdout.write_all(&bytes).map_err(CliError::Io)?;
+            let bytes = artifact
+                .write_output_to(&mut *stdout, &workflow.limits)
+                .map_err(CliError::Core)?;
+            total_output_bytes = total_output_bytes
+                .checked_add(bytes)
+                .ok_or(CliError::Core(OxideError::Internal))?;
         } else {
             if output.path.exists() && !force {
                 return Err(CliError::Workflow(format!(
@@ -177,7 +178,16 @@ pub(crate) fn write_outputs_with_stats(
                     output.path.display()
                 )));
             }
-            fs::write(&output.path, &bytes).map_err(CliError::Io)?;
+            let parent = output.path.parent().unwrap_or_else(|| Path::new("."));
+            let mut file = NamedTempFile::new_in(parent).map_err(CliError::Io)?;
+            let bytes = artifact
+                .write_output_to(&mut file, &workflow.limits)
+                .map_err(CliError::Core)?;
+            file.persist(&output.path)
+                .map_err(|error| CliError::Io(error.error))?;
+            total_output_bytes = total_output_bytes
+                .checked_add(bytes)
+                .ok_or(CliError::Core(OxideError::Internal))?;
         }
     }
 
@@ -216,19 +226,6 @@ fn enforce_cli_input_limits(
     {
         return Err(CliError::Core(OxideError::ResourceLimitExceeded {
             limit: "max_total_input_bytes".to_owned(),
-        }));
-    }
-
-    Ok(())
-}
-
-fn enforce_cli_output_limit(size: usize, limits: &ResourceLimits) -> Result<(), CliError> {
-    if limits
-        .max_output_bytes
-        .is_some_and(|limit| size as u64 > limit)
-    {
-        return Err(CliError::Core(OxideError::ResourceLimitExceeded {
-            limit: "max_output_bytes".to_owned(),
         }));
     }
 

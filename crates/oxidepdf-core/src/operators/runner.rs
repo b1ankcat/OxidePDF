@@ -7,7 +7,7 @@ use crate::{
     edit_pdf_images_artifacts, encrypt_pdf, enforce_input_bytes, extract_pdf_attachment,
     extract_pdf_image, extract_text_from_pdf, image_artifacts_to_pdf, inspect_pdf_permissions,
     load_pdf, nup_pdf_pages_with_limits, overlay_pdf_artifacts, pdf_bytes, render_pdf_page,
-    set_pdf_permissions, svg_to_pdf, verify_pdf_signatures, watermark_pdf_artifacts,
+    save_pdf, set_pdf_permissions, svg_to_pdf, verify_pdf_signatures, watermark_pdf_artifacts,
 };
 
 include!("runner/edit.rs");

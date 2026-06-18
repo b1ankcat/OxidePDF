@@ -564,11 +564,15 @@ function fieldDescription(description) {
   return group[description];
 }
 
+function apiUrl(path) {
+  return `api/${path}`;
+}
+
 async function init() {
   if (!i18n[lang]) throw new Error(`Unsupported stored language: ${lang}`);
   applyLanguage();
   try {
-    const r = await fetch('/api/schema');
+    const r = await fetch(apiUrl('schema'));
     if (!r.ok) throw new Error(await r.text());
     schema = await r.json();
     renderFamilies();
@@ -617,7 +621,7 @@ function applyLanguage() {
 
 function renderFamilies() {
   const el = $('families');
-  el.innerHTML = '';
+  el.replaceChildren();
   for (const f of schema) {
     const d = document.createElement('div');
     d.className = 'item' + (selFamily === f.name && mode === 'single' ? ' active' : '');
@@ -636,7 +640,7 @@ function selectFamily(name) {
 
 function renderOps() {
   const el = $('ops');
-  el.innerHTML = '';
+  el.replaceChildren();
   const fam = schema.find(f => f.name === selFamily);
   if (!fam) {
     if (selFamily !== null) throw new Error(`Selected family not found: ${selFamily}`);
@@ -688,8 +692,14 @@ function toggleDropdown() { $('file-list').classList.toggle('show'); }
 
 function renderFileList() {
   const el = $('file-list');
-  el.innerHTML = '';
-  if (!pool.length) { el.innerHTML = `<div class="empty">${t('noFiles')}</div>`; return; }
+  el.replaceChildren();
+  if (!pool.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = t('noFiles');
+    el.appendChild(empty);
+    return;
+  }
   pool.forEach((f, idx) => {
     const row = document.createElement('div');
     row.className = 'file-item';
@@ -750,7 +760,7 @@ function onSelectionChange() {
 
 async function deleteFile(f) {
   try {
-    const r = await fetch('/api/file/' + f.id, { method: 'DELETE' });
+    const r = await fetch(apiUrl('file/' + encodeURIComponent(f.id)), { method: 'DELETE' });
     if (!r.ok) throw new Error(await r.text());
   } catch (e) { return showError(e.message); }
   pool = pool.filter(x => x !== f);
@@ -764,21 +774,32 @@ function selectedInputs() {
 }
 
 async function previewFile(id) {
-  const url = '/api/file/' + id;
+  const url = apiUrl('file/' + encodeURIComponent(id));
   const head = await fetch(url, { method: 'HEAD' });
   if (!head.ok) throw new Error(`${t('previewFailed')}: ${await head.text()}`);
   const ct = head.headers.get('content-type');
   if (!ct) throw new Error(`${t('previewFailed')}: missing content-type`);
   const area = $('preview-area');
   area.classList.remove('is-empty');
-  if (ct.startsWith('application/pdf')) area.innerHTML = `<embed src="${url}" type="application/pdf">`;
-  else if (ct.startsWith('image/')) area.innerHTML = `<img src="${url}" alt="file">`;
+  area.replaceChildren();
+  if (ct.startsWith('application/pdf')) {
+    const embed = document.createElement('embed');
+    embed.src = url;
+    embed.type = 'application/pdf';
+    area.appendChild(embed);
+  } else if (ct.startsWith('image/')) {
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = 'file';
+    area.appendChild(img);
+  }
   else {
     const r = await fetch(url);
     if (!r.ok) throw new Error(`${t('previewFailed')}: ${await r.text()}`);
     const text = await r.text();
-    area.innerHTML = '<pre></pre>';
-    area.querySelector('pre').textContent = text;
+    const pre = document.createElement('pre');
+    pre.textContent = text;
+    area.appendChild(pre);
   }
 }
 
@@ -812,7 +833,7 @@ async function uploadFiles(files) {
   if (!files.length) throw new Error('No files supplied for upload');
   const fd = new FormData();
   for (const f of files) fd.append('file', f);
-  const r = await fetch('/api/upload', { method: 'POST', body: fd });
+  const r = await fetch(apiUrl('upload'), { method: 'POST', body: fd });
   if (!r.ok) throw new Error(`${t('uploadFailed')}: ${await r.text()}`);
   const data = await r.json();
   if (!Array.isArray(data.files)) throw new Error(`${t('uploadFailed')}: malformed response`);
@@ -829,7 +850,7 @@ function readCurrentOptions() {
 // ---- Workflow ----
 function openPicker() {
   const body = $('picker-body');
-  body.innerHTML = '';
+  body.replaceChildren();
   for (const f of schema) {
     const fl = document.createElement('div');
     fl.className = 'fam';
@@ -872,20 +893,36 @@ function addStepFromForm() {
 
 function renderChain() {
   const el = $('chain');
-  el.innerHTML = `<div class="node io">${t('inputNode')}</div>`;
+  el.replaceChildren();
+  el.appendChild(chainNode(t('inputNode'), true));
   wfSteps.forEach((s, i) => {
-    el.insertAdjacentHTML('beforeend', '<div class="arrow">↓</div>');
+    el.appendChild(chainArrow());
     const n = document.createElement('div');
     n.className = 'node';
-    n.innerHTML = `<span>${familyLabel(s.family)} > ${opLabel(s.op)}</span>`;
+    const label = document.createElement('span');
+    label.textContent = `${familyLabel(s.family)} > ${opLabel(s.op)}`;
     const x = document.createElement('button');
     x.className = 'btn-sm';
     x.textContent = '✕';
     x.onclick = () => removeStep(i);
-    n.appendChild(x);
+    n.append(label, x);
     el.appendChild(n);
   });
-  el.insertAdjacentHTML('beforeend', `<div class="arrow">↓</div><div class="node io">${t('outputNode')}</div>`);
+  el.append(chainArrow(), chainNode(t('outputNode'), true));
+}
+
+function chainArrow() {
+  const arrow = document.createElement('div');
+  arrow.className = 'arrow';
+  arrow.textContent = '↓';
+  return arrow;
+}
+
+function chainNode(text, io) {
+  const node = document.createElement('div');
+  node.className = io ? 'node io' : 'node';
+  node.textContent = text;
+  return node;
 }
 
 function removeStep(i) {
@@ -906,7 +943,7 @@ async function execSingle() {
   const btn = $('btn-single');
   btn.disabled = true; btn.textContent = t('running');
   try {
-    const r = await fetch('/api/execute/single', {
+    const r = await fetch(apiUrl('execute/single'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ artifact_ids: ids, family: selFamily, op: selOp,
         options_json: JSON.stringify(readCurrentOptions()) }),
@@ -925,7 +962,7 @@ async function execWorkflow() {
   try {
     const tasks = wfSteps.map(s => ({ family: s.family, op: s.op,
       options_json: JSON.stringify(s.options), inputs: s.inputs }));
-    const r = await fetch('/api/execute/workflow', {
+    const r = await fetch(apiUrl('execute/workflow'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tasks }),
     });
@@ -938,9 +975,9 @@ async function execWorkflow() {
 async function showResult(id) {
   lastResultId = id;
   const dl = $('dl-btn');
-  dl.href = '/api/file/' + id;
+  dl.href = apiUrl('file/' + encodeURIComponent(id));
   dl.style.visibility = 'visible';
-  const head = await fetch('/api/file/' + id, { method: 'HEAD' });
+  const head = await fetch(apiUrl('file/' + encodeURIComponent(id)), { method: 'HEAD' });
   if (!head.ok) throw new Error(await head.text());
   const ct = head.headers.get('content-type');
   if (!ct) throw new Error('Missing result content-type');

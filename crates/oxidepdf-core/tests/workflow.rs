@@ -1136,6 +1136,53 @@ async fn inspect_operator_consumes_object_artifact_without_materializing_bytes()
 }
 
 #[tokio::test]
+async fn object_artifact_inputs_are_checked_against_input_size_limit() {
+    let pdf = fixture_pdf();
+    let unrestricted_runner = PdfOperatorRunner::default();
+
+    let object_artifact = unrestricted_runner
+        .run(
+            TaskSpec {
+                id: TaskId::new("rotate"),
+                op: OperatorSpec::PdfEdit(PdfEditOptions::RotatePages(RotateOptions {
+                    pages: "1".to_owned(),
+                    degrees: 90,
+                })),
+                inputs: vec![artifact_ref("source")],
+            },
+            vec![Artifact::pdf(pdf).unwrap()],
+        )
+        .await
+        .unwrap();
+    assert!(matches!(object_artifact, Artifact::PdfObject(_)));
+
+    let limited_runner = PdfOperatorRunner::with_limits(ResourceLimits {
+        max_input_bytes: Some(1),
+        ..ResourceLimits::default()
+    });
+    let err = limited_runner
+        .run(
+            TaskSpec {
+                id: TaskId::new("metadata"),
+                op: OperatorSpec::PdfInspect(PdfInspectOptions::Metadata(
+                    MetadataInspectOptions::default(),
+                )),
+                inputs: vec![artifact_ref("rotate")],
+            },
+            vec![object_artifact],
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        err,
+        OxideError::ResourceLimitExceeded {
+            limit: "max_input_bytes".to_owned()
+        }
+    );
+}
+
+#[tokio::test]
 async fn pdf_operator_runner_emits_signature_verification_report() {
     let pdf = pdf_with_signature_dictionary(vec![0, 64, 192, 64], vec![0x30, 0x82]);
     let trust_anchors = write_test_trust_anchors("signature_report");

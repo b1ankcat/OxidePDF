@@ -142,7 +142,7 @@ function buildField(key, prop, required, root, labels) {
 
 // Render a full schema into `container`. Returns a read() that yields the options object.
 function renderForm(schema, container, labels) {
-  container.innerHTML = '';
+  container.replaceChildren();
   if (
     !labels ||
     typeof labels.t !== 'function' ||
