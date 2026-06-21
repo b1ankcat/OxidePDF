@@ -15,7 +15,8 @@ use oxidepdf_core::{
     OverlayKind, OverlayOptions, OxideError, PageNumberPosition, PageNumbersOptions,
     PageSelectionOptions, PdfCompareOptions, PdfEditOptions, PdfInspectOptions, PdfOperatorRunner,
     PdfSecurityOptions, PdfSignOptions, PermissionPolicy, RenderOptions, ReorderOptions,
-    RotateOptions, ScalePagesOptions, SecurityDecryptOptions, SecurityEncryptOptions,
+    ResourceLimits, RotateOptions, ScalePagesOptions, SecurityDecryptOptions,
+    SecurityEncryptOptions,
     SecurityPermissionGetOptions, SecurityPermissionSetOptions, SignatureAddOptions,
     SignatureDeleteFieldOptions, SignatureOptions, SinglePageOptions, SplitOptions,
     SvgToPdfOptions, TaskId, TaskSpec, TimestampAddOptions, VisualDiffOptions, WatermarkKind,
@@ -86,6 +87,14 @@ pub async fn run() -> i32 {
     let args = std::env::args_os().collect::<Vec<_>>();
     let stdin_buffer = match stdin_for_args(args.clone()) {
         Ok(buffer) => buffer,
+        Err(CliError::Arguments(error)) => {
+            // clap surfaces --help/--version as "errors" whose output belongs on
+            // stdout with exit code 0; its other parse errors belong on stderr.
+            // Defer to clap's own printer so the text is unprefixed and routed
+            // correctly instead of mangling it with an "oxidepdf:" prefix.
+            let _ = error.print();
+            return error.exit_code();
+        }
         Err(error) => {
             let _ = writeln!(io::stderr().lock(), "oxidepdf: {error}");
             return error.exit_code();
@@ -112,11 +121,26 @@ where
 {
     match run_with_io_result(args, stdin.as_ref(), stdout).await {
         Ok(()) => 0,
+        Err(CliError::Arguments(error)) if is_help_or_version(&error) => {
+            // Help/version "errors" are normal output: route them to stdout with
+            // clap's own formatting and a success-class exit code.
+            let _ = write!(stdout, "{error}");
+            error.exit_code()
+        }
         Err(error) => {
             let _ = writeln!(stderr, "oxidepdf: {error}");
             error.exit_code()
         }
     }
+}
+
+fn is_help_or_version(error: &clap::Error) -> bool {
+    matches!(
+        error.kind(),
+        clap::error::ErrorKind::DisplayHelp
+            | clap::error::ErrorKind::DisplayVersion
+            | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+    )
 }
 
 /// Returns the clap command definition for tests and generated help.

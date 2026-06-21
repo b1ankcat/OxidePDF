@@ -24,6 +24,11 @@ pub fn nup_pdf_pages_with_limits(
     let source = load_pdf(input)?;
     let page_ids = source.get_pages().into_values().collect::<Vec<_>>();
     enforce_max_pages(page_ids.len(), limits)?;
+    if page_ids.is_empty() {
+        return Err(OxideError::InvalidInput {
+            reason: "n-up requires at least one page".to_owned(),
+        });
+    }
     let layout = page_layout_from_first_page(&source, &page_ids)?;
     let slots_per_page = (options.columns * options.rows) as usize;
     let output_count = page_ids.len().div_ceil(slots_per_page);

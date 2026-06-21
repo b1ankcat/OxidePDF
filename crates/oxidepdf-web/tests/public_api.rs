@@ -40,7 +40,12 @@ fn default_upload_limit_is_128_mib() {
 
 #[tokio::test]
 async fn router_serves_public_schema() {
-    let app = oxidepdf_web::router(oxidepdf_web::AppState::new(1024 * 1024), None).unwrap();
+    let app = oxidepdf_web::router(
+        oxidepdf_web::AppState::new(1024 * 1024),
+        None,
+        oxidepdf_web::AllowedHosts::new(vec![]),
+    )
+    .unwrap();
     let response = app
         .oneshot(
             Request::builder()
@@ -70,7 +75,12 @@ async fn router_requires_matching_basic_auth_when_configured() {
         username: "user".to_owned(),
         password: "pass".to_owned(),
     };
-    let app = oxidepdf_web::router(oxidepdf_web::AppState::new(1024 * 1024), Some(auth)).unwrap();
+    let app = oxidepdf_web::router(
+        oxidepdf_web::AppState::new(1024 * 1024),
+        Some(auth),
+        oxidepdf_web::AllowedHosts::new(vec![]),
+    )
+    .unwrap();
 
     let response = app
         .clone()
@@ -103,7 +113,12 @@ async fn router_rejects_basic_auth_without_password() {
         username: "user".to_owned(),
         password: String::new(),
     };
-    let app = oxidepdf_web::router(oxidepdf_web::AppState::new(1024 * 1024), Some(auth)).unwrap();
+    let app = oxidepdf_web::router(
+        oxidepdf_web::AppState::new(1024 * 1024),
+        Some(auth),
+        oxidepdf_web::AllowedHosts::new(vec![]),
+    )
+    .unwrap();
 
     let response = app
         .oneshot(
@@ -121,7 +136,12 @@ async fn router_rejects_basic_auth_without_password() {
 
 #[tokio::test]
 async fn router_rejects_uploads_without_supported_extension() {
-    let app = oxidepdf_web::router(oxidepdf_web::AppState::new(1024 * 1024), None).unwrap();
+    let app = oxidepdf_web::router(
+        oxidepdf_web::AppState::new(1024 * 1024),
+        None,
+        oxidepdf_web::AllowedHosts::new(vec![]),
+    )
+    .unwrap();
     let boundary = "oxidepdf-boundary";
     let body = format!(
         "--{boundary}\r\n\
@@ -159,7 +179,12 @@ async fn router_rejects_uploads_without_supported_extension() {
 
 #[tokio::test]
 async fn router_serves_uploaded_svg_as_attachment_bytes() {
-    let app = oxidepdf_web::router(oxidepdf_web::AppState::new(1024 * 1024), None).unwrap();
+    let app = oxidepdf_web::router(
+        oxidepdf_web::AppState::new(1024 * 1024),
+        None,
+        oxidepdf_web::AllowedHosts::new(vec![]),
+    )
+    .unwrap();
     let boundary = "oxidepdf-boundary";
     let body = format!(
         "--{boundary}\r\n\
@@ -217,7 +242,57 @@ async fn router_serves_uploaded_svg_as_attachment_bytes() {
 fn router_rejects_overflowing_upload_body_limit() {
     let state = oxidepdf_web::AppState::with_upload_limit(1024 * 1024, u64::MAX);
 
-    let error = oxidepdf_web::router(state, None).unwrap_err();
+    let error =
+        oxidepdf_web::router(state, None, oxidepdf_web::AllowedHosts::new(vec![])).unwrap_err();
 
     assert!(error.contains("invalid upload body limit"));
+}
+
+#[tokio::test]
+async fn router_rejects_request_with_disallowed_host() {
+    // A DNS-rebinding attacker drives the local server with a Host header for a
+    // domain that is not in the allowlist. The default allowlist is loopback
+    // only, so this must be rejected before reaching any handler.
+    let app = oxidepdf_web::router(
+        oxidepdf_web::AppState::new(1024 * 1024),
+        None,
+        oxidepdf_web::AllowedHosts::new(vec![]),
+    )
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/schema")
+                .header(header::HOST, "attacker.example.com")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn router_allows_request_with_loopback_host() {
+    let app = oxidepdf_web::router(
+        oxidepdf_web::AppState::new(1024 * 1024),
+        None,
+        oxidepdf_web::AllowedHosts::new(vec![]),
+    )
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/schema")
+                .header(header::HOST, "127.0.0.1:19898")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
 }

@@ -89,30 +89,6 @@ fn single_pdf_document(
     }
 }
 
-fn single_pdf_document_for_inspect(
-    inputs: &[Artifact],
-    limits: &ResourceLimits,
-) -> Result<lopdf::Document, OxideError> {
-    match single_input(inputs, "operator requires exactly one PDF input")? {
-        Artifact::PdfObject(artifact) => {
-            let bytes = save_pdf((*artifact.document).clone())?;
-            enforce_input_bytes(bytes.len(), limits)?;
-            load_pdf(&bytes)
-        }
-        Artifact::Pdf(pdf) => {
-            enforce_input_bytes(pdf.bytes.len(), limits)?;
-            load_pdf(pdf.bytes.as_slice())
-        }
-        Artifact::Bytes(bytes) => {
-            enforce_input_bytes(bytes.bytes.len(), limits)?;
-            load_pdf(bytes.bytes.as_slice())
-        }
-        _ => Err(OxideError::InvalidInput {
-            reason: "expected PDF input artifact".to_owned(),
-        }),
-    }
-}
-
 fn two_pdf_inputs<'a>(
     inputs: &'a [Artifact],
     limits: &ResourceLimits,
@@ -130,14 +106,21 @@ fn two_pdf_inputs<'a>(
     Ok((left, right))
 }
 
-fn single_svg_input(inputs: &[Artifact]) -> Result<&[u8], OxideError> {
-    match single_input(inputs, "svg2pdf requires exactly one SVG input")? {
-        Artifact::Svg(svg) => Ok(&svg.bytes),
-        Artifact::Bytes(bytes) => Ok(&bytes.bytes),
-        _ => Err(OxideError::InvalidInput {
-            reason: "expected SVG input artifact".to_owned(),
-        }),
-    }
+fn single_svg_input<'a>(
+    inputs: &'a [Artifact],
+    limits: &ResourceLimits,
+) -> Result<&'a [u8], OxideError> {
+    let bytes = match single_input(inputs, "svg2pdf requires exactly one SVG input")? {
+        Artifact::Svg(svg) => &svg.bytes,
+        Artifact::Bytes(bytes) => &bytes.bytes,
+        _ => {
+            return Err(OxideError::InvalidInput {
+                reason: "expected SVG input artifact".to_owned(),
+            });
+        }
+    };
+    enforce_input_bytes(bytes.len(), limits)?;
+    Ok(bytes)
 }
 
 fn single_input<'a>(inputs: &'a [Artifact], reason: &str) -> Result<&'a Artifact, OxideError> {

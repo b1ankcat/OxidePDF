@@ -39,8 +39,24 @@ fn decode_image(input: &[u8]) -> Result<DecodedImage, OxideError> {
     })
 }
 
+fn image_dimensions(input: &[u8]) -> Result<(u32, u32), OxideError> {
+    let format = image::guess_format(input).map_err(|_| OxideError::ImageDecode)?;
+    match format {
+        image::ImageFormat::Jpeg | image::ImageFormat::Png | image::ImageFormat::WebP => {}
+        _ => return Err(OxideError::ImageDecode),
+    }
+    image::ImageReader::with_format(std::io::Cursor::new(input), format)
+        .into_dimensions()
+        .map_err(|_| OxideError::ImageDecode)
+}
+
 fn decode_limited_image(input: &[u8], limits: &ResourceLimits) -> Result<DecodedImage, OxideError> {
     enforce_input_bytes(input.len(), limits)?;
+    // Bound the true pixel count from the image header before decoding the full
+    // bitmap, so a small file declaring huge dimensions cannot force a multi-GB
+    // allocation during decode.
+    let (width, height) = image_dimensions(input)?;
+    enforce_max_pixels(u64::from(width) * u64::from(height), limits)?;
     let decoded = decode_image(input)?;
     let pixels = u64::from(decoded.width) * u64::from(decoded.height);
     enforce_max_pixels(pixels, limits)?;
@@ -84,8 +100,8 @@ fn write_images_pdf(images: &[DecodedImage], layout: ImageLayout) -> Result<Vec<
         page.finish();
 
         let mut image_object = pdf.image_xobject(*image_id, &image.rgb);
-        image_object.width(image.width as i32);
-        image_object.height(image.height as i32);
+        image_object.width(i32::try_from(image.width).map_err(|_| OxideError::WritePdf)?);
+        image_object.height(i32::try_from(image.height).map_err(|_| OxideError::WritePdf)?);
         image_object.color_space().device_rgb();
         image_object.bits_per_component(8);
         image_object.finish();
@@ -126,9 +142,19 @@ fn image_placement(image: &DecodedImage, layout: ImageLayout) -> (f32, f32, f32,
     }
 }
 
+#[allow(clippy::field_reassign_with_default)]
 fn parse_svg(input: &[u8]) -> Result<svg2pdf::usvg::Tree, OxideError> {
     ensure_svg_magic(input)?;
-    let options = svg2pdf::usvg::Options::default();
+    // usvg::Options is non-exhaustive, so we start from its default and override
+    // only the href resolver. Untrusted SVGs must not be able to read
+    // server-local files via `xlink:href` string references; usvg's default
+    // string resolver opens local file paths, so replace it with a no-op and
+    // keep only inline data-URI resolution.
+    let mut options = svg2pdf::usvg::Options::default();
+    options.image_href_resolver = svg2pdf::usvg::ImageHrefResolver {
+        resolve_string: Box::new(|_href, _opts| None),
+        ..Default::default()
+    };
     svg2pdf::usvg::Tree::from_data(input, &options).map_err(|_| OxideError::SvgParse)
 }
 

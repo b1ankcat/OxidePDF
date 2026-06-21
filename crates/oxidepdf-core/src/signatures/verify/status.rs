@@ -71,6 +71,7 @@ fn is_invalid_signature_diagnostic(diagnostic: &SignatureDiagnostic) -> bool {
         "missing_byte_range"
             | "byte_range_out_of_bounds"
             | "byte_range_not_ordered"
+            | "byte_range_not_full_coverage"
             | "missing_contents"
             | "contents_not_covered_by_gap"
     )

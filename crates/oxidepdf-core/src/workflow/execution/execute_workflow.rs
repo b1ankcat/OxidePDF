@@ -108,7 +108,7 @@ where
         .build(run_workflow_job::<R>)
         .stream();
 
-    while let Some(event) = worker.next().await {
+    while let Some(event) = next_event_within_deadline(&mut worker, started_at, timeout).await? {
         let event = match event {
             Ok(event) => event,
             Err(apalis::prelude::WorkerError::GracefulExit) => break,
@@ -138,6 +138,33 @@ where
 
     let mut state = state.lock().map_err(|_| OxideError::Internal)?;
     Ok(std::mem::take(&mut state.store))
+}
+
+/// Awaits the next worker event, but never past the workflow deadline. A task
+/// that panics resolves its `JoinHandle` to a `JoinError` without committing,
+/// which would otherwise leave the backend polling `Pending` forever; this hard
+/// wall-clock backstop guarantees the workflow terminates regardless.
+async fn next_event_within_deadline<S>(
+    worker: &mut S,
+    started_at: Instant,
+    timeout: Option<Duration>,
+) -> Result<Option<<S as futures_util::Stream>::Item>, OxideError>
+where
+    S: futures_util::Stream + Unpin,
+{
+    let Some(timeout) = timeout else {
+        return Ok(worker.next().await);
+    };
+    let Some(remaining) = timeout
+        .checked_sub(started_at.elapsed())
+        .filter(|left| !left.is_zero())
+    else {
+        return Err(resource_limit("timeout_ms"));
+    };
+    match tokio::time::timeout(remaining, worker.next()).await {
+        Ok(event) => Ok(event),
+        Err(_) => Err(resource_limit("timeout_ms")),
+    }
 }
 
 fn rate_limit_layer(

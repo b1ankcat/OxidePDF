@@ -68,6 +68,7 @@ async fn api_file(
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, ct.parse().unwrap());
     headers.insert(header::CONTENT_LENGTH, size.into());
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
     if ct == "application/octet-stream" {
         headers.insert(header::CONTENT_DISPOSITION, "attachment".parse().unwrap());
     }
@@ -86,6 +87,7 @@ async fn api_head_file(
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, stored.content_type.parse().unwrap());
     headers.insert(header::CONTENT_LENGTH, stored.size.into());
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
     if stored.content_type == "application/octet-stream" {
         headers.insert(header::CONTENT_DISPOSITION, "attachment".parse().unwrap());
     }
@@ -101,107 +103,11 @@ async fn api_delete_file(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Optional HTTP Basic credentials. When set, every request must present a
-/// matching `Authorization: Basic` header.
-#[derive(Clone)]
-pub struct Auth {
-    pub username: String,
-    pub password: String,
-}
-
-/// Constant-time string compare so credential checks don't leak length-prefix
-/// matches via timing. (Length itself is not hidden, which is fine here.)
-fn ct_eq(a: &str, b: &str) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.bytes()
-        .zip(b.bytes())
-        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-        == 0
-}
-
-/// 401 with a `WWW-Authenticate` challenge so browsers show a login prompt.
-fn unauthorized() -> Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        [(header::WWW_AUTHENTICATE, "Basic realm=\"oxidepdf-web\"")],
-        "unauthorized",
-    )
-        .into_response()
-}
-
-/// Middleware enforcing HTTP Basic auth against the configured credentials.
-async fn require_auth(State(auth): State<Auth>, request: Request, next: Next) -> Response {
-    let (mut parts, body) = request.into_parts();
-    let Ok(AuthBasic((user, pass))) = AuthBasic::from_request_parts(&mut parts, &()).await else {
-        return unauthorized();
-    };
-    let Some(pass) = pass else {
-        return unauthorized();
-    };
-    if ct_eq(&user, &auth.username) && ct_eq(&pass, &auth.password) {
-        next.run(Request::from_parts(parts, body)).await
-    } else {
-        unauthorized()
-    }
-}
-
-fn same_origin(headers: &HeaderMap) -> bool {
-    let Some((host, host_port)) = headers
-        .get(header::HOST)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| axum::http::Uri::try_from(format!("http://{value}")).ok())
-        .and_then(|uri| {
-            uri.authority()
-                .map(|authority| (authority.host().to_owned(), authority.port_u16()))
-        })
-    else {
-        return false;
-    };
-    let Some(origin) = headers
-        .get(header::ORIGIN)
-        .or_else(|| headers.get(header::REFERER))
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| axum::http::Uri::try_from(value).ok())
-    else {
-        return true;
-    };
-    let Some(origin_scheme) = origin.scheme_str() else {
-        return false;
-    };
-    if !matches!(origin_scheme, "http" | "https") {
-        return false;
-    }
-    let Some(origin_authority) = origin.authority() else {
-        return false;
-    };
-    let default_port = if origin_scheme.eq_ignore_ascii_case("https") {
-        443
-    } else {
-        80
-    };
-    let origin_port = origin_authority.port_u16().or(Some(default_port));
-    let host_port = host_port.or(Some(default_port));
-    origin_authority.host().eq_ignore_ascii_case(&host) && origin_port == host_port
-}
-
-async fn require_same_origin(request: Request, next: Next) -> Response {
-    if matches!(
-        *request.method(),
-        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
-    ) && !same_origin(request.headers())
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            "cross-origin state-changing request rejected",
-        )
-            .into_response();
-    }
-    next.run(request).await
-}
-
-pub fn router(state: AppState, auth: Option<Auth>) -> Result<Router, String> {
+pub fn router(
+    state: AppState,
+    auth: Option<Auth>,
+    allowed_hosts: AllowedHosts,
+) -> Result<Router, String> {
     let body_limit = match state.max_body_bytes() {
         Ok(limit) => match usize::try_from(limit) {
             Ok(limit) => limit,
@@ -221,7 +127,23 @@ pub fn router(state: AppState, auth: Option<Auth>) -> Result<Router, String> {
             get(api_file).head(api_head_file).delete(api_delete_file),
         )
         .layer(DefaultBodyLimit::max(body_limit))
-        .layer(middleware::from_fn(require_same_origin));
+        // Shed load past a fixed concurrency ceiling (503) instead of queueing
+        // unboundedly; each workflow can pin a blocking thread for its timeout.
+        // HandleErrorLayer maps the shed `Overloaded` error back into a response
+        // so the resulting service error stays `Infallible` for the router.
+        .layer(
+            tower::ServiceBuilder::new()
+                .layer(axum::error_handling::HandleErrorLayer::new(
+                    |_: tower::BoxError| async { StatusCode::SERVICE_UNAVAILABLE },
+                ))
+                .load_shed()
+                .concurrency_limit(MAX_CONCURRENT_REQUESTS),
+        )
+        .layer(middleware::from_fn(require_same_origin))
+        .layer(middleware::from_fn_with_state(
+            allowed_hosts,
+            require_allowed_host,
+        ));
     if let Some(auth) = auth {
         app = app.layer(middleware::from_fn_with_state(auth, require_auth));
     }

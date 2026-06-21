@@ -126,32 +126,40 @@ fn summarize_object_structure(document: &lopdf::Document) -> ObjectStructureSumm
     };
 
     for object in document.objects.values() {
-        count_object(object, &mut summary);
+        count_object(object, &mut summary, 0);
     }
 
     summary
 }
 
-fn count_object(object: &Object, summary: &mut ObjectStructureSummary) {
+/// Maximum inline object nesting traversed when summarizing structure. Beyond
+/// this depth the subtree is not counted, which bounds stack usage on a crafted
+/// deeply nested PDF object graph.
+const MAX_OBJECT_DEPTH: u32 = 256;
+
+fn count_object(object: &Object, summary: &mut ObjectStructureSummary, depth: u32) {
+    if depth >= MAX_OBJECT_DEPTH {
+        return;
+    }
     match object {
         Object::Array(items) => {
             summary.array_count += 1;
             for item in items {
-                count_object(item, summary);
+                count_object(item, summary, depth + 1);
             }
         }
         Object::Dictionary(dictionary) => {
             summary.dictionary_count += 1;
             count_named_type(dictionary, summary);
             for (_, value) in dictionary.iter() {
-                count_object(value, summary);
+                count_object(value, summary, depth + 1);
             }
         }
         Object::Stream(stream) => {
             summary.stream_count += 1;
             count_named_type(&stream.dict, summary);
             for (_, value) in stream.dict.iter() {
-                count_object(value, summary);
+                count_object(value, summary, depth + 1);
             }
         }
         Object::String(_, _) => summary.string_count += 1,

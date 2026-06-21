@@ -40,14 +40,18 @@ fn recompress_image_stream_to_jpeg(
     ensure_supported_image_dictionary(stream)?;
     let width = required_u32(stream, b"Width")?;
     let height = required_u32(stream, b"Height")?;
+    if width == 0 || height == 0 {
+        return Err(OxideError::InvalidInput {
+            reason: "image dimensions must be greater than zero".to_owned(),
+        });
+    }
     // Bound the decoded pixel count before allocating/decoding the payload, so a
     // small stream declaring huge dimensions cannot force a multi-GB allocation.
     enforce_max_pixels(u64::from(width) * u64::from(height), limits)?;
-    let mut image = image::RgbImage::from_raw(width, height, image_rgb_bytes(stream)?).ok_or(
-        OxideError::UnsupportedPdfFeature {
+    let mut image = image::RgbImage::from_raw(width, height, image_rgb_bytes(stream, limits)?)
+        .ok_or(OxideError::UnsupportedPdfFeature {
             feature: "image stream dimensions do not match RGB payload length".to_owned(),
-        },
-    )?;
+        })?;
 
     let (target_width, target_height) = target_image_size(width, height, options)?;
     if target_width != width || target_height != height {
@@ -123,7 +127,7 @@ fn ensure_supported_image_dictionary(stream: &Stream) -> Result<(), OxideError> 
     Ok(())
 }
 
-fn image_rgb_bytes(stream: &Stream) -> Result<Vec<u8>, OxideError> {
+fn image_rgb_bytes(stream: &Stream, limits: &ResourceLimits) -> Result<Vec<u8>, OxideError> {
     let filters = stream_filter_names(stream)?;
     match filters.as_deref() {
         None => Ok(stream.content.clone()),
@@ -131,6 +135,17 @@ fn image_rgb_bytes(stream: &Stream) -> Result<Vec<u8>, OxideError> {
             .get_plain_content()
             .map_err(|_| unsupported_stream_filter_error(stream)),
         Some([filter]) if filter.as_slice() == b"DCTDecode" => {
+            // The JPEG's own internal dimensions drive decode allocation, which
+            // can differ from the dictionary Width/Height. Probe the header and
+            // bound the true pixel count before decoding the full bitmap.
+            let reader = image::ImageReader::with_format(
+                Cursor::new(&stream.content),
+                image::ImageFormat::Jpeg,
+            );
+            let (jpeg_width, jpeg_height) = reader
+                .into_dimensions()
+                .map_err(|_| OxideError::ImageDecode)?;
+            enforce_max_pixels(u64::from(jpeg_width) * u64::from(jpeg_height), limits)?;
             let image =
                 image::load_from_memory_with_format(&stream.content, image::ImageFormat::Jpeg)
                     .map_err(|_| OxideError::ImageDecode)?;

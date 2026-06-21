@@ -156,6 +156,8 @@ pub struct ByteRangeVerification {
     pub in_bounds: bool,
     /// Whether the ranges are ordered and non-overlapping.
     pub ordered_non_overlapping: bool,
+    /// Whether the signed ranges together cover the entire document.
+    pub covers_whole_input: bool,
     /// Length of the unsigned gap between signed ranges.
     pub gap_len: Option<u64>,
     /// Total covered bytes.

@@ -13,6 +13,12 @@ pub const WORKFLOW_SCHEMA_VERSION: u16 = 1;
 pub const DEFAULT_MAX_WORKFLOW_TASKS: usize = 256;
 /// Default maximum number of workflow tasks that may run concurrently.
 pub const DEFAULT_MAX_PARALLEL_TASKS: usize = 8;
+/// Default maximum output size, in bytes. Bounds the artifact a workflow can
+/// emit so an untrusted entry point cannot produce an unbounded output.
+pub const DEFAULT_MAX_OUTPUT_BYTES: u64 = 512 * 1024 * 1024;
+/// Default workflow wall-clock backstop, in milliseconds. Ensures a stalled or
+/// runaway operator cannot run forever when no explicit timeout is supplied.
+pub const DEFAULT_TIMEOUT_MS: u64 = 5 * 60 * 1000;
 
 /// Supported workflow schema versions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,8 +171,8 @@ impl Default for ResourceLimits {
             max_total_input_bytes: Some(512 * 1024 * 1024),
             max_pages: Some(5_000),
             max_pixels: Some(160_000_000),
-            max_output_bytes: None,
-            timeout_ms: None,
+            max_output_bytes: Some(DEFAULT_MAX_OUTPUT_BYTES),
+            timeout_ms: Some(DEFAULT_TIMEOUT_MS),
             spill_threshold_bytes: Some(DEFAULT_SPILL_THRESHOLD_BYTES as u64),
             retry_attempts: None,
             rate_limit_per_second: None,

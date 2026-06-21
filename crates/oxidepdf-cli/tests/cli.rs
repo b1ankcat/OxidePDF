@@ -6,3 +6,4 @@
 mod common;
 include!("cli/clap_definition_is_valid.rs");
 include!("cli/pdf_parse_error_returns_input_exit_code_without_output.rs");
+include!("cli/stdin_and_help_guards.rs");

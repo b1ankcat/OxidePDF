@@ -16,7 +16,10 @@ pub fn validate_workflow(workflow: &Workflow) -> Result<ExecutionPlan, OxideErro
         .iter()
         .map(|output| output.id.clone())
         .collect::<BTreeSet<_>>();
-    let artifact_refs = ids.difference(&output_ids).cloned().collect::<BTreeSet<_>>();
+    let artifact_refs = ids
+        .difference(&output_ids)
+        .cloned()
+        .collect::<BTreeSet<_>>();
     validate_task_references(workflow, &artifact_refs)?;
     validate_output_references(workflow, &artifact_refs)?;
     let (task_order, layers) = build_execution_graph(workflow)?;

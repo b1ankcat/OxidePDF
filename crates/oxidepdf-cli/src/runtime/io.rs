@@ -5,7 +5,7 @@ use oxidepdf_core::{
     execute_workflow,
 };
 use std::fs;
-use std::io::{self, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
@@ -121,6 +121,18 @@ pub(crate) fn reject_shared_stdin_inputs(first: &Path, second: &Path) -> Result<
     Ok(())
 }
 
+/// Rejects a command that would feed the same stdin buffer to more than one
+/// input. Stdin can be consumed once, so multiple `-` inputs would silently read
+/// identical bytes; that is an error rather than a duplicate-input convenience.
+pub(crate) fn reject_multiple_stdin_inputs(paths: &[PathBuf]) -> Result<(), CliError> {
+    if paths.iter().filter(|path| is_stdio(path)).count() > 1 {
+        return Err(CliError::Workflow(
+            "a command cannot read more than one input from stdin ('-')".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn parse_workflow(bytes: &[u8], path: &Path) -> Result<Workflow, CliError> {
     if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
         serde_json::from_slice(bytes).map_err(|error| CliError::Workflow(error.to_string()))
@@ -136,7 +148,7 @@ pub(crate) fn load_inputs(
     let mut store = ArtifactStore::new();
     let mut total_input_bytes = 0u64;
     for input in &workflow.inputs {
-        let bytes = read_path_or_stdin(&input.path, stdin).map_err(CliError::Input)?;
+        let bytes = read_path_or_stdin(&input.path, stdin, &workflow.limits)?;
         enforce_cli_input_limits(bytes.len(), &mut total_input_bytes, &workflow.limits)?;
         store.insert(
             input.id.clone(),
@@ -193,11 +205,28 @@ pub(crate) fn write_outputs_with_stats(
     Ok(total_output_bytes)
 }
 
-pub(crate) fn read_path_or_stdin(path: &Path, stdin: &[u8]) -> io::Result<Vec<u8>> {
+pub(crate) fn read_path_or_stdin(
+    path: &Path,
+    stdin: &[u8],
+    limits: &ResourceLimits,
+) -> Result<Vec<u8>, CliError> {
     if is_stdio(path) {
+        // The stdin buffer was already bounded as it was read (see stdin.rs); the
+        // per-input limit is re-checked by the caller.
         Ok(stdin.to_vec())
     } else {
-        fs::read(path)
+        // Reject oversized files using the filesystem metadata before reading, so
+        // a huge file is never fully allocated just to be rejected afterwards.
+        let metadata = fs::metadata(path).map_err(CliError::Input)?;
+        if limits
+            .max_input_bytes
+            .is_some_and(|limit| metadata.len() > limit)
+        {
+            return Err(CliError::Core(OxideError::ResourceLimitExceeded {
+                limit: "max_input_bytes".to_owned(),
+            }));
+        }
+        fs::read(path).map_err(CliError::Input)
     }
 }
 

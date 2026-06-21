@@ -3,6 +3,7 @@ pub(crate) async fn run_img2pdf(
     stdin: &[u8],
     stdout: &mut impl Write,
 ) -> Result<(), CliError> {
+    reject_multiple_stdin_inputs(&args.inputs)?;
     let workflow = multi_input_workflow(
         args.inputs,
         args.output,
@@ -38,15 +39,21 @@ pub(crate) async fn run_watermark(
     stdout: &mut impl Write,
 ) -> Result<(), CliError> {
     let kind = parse_watermark_kind(&args.kind)?;
+    let watermark_input = if matches!(kind, WatermarkKind::Image | WatermarkKind::Svg) {
+        let watermark = args.watermark.ok_or_else(|| {
+            CliError::Workflow("image and SVG watermarks require --watermark".to_owned())
+        })?;
+        reject_shared_stdin_inputs(&args.input, &watermark)?;
+        Some(watermark)
+    } else {
+        None
+    };
     let mut input_specs = vec![oxidepdf_core::InputSpec {
         id: ArtifactRef::new("input"),
         path: args.input,
     }];
     let mut task_inputs = vec![ArtifactRef::new("input")];
-    if matches!(kind, WatermarkKind::Image | WatermarkKind::Svg) {
-        let watermark = args.watermark.ok_or_else(|| {
-            CliError::Workflow("image and SVG watermarks require --watermark".to_owned())
-        })?;
+    if let Some(watermark) = watermark_input {
         input_specs.push(oxidepdf_core::InputSpec {
             id: ArtifactRef::new("watermark_input"),
             path: watermark,

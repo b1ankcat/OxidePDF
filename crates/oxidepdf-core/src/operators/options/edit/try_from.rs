@@ -97,11 +97,19 @@ struct PdfEditOptionsDef {
     attachment: Option<AttachmentEditOptions>,
     annotation: Option<AnnotationEditOptions>,
     form_fill: Option<FormFillOptions>,
-    form_unlock_readonly: Option<()>,
-    form_remove: Option<()>,
+    form_unlock_readonly: Option<FlagMarker>,
+    form_remove: Option<FlagMarker>,
     interactive_remove: Option<InteractiveRemovalOptions>,
     compression: Option<CompressionOptions>,
 }
+
+/// Presence marker for parameterless operations. Serializes to and deserializes
+/// from an empty JSON object (`{}`), so a `Some(FlagMarker)` survives a
+/// serialize/deserialize roundtrip — unlike `Option<()>`, whose `Some(())`
+/// serializes to `null` and reads back as `None`, silently dropping the op.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FlagMarker {}
 
 impl TryFrom<PdfEditOptionsDef> for PdfEditOptions {
     type Error = OxideError;

@@ -6,3 +6,4 @@
 mod common;
 include!("signatures/signature_field_delete_refuses_signed_field_without_destructive_flag.rs");
 include!("signatures/verify_pdf_signatures_reports_malformed_byte_range_as_invalid.rs");
+include!("signatures/verify_pdf_signatures_rejects_appended_bytes_after_signed_ranges.rs");

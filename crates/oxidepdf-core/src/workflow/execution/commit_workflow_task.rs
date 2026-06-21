@@ -11,11 +11,16 @@ fn commit_workflow_task(
         .store
         .insert(ArtifactRef::new(task.id.as_str()), artifact);
     evict_consumed_artifacts(workflow, state, &task);
-    state.remaining -= 1;
+    state.remaining = state
+        .remaining
+        .checked_sub(1)
+        .ok_or(OxideError::Internal)?;
 
     let mut ready = Vec::new();
     for &dependent in &state.dependents[task_index] {
-        state.remaining_deps[dependent] -= 1;
+        state.remaining_deps[dependent] = state.remaining_deps[dependent]
+            .checked_sub(1)
+            .ok_or(OxideError::Internal)?;
         if state.remaining_deps[dependent] == 0 {
             ready.push(dependent);
         }

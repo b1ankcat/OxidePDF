@@ -16,18 +16,14 @@ fn byte_range_verification(
             values: None,
             in_bounds: false,
             ordered_non_overlapping: false,
+            covers_whole_input: false,
             gap_len: None,
             covered_len: None,
         };
     };
     let [first_start, first_len, second_start, second_len] = values;
-    let research = byte_range_research(
-        first_start,
-        first_len,
-        second_start,
-        second_len,
-        input.len() as u64,
-    );
+    let input_len = input.len() as u64;
+    let research = byte_range_research(first_start, first_len, second_start, second_len, input_len);
     if !research.in_bounds {
         diagnostics.push(signature_diagnostic(
             "byte_range_out_of_bounds",
@@ -40,11 +36,26 @@ fn byte_range_verification(
             "ByteRange entries are not ordered and non-overlapping",
         ));
     }
+    // The two signed ranges must span the entire document: the first range must
+    // start at byte 0 and the second range must end exactly at end-of-file. Any
+    // bytes before the first range or after the second range are unsigned and
+    // would let an attacker append or prepend arbitrary content while keeping a
+    // valid signature over the original bytes (signature-wrapping attack).
+    let second_end = second_start.checked_add(second_len);
+    let covers_whole_input =
+        first_start == 0 && second_end.is_some_and(|end| end == input_len);
+    if research.in_bounds && research.ordered_non_overlapping && !covers_whole_input {
+        diagnostics.push(signature_diagnostic(
+            "byte_range_not_full_coverage",
+            "ByteRange does not cover the whole document; unsigned bytes are present outside the signed ranges",
+        ));
+    }
 
     ByteRangeVerification {
         values: Some(values),
         in_bounds: research.in_bounds,
         ordered_non_overlapping: research.ordered_non_overlapping,
+        covers_whole_input,
         gap_len: research.gap_len,
         covered_len: research.covered_len,
     }
@@ -69,13 +80,21 @@ fn contents_verification(
             covered_by_gap: false,
         };
     };
-    let covered_by_gap = byte_range
-        .gap_len
-        .is_some_and(|gap_len| gap_len >= byte_len as u64);
+    // The unsigned gap between the two signed ranges must contain exactly the
+    // hexadecimal Contents string token and nothing else: `<` + 2 hex digits per
+    // content byte + `>`. A gap larger than that token leaves room for unsigned
+    // bytes inside the document, so we require an exact match rather than `>=`.
+    let expected_gap = (byte_len as u64)
+        .checked_mul(2)
+        .and_then(|hex_len| hex_len.checked_add(2));
+    let covered_by_gap = match (byte_range.gap_len, expected_gap) {
+        (Some(gap_len), Some(expected_gap)) => gap_len == expected_gap,
+        _ => false,
+    };
     if !covered_by_gap {
         diagnostics.push(signature_diagnostic(
             "contents_not_covered_by_gap",
-            "signature Contents is larger than the unsigned ByteRange gap",
+            "signature Contents does not exactly fill the unsigned ByteRange gap",
         ));
     }
 

@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use clap::Parser;
-use oxidepdf_web::{Auth, DEFAULT_MAX_UPLOAD_BYTES, parse_size};
+use oxidepdf_web::{AllowedHosts, Auth, DEFAULT_MAX_UPLOAD_BYTES, parse_size};
 use std::net::{IpAddr, SocketAddr};
 
 /// Web front end for OxidePDF.
@@ -45,6 +45,15 @@ struct Cli {
     /// address. Use only behind a trusted network boundary.
     #[arg(long, env = "OXIDEPDF_ALLOW_UNAUTH_NETWORK", default_value_t = false)]
     allow_unauth_network: bool,
+    /// Host names accepted in the request `Host` header (repeatable). Defaults
+    /// to loopback names; set this when serving under a real hostname so DNS
+    /// rebinding to the bound address is rejected.
+    #[arg(
+        long = "allowed-host",
+        env = "OXIDEPDF_ALLOWED_HOSTS",
+        value_delimiter = ','
+    )]
+    allowed_hosts: Vec<String>,
 }
 
 #[tokio::main]
@@ -73,7 +82,8 @@ async fn main() {
 
     let state = oxidepdf_web::AppState::with_upload_limit(cli.max_storage, cli.max_upload);
     state.spawn_sweeper();
-    let app = match oxidepdf_web::router(state, auth.clone()) {
+    let allowed_hosts = AllowedHosts::new(cli.allowed_hosts);
+    let app = match oxidepdf_web::router(state, auth.clone(), allowed_hosts) {
         Ok(app) => app,
         Err(error) => {
             eprintln!("error: {error}");

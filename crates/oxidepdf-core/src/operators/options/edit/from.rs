@@ -99,11 +99,11 @@ impl From<PdfEditOptions> for PdfEditOptionsDef {
                 ..Self::default()
             },
             PdfEditOptions::FormUnlockReadonly => Self {
-                form_unlock_readonly: Some(()),
+                form_unlock_readonly: Some(FlagMarker::default()),
                 ..Self::default()
             },
             PdfEditOptions::FormRemove => Self {
-                form_remove: Some(()),
+                form_remove: Some(FlagMarker::default()),
                 ..Self::default()
             },
             PdfEditOptions::InteractiveRemove(options) => Self {
@@ -115,5 +115,30 @@ impl From<PdfEditOptions> for PdfEditOptionsDef {
                 ..Self::default()
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parameterless_form_ops_survive_serde_roundtrip() {
+        for op in [
+            PdfEditOptions::FormUnlockReadonly,
+            PdfEditOptions::FormRemove,
+        ] {
+            let json = serde_json::to_string(&op).unwrap();
+            let parsed: PdfEditOptions = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, op, "roundtrip changed the operation: {json}");
+        }
+    }
+
+    #[test]
+    fn form_unlock_readonly_serializes_as_empty_object_not_null() {
+        let json = serde_json::to_string(&PdfEditOptions::FormUnlockReadonly).unwrap();
+        // The marker must serialize as `{}`, not `null`; `null` would read back
+        // as `None` and drop the operation.
+        assert!(json.contains("\"form_unlock_readonly\":{}"), "{json}");
     }
 }

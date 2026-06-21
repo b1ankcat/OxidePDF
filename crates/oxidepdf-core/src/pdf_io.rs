@@ -186,6 +186,24 @@ pub(crate) fn remap_imported_references(
     target: &mut lopdf::Document,
     imported: &mut BTreeMap<lopdf::ObjectId, lopdf::ObjectId>,
 ) -> Result<(), OxideError> {
+    remap_imported_references_depth(object, source, target, imported, 0)
+}
+
+/// Maximum inline object nesting traversed when importing references between
+/// documents. Cycles across indirect objects are already broken by `imported`;
+/// this bounds stack usage on deeply nested inline arrays/dictionaries.
+const MAX_IMPORT_DEPTH: u32 = 256;
+
+fn remap_imported_references_depth(
+    object: &mut Object,
+    source: &lopdf::Document,
+    target: &mut lopdf::Document,
+    imported: &mut BTreeMap<lopdf::ObjectId, lopdf::ObjectId>,
+    depth: u32,
+) -> Result<(), OxideError> {
+    if depth >= MAX_IMPORT_DEPTH {
+        return Err(OxideError::ParsePdf);
+    }
     match object {
         Object::Reference(source_id) => {
             let target_id = import_indirect_object(*source_id, source, target, imported)?;
@@ -193,17 +211,17 @@ pub(crate) fn remap_imported_references(
         }
         Object::Array(items) => {
             for item in items {
-                remap_imported_references(item, source, target, imported)?;
+                remap_imported_references_depth(item, source, target, imported, depth + 1)?;
             }
         }
         Object::Dictionary(dictionary) => {
             for (_, value) in dictionary.iter_mut() {
-                remap_imported_references(value, source, target, imported)?;
+                remap_imported_references_depth(value, source, target, imported, depth + 1)?;
             }
         }
         Object::Stream(stream) => {
             for (_, value) in stream.dict.iter_mut() {
-                remap_imported_references(value, source, target, imported)?;
+                remap_imported_references_depth(value, source, target, imported, depth + 1)?;
             }
         }
         _ => {}

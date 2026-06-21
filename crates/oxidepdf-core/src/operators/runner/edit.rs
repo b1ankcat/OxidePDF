@@ -76,7 +76,7 @@ pub(crate) fn run_pdf_edit(
             image_artifacts_to_pdf(inputs, options, limits).map(Artifact::Pdf)
         }
         PdfEditOptions::SvgToPdf(options) => {
-            let input = single_svg_input(inputs)?;
+            let input = single_svg_input(inputs, limits)?;
             svg_to_pdf(input, options, limits).map(Artifact::Pdf)
         }
         PdfEditOptions::Watermark(options) => {

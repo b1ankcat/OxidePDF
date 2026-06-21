@@ -9,6 +9,7 @@ const APP_JS: &str = include_str!("../static/app.js");
 include!("lib/parse_size.rs");
 include!("lib/blocking_io.rs");
 include!("lib/run_workflow.rs");
+include!("lib/web_security.rs");
 include!("lib/api_execute_workflow.rs");
 
 #[cfg(test)]

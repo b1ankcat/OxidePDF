@@ -51,8 +51,9 @@ fn keep_pages(document: &mut lopdf::Document, selected_pages: &[u32]) -> Result<
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    let selected_set: std::collections::HashSet<u32> = selected_pages.iter().copied().collect();
     let mut delete_pages = (1..=page_count)
-        .filter(|page| !selected_pages.contains(page))
+        .filter(|page| !selected_set.contains(page))
         .collect::<Vec<_>>();
     delete_pages.sort_unstable_by(|left, right| right.cmp(left));
     document.delete_pages(&delete_pages);
@@ -67,7 +68,7 @@ fn merge_documents(documents: Vec<lopdf::Document>) -> Result<lopdf::Document, O
 
     for mut document in documents {
         document.renumber_objects_with(next_id);
-        next_id = document.max_id + 1;
+        next_id = document.max_id.checked_add(1).ok_or(OxideError::ParsePdf)?;
 
         for page_id in document.get_pages().into_values() {
             let page = document

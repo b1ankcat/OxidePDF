@@ -8,18 +8,34 @@ fn cms_certificate_chain_status(
             "no explicit trust anchors were provided",
         );
     }
-    let Some(signer_info) = signed_data.signer_infos.0.iter().next() else {
-        return signature_check(
-            SignatureCheckState::Failed,
-            "CMS SignedData contains no signerInfo entries",
-        );
-    };
     let Some(certificates) = signed_data.certificates.as_ref() else {
         return signature_check(
             SignatureCheckState::Failed,
             "CMS SignedData contains no embedded certificates",
         );
     };
+    // Validate the chain for every signerInfo, not just the first: a multi-signer
+    // CMS must have *all* signers chain to a trust anchor before the overall
+    // verdict can be trusted. The worst per-signer status wins.
+    signed_data
+        .signer_infos
+        .0
+        .iter()
+        .map(|signer_info| one_signer_chain_status(signer_info, certificates, trust_anchors))
+        .reduce(worst_check)
+        .unwrap_or_else(|| {
+            signature_check(
+                SignatureCheckState::Failed,
+                "CMS SignedData contains no signerInfo entries",
+            )
+        })
+}
+
+fn one_signer_chain_status(
+    signer_info: &cms::signed_data::SignerInfo,
+    certificates: &cms::signed_data::CertificateSet,
+    trust_anchors: &TrustAnchors,
+) -> SignatureCheckStatus {
     let Some(signer_certificate) = signer_certificate(certificates, &signer_info.sid) else {
         return signature_check(
             SignatureCheckState::Failed,
@@ -34,6 +50,10 @@ fn cms_certificate_chain_status(
         CertificatePathStatus::InvalidSignature => signature_check(
             SignatureCheckState::Failed,
             "certificate chain signature verification failed",
+        ),
+        CertificatePathStatus::Expired => signature_check(
+            SignatureCheckState::Failed,
+            "certificate in the chain is outside its validity period",
         ),
         CertificatePathStatus::UnsupportedAlgorithm(oid) => signature_check(
             SignatureCheckState::Unsupported,
@@ -53,6 +73,7 @@ fn cms_certificate_chain_status(
 enum CertificatePathStatus {
     ChainsToTrustAnchor,
     InvalidSignature,
+    Expired,
     UnsupportedAlgorithm(const_oid::ObjectIdentifier),
     NoIssuer,
     UntrustedIssuer,
@@ -63,11 +84,15 @@ fn verify_certificate_path(
     certificates: &cms::signed_data::CertificateSet,
     trust_anchors: &TrustAnchors,
 ) -> CertificatePathStatus {
+    let now = std::time::SystemTime::now();
     let mut current = signer_certificate;
     // Number of intermediate CA certificates traversed so far, used to enforce
     // each issuer's pathLenConstraint.
     let mut intermediates_seen = 0u32;
     for _ in 0..=certificates.0.len() {
+        if !certificate_is_time_valid(current, now) {
+            return CertificatePathStatus::Expired;
+        }
         if let Some(anchor) = trust_anchors
             .certificates
             .iter()
@@ -77,6 +102,9 @@ fn verify_certificate_path(
             // its pathLenConstraint must allow the intermediates below it.
             if !issuer_is_valid_ca(anchor, intermediates_seen) {
                 return CertificatePathStatus::UntrustedIssuer;
+            }
+            if !certificate_is_time_valid(anchor, now) {
+                return CertificatePathStatus::Expired;
             }
             return match verify_certificate_signature(current, anchor) {
                 SignatureCheckState::Passed => CertificatePathStatus::ChainsToTrustAnchor,
@@ -163,6 +191,15 @@ fn issuer_is_valid_ca(issuer: &Certificate, intermediates_below: u32) -> bool {
         Some(max) => u32::from(max) >= intermediates_below,
         None => true,
     }
+}
+
+/// Returns true if `now` falls within the certificate's notBefore..notAfter
+/// validity window. Expired or not-yet-valid certificates are rejected.
+fn certificate_is_time_valid(certificate: &Certificate, now: std::time::SystemTime) -> bool {
+    let validity = &certificate.tbs_certificate.validity;
+    let not_before = validity.not_before.to_system_time();
+    let not_after = validity.not_after.to_system_time();
+    now >= not_before && now <= not_after
 }
 
 fn verify_certificate_signature(

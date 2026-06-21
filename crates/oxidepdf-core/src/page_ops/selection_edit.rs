@@ -109,10 +109,10 @@ pub(crate) fn rotate_on_document(
             .get(b"Rotate")
             .and_then(lopdf::Object::as_i64)
             .unwrap_or(0);
-        page_dict.set(
-            "Rotate",
-            (current_rotation + i64::from(degrees)).rem_euclid(360),
-        );
+        // Normalize the existing rotation before adding the requested delta so an
+        // attacker-controlled /Rotate near i64::MAX cannot overflow the addition.
+        let normalized = current_rotation.rem_euclid(360) + i64::from(degrees);
+        page_dict.set("Rotate", normalized.rem_euclid(360));
     }
 
     Ok(())

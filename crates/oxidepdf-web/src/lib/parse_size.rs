@@ -46,6 +46,11 @@ const WEB_WORKFLOW_TIMEOUT_MS: u64 = 120_000;
 /// Upper bound on the number of artifacts (uploads + results) retained in
 /// memory at once. The oldest are evicted first once exceeded.
 const MAX_ARTIFACTS: usize = 256;
+/// Maximum number of requests processed concurrently across the whole server.
+/// Each workflow request can pin blocking threads for the workflow timeout, so
+/// this bounds thread-pool and CPU pressure; excess requests are load-shed with
+/// 503 rather than queueing unboundedly.
+const MAX_CONCURRENT_REQUESTS: usize = 64;
 /// Default ceiling on the total on-disk size of retained artifacts when none is
 /// configured. The oldest are evicted first once exceeded.
 const DEFAULT_MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -194,9 +199,9 @@ impl Store {
     /// the TTL sweep, so a frequently-read old artifact can still be evicted
     /// under capacity pressure.
     fn insert(&mut self, id: String, artifact: StoredArtifact) {
-        self.total_bytes += artifact.size;
+        self.total_bytes = self.total_bytes.saturating_add(artifact.size);
         if let Some(old) = self.artifacts.insert(id, artifact) {
-            self.total_bytes -= old.size;
+            self.total_bytes = self.total_bytes.saturating_sub(old.size);
         }
         while self.artifacts.len() > MAX_ARTIFACTS || self.total_bytes > self.max_total_bytes {
             let Some(oldest) = self
@@ -214,7 +219,7 @@ impl Store {
     fn remove(&mut self, id: &str) -> Option<StoredArtifact> {
         let removed = self.artifacts.remove(id);
         if let Some(a) = &removed {
-            self.total_bytes -= a.size;
+            self.total_bytes = self.total_bytes.saturating_sub(a.size);
         }
         removed
     }

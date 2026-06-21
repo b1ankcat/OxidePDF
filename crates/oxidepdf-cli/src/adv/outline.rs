@@ -20,7 +20,8 @@ pub(crate) async fn run_outline(
         .await,
         OutlineCommand::Set(args) => {
             reject_shared_stdin_inputs(&args.input, &args.tree)?;
-            let tree_bytes = read_path_or_stdin(&args.tree, stdin).map_err(CliError::Input)?;
+            let tree_bytes =
+                read_path_or_stdin(&args.tree, stdin, &ResourceLimits::default())?;
             let tree: OutlineTree = serde_json::from_slice(&tree_bytes)
                 .map_err(|error| CliError::Workflow(error.to_string()))?;
             execute_and_write_workflow(

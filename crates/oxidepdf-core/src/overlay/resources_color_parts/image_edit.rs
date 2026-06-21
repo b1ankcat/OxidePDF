@@ -8,6 +8,11 @@ fn append_xobject_watermark(
     settings: WatermarkSettings,
 ) -> Result<(), OxideError> {
     let gs_id = graphics_state(document, settings.opacity);
+    if natural_width <= 0.0 || natural_height <= 0.0 {
+        return Err(OxideError::InvalidInput {
+            reason: "watermark image dimensions must be greater than zero".to_owned(),
+        });
+    }
     let page_map = document.get_pages();
     for page_number in pages {
         let page_id = *page_map
@@ -59,11 +64,17 @@ fn add_image_to_page(
             reason: format!("page {page} is out of range"),
         })?;
     let image_id = document.add_object(image_xobject(image));
+    if image.width == 0 || image.height == 0 {
+        return Err(OxideError::InvalidInput {
+            reason: "image dimensions must be greater than zero".to_owned(),
+        });
+    }
+    let safe_name = sanitize_pdf_name(name);
     add_resource_dict_entry(
         document,
         page_id,
         b"XObject",
-        name.as_bytes().to_vec(),
+        safe_name.clone(),
         Object::Reference(image_id),
     )?;
     let (page_width, page_height) = page_size(document, page_id)?;
@@ -73,7 +84,7 @@ fn add_image_to_page(
     let width = image.width as f32 * scale;
     let height = image.height as f32 * scale;
     let content = xobject_watermark_content(
-        name.as_bytes(),
+        &safe_name,
         WatermarkSettings {
             opacity: 1.0,
             rotation_degrees: 0.0,
@@ -96,9 +107,10 @@ fn replace_image_resource(
     name: &str,
     image: &DecodedImage,
 ) -> Result<(), OxideError> {
+    let safe_name = sanitize_pdf_name(name);
     let mut replaced = false;
     for (_, page_id) in document.get_pages() {
-        let Some(id) = page_xobject_reference(document, page_id, name.as_bytes())? else {
+        let Some(id) = page_xobject_reference(document, page_id, &safe_name)? else {
             continue;
         };
         let stream = document
@@ -117,6 +129,7 @@ fn replace_image_resource(
 }
 
 fn delete_image_resource(document: &mut lopdf::Document, name: &str) -> Result<(), OxideError> {
+    let safe_name = sanitize_pdf_name(name);
     let mut removed = false;
     for page_id in document.get_pages().into_values() {
         let resources = document
@@ -124,7 +137,7 @@ fn delete_image_resource(document: &mut lopdf::Document, name: &str) -> Result<(
             .and_then(Object::as_dict_mut)
             .map_err(|_| OxideError::ParsePdf)?;
         if let Some(xobjects) = optional_xobject_dict_mut(resources)? {
-            removed |= xobjects.remove(name.as_bytes()).is_some();
+            removed |= xobjects.remove(&safe_name).is_some();
         }
     }
     if !removed {

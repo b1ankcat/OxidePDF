@@ -9,6 +9,7 @@ pub(crate) fn parse_page_range(pages: &str, page_count: u32) -> Result<Vec<u32>,
     }
 
     let mut selected = Vec::new();
+    let mut seen = BTreeSet::new();
     for part in pages.split(',') {
         let part = part.trim();
         if part.is_empty() {
@@ -25,19 +26,35 @@ pub(crate) fn parse_page_range(pages: &str, page_count: u32) -> Result<Vec<u32>,
                     reason: format!("page range '{part}' must be ascending"),
                 });
             }
-            selected.extend(start..=end);
+            for page in start..=end {
+                push_unique(&mut selected, &mut seen, page)?;
+            }
         } else {
-            selected.push(parse_page_number(part, page_count)?);
+            push_unique(
+                &mut selected,
+                &mut seen,
+                parse_page_number(part, page_count)?,
+            )?;
         }
     }
-    let unique_pages = selected.iter().copied().collect::<BTreeSet<_>>();
-    if unique_pages.len() != selected.len() {
+
+    Ok(selected)
+}
+
+/// Appends `page` to `selected`, rejecting duplicates as they are seen so a
+/// crafted range like `1-N,1-N` cannot allocate more than `page_count` entries.
+fn push_unique(
+    selected: &mut Vec<u32>,
+    seen: &mut BTreeSet<u32>,
+    page: u32,
+) -> Result<(), OxideError> {
+    if !seen.insert(page) {
         return Err(OxideError::InvalidInput {
             reason: "page range must not contain duplicate pages".to_owned(),
         });
     }
-
-    Ok(selected)
+    selected.push(page);
+    Ok(())
 }
 
 fn parse_page_number(value: &str, page_count: u32) -> Result<u32, OxideError> {
@@ -87,6 +104,14 @@ mod tests {
     #[test]
     fn parse_page_range_rejects_duplicate_pages() {
         let error = parse_page_range("1,1", 3).unwrap_err();
+        assert!(matches!(error, OxideError::InvalidInput { .. }));
+    }
+
+    #[test]
+    fn parse_page_range_rejects_overlapping_ranges_before_full_expansion() {
+        // Overlapping ranges must be rejected on the first duplicate rather than
+        // expanding both ranges in full first.
+        let error = parse_page_range("1-3,2-3", 3).unwrap_err();
         assert!(matches!(error, OxideError::InvalidInput { .. }));
     }
 

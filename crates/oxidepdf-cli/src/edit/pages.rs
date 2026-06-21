@@ -3,6 +3,7 @@ pub(crate) async fn run_merge(
     stdin: &[u8],
     stdout: &mut impl Write,
 ) -> Result<(), CliError> {
+    reject_multiple_stdin_inputs(&args.inputs)?;
     let workflow = multi_input_workflow(
         args.inputs,
         args.output,

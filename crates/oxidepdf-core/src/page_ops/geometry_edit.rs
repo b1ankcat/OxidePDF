@@ -130,7 +130,7 @@ pub(crate) fn single_page_on_document(
 ) -> Result<(), OxideError> {
     let page_ids = document.get_pages().into_values().collect::<Vec<_>>();
     enforce_max_pages(page_ids.len(), limits)?;
-    if page_ids.len() == 1 {
+    if page_ids.len() < 2 {
         return Err(OxideError::InvalidInput {
             reason: "single_page requires at least two pages".to_owned(),
         });
@@ -147,6 +147,9 @@ pub(crate) fn single_page_on_document(
         max_width = max_width.max(width);
         total_height += height;
         page_sizes.push((width, height));
+    }
+    if !max_width.is_finite() || !total_height.is_finite() {
+        return Err(OxideError::ParsePdf);
     }
 
     let first_page = page_ids[0];

@@ -156,9 +156,10 @@ async fn help_returns_success_exit_code() {
     let code = run_with_io(["oxidepdf", "--help"], [], &mut stdout, &mut stderr).await;
 
     assert_eq!(code, 0);
-    assert_eq!(stdout, b"");
+    // Help is normal output and belongs on stdout, not stderr.
+    assert!(stderr.is_empty());
     assert!(
-        String::from_utf8(stderr)
+        String::from_utf8(stdout)
             .unwrap()
             .contains("Usage: oxidepdf")
     );

@@ -14,8 +14,7 @@ pub fn image_artifacts_to_pdf(
     let mut total_pixels = 0u64;
     for input in inputs {
         let bytes = image_bytes(input)?;
-        enforce_input_bytes(bytes.len(), limits)?;
-        let decoded = decode_image(bytes)?;
+        let decoded = decode_limited_image(bytes, limits)?;
         let pixels = u64::from(decoded.width) * u64::from(decoded.height);
         total_pixels = total_pixels
             .checked_add(pixels)
@@ -100,6 +99,20 @@ pub fn render_pdf_page(
         .ok_or_else(|| OxideError::InvalidInput {
             reason: format!("page {} is out of range 1-{page_count}", options.page),
         })?;
+
+    // Bound the scaled output resolution before rendering so a large scale (or a
+    // huge MediaBox) cannot force the renderer to allocate a giant pixmap. The
+    // pixel budget runs against the requested scale, not just the output PNG.
+    let (page_width, page_height) = page.render_dimensions();
+    let scaled_width = f64::from(page_width) * f64::from(scale);
+    let scaled_height = f64::from(page_height) * f64::from(scale);
+    if !scaled_width.is_finite() || !scaled_height.is_finite() {
+        return Err(OxideError::InvalidInput {
+            reason: "render scale produces non-finite output dimensions".to_owned(),
+        });
+    }
+    let scaled_pixels = (scaled_width.ceil() as u64).saturating_mul(scaled_height.ceil() as u64);
+    enforce_max_pixels(scaled_pixels, limits)?;
 
     let cache = hayro::RenderCache::new();
     let interpreter_settings = hayro::hayro_interpret::InterpreterSettings::default();

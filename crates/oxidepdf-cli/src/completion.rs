@@ -1,4 +1,5 @@
 use super::*;
+use tempfile::NamedTempFile;
 
 pub(crate) fn run_completion(
     command: CompletionCommand,
@@ -17,7 +18,7 @@ pub(crate) fn run_bash_completion(
     write_bash_completion(&mut bytes);
 
     if let Some(path) = args.output {
-        write_completion_file(&path, &bytes, args.force).map_err(CliError::Io)?;
+        write_completion_file(&path, &bytes, args.force)?;
         return Ok(());
     }
 
@@ -29,15 +30,14 @@ pub(crate) fn write_bash_completion(output: &mut impl Write) {
     generate(Bash, &mut command, "oxidepdf", output);
 }
 
-pub(crate) fn write_completion_file(path: &Path, bytes: &[u8], force: bool) -> io::Result<()> {
-    if path.exists() && !force {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "output file already exists; pass --force to overwrite it",
-        ));
-    }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, bytes)
+pub(crate) fn write_completion_file(path: &Path, bytes: &[u8], force: bool) -> Result<(), CliError> {
+    // Use the same atomic, symlink-safe, clobber-checked write path as every
+    // other CLI output instead of a racy exists()+write that follows symlinks.
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut file = NamedTempFile::new_in(parent).map_err(CliError::Io)?;
+    file.write_all(bytes).map_err(CliError::Io)?;
+    persist_output_file(file, path, force)
 }

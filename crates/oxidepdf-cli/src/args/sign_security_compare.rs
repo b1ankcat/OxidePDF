@@ -117,13 +117,23 @@ struct SecurityEncryptArgs {
     #[arg(short, long)]
     output: PathBuf,
 
-    /// Owner password used to control future permission changes.
+    /// Owner password used to control future permission changes. Prefer
+    /// `--owner-password-file` to keep secrets out of the process argument list.
     #[arg(long)]
-    owner_password: String,
+    owner_password: Option<String>,
 
-    /// User password required to open the document.
+    /// Read the owner password from a file (its trimmed contents).
     #[arg(long)]
-    user_password: String,
+    owner_password_file: Option<PathBuf>,
+
+    /// User password required to open the document. Prefer
+    /// `--user-password-file` to keep secrets out of the process argument list.
+    #[arg(long)]
+    user_password: Option<String>,
+
+    /// Read the user password from a file (its trimmed contents).
+    #[arg(long)]
+    user_password_file: Option<PathBuf>,
 
     #[command(flatten)]
     permissions: PermissionArgs,
@@ -142,9 +152,14 @@ struct SecurityDecryptArgs {
     #[arg(short, long)]
     output: PathBuf,
 
-    /// Owner or user password.
+    /// Owner or user password. Prefer `--password-file` to keep secrets out of
+    /// the process argument list.
     #[arg(long)]
-    password: String,
+    password: Option<String>,
+
+    /// Read the password from a file (its trimmed contents).
+    #[arg(long)]
+    password_file: Option<PathBuf>,
 
     /// Overwrite output files when they already exist.
     #[arg(long)]
@@ -164,6 +179,10 @@ struct PermissionsGetArgs {
     #[arg(long)]
     password: Option<String>,
 
+    /// Read the password from a file (its trimmed contents).
+    #[arg(long)]
+    password_file: Option<PathBuf>,
+
     /// Overwrite output files when they already exist.
     #[arg(long)]
     force: bool,
@@ -178,13 +197,23 @@ struct PermissionsSetArgs {
     #[arg(short, long)]
     output: PathBuf,
 
-    /// Existing owner password for encrypted PDFs and owner password for the output PDF.
+    /// Existing owner password for encrypted PDFs and owner password for the
+    /// output PDF. Prefer `--owner-password-file` to keep secrets out of argv.
     #[arg(long)]
-    owner_password: String,
+    owner_password: Option<String>,
 
-    /// User password required to open the output document.
+    /// Read the owner password from a file (its trimmed contents).
     #[arg(long)]
-    user_password: String,
+    owner_password_file: Option<PathBuf>,
+
+    /// User password required to open the output document. Prefer
+    /// `--user-password-file` to keep secrets out of argv.
+    #[arg(long)]
+    user_password: Option<String>,
+
+    /// Read the user password from a file (its trimmed contents).
+    #[arg(long)]
+    user_password_file: Option<PathBuf>,
 
     #[command(flatten)]
     permissions: PermissionArgs,

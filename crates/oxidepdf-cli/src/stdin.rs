@@ -7,15 +7,30 @@ where
 {
     let cli = Cli::try_parse_from(args).map_err(CliError::Arguments)?;
     if cli_reads_stdin(&cli) {
-        let mut stdin_buffer = Vec::new();
-        io::stdin()
-            .lock()
-            .read_to_end(&mut stdin_buffer)
-            .map_err(CliError::Input)?;
-        Ok(stdin_buffer)
+        read_stdin_bounded()
     } else {
         Ok(Vec::new())
     }
+}
+
+/// Reads all of stdin, but never more than the default input-byte ceiling, so a
+/// `-` input cannot exhaust memory before per-input limits are consulted. The
+/// per-input/total limits are re-checked once the workflow limits are known.
+fn read_stdin_bounded() -> Result<Vec<u8>, CliError> {
+    let limit = ResourceLimits::default()
+        .max_input_bytes
+        .unwrap_or(u64::MAX);
+    let mut stdin_buffer = Vec::new();
+    let mut limited = io::stdin().lock().take(limit.saturating_add(1));
+    limited
+        .read_to_end(&mut stdin_buffer)
+        .map_err(CliError::Input)?;
+    if stdin_buffer.len() as u64 > limit {
+        return Err(CliError::Core(OxideError::ResourceLimitExceeded {
+            limit: "max_input_bytes".to_owned(),
+        }));
+    }
+    Ok(stdin_buffer)
 }
 
 pub(crate) fn cli_reads_stdin(cli: &Cli) -> bool {
