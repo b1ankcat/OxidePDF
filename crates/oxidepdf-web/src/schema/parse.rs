@@ -1,7 +1,7 @@
 use oxidepdf_core::*;
 
 #[derive(Debug)]
-pub enum ParseOpError {
+pub(crate) enum ParseOpError {
     UnknownOp,
     Json(serde_json::Error),
 }
@@ -89,7 +89,7 @@ fn signature_options_without_trust_anchors(json: &str) -> Result<SignatureOption
     Ok(options)
 }
 
-pub fn parse_op(family: &str, op: &str, json: &str) -> Result<OperatorSpec, ParseOpError> {
+pub(crate) fn parse_op(family: &str, op: &str, json: &str) -> Result<OperatorSpec, ParseOpError> {
     fn de<T: serde::de::DeserializeOwned>(j: &str) -> Result<T, ParseOpError> {
         serde_json::from_str(j).map_err(ParseOpError::Json)
     }

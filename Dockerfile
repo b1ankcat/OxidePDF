@@ -19,8 +19,7 @@ VOLUME ["/var/lib/oxidepdf/upload"]
 EXPOSE 19898
 
 ENTRYPOINT ["/var/lib/oxidepdf/oxidepdf-web"]
-# 0.0.0.0 is required for the container's published port to be reachable.
-# Enable auth by passing OXIDEPDF_AUTH_USER/OXIDEPDF_AUTH_PASS. Without auth,
-# also pass OXIDEPDF_ALLOW_UNAUTH_NETWORK=true only behind a trusted boundary.
+# Override --addr only together with OXIDEPDF_AUTH_USER/OXIDEPDF_AUTH_PASS, or
+# pass OXIDEPDF_ALLOW_UNAUTH_NETWORK=true behind a trusted boundary.
 # Tune per-file upload limits with OXIDEPDF_MAX_UPLOAD, e.g. 256M.
-CMD ["--addr", "0.0.0.0", "--port", "19898"]
+CMD ["--addr", "127.0.0.1", "--port", "19898"]

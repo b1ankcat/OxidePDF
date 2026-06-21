@@ -16,7 +16,7 @@ use std::{
     io::{self, Write},
     path::{Path as FsPath, PathBuf},
     sync::{
-        Arc, Mutex, MutexGuard,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -107,14 +107,14 @@ enum Kind {
 }
 
 impl Kind {
-    /// Fallback content type for a kind. Image uploads carry their own precise
+    /// Content type for downloaded output. Image uploads carry their own precise
     /// type (see [`StoredArtifact::content_type`]); this is the default used
     /// for engine-produced artifacts where only the kind is known.
     fn content_type(self) -> &'static str {
         match self {
             Kind::Pdf => "application/pdf",
             Kind::Image => "image/png",
-            Kind::Svg => "image/svg+xml",
+            Kind::Svg => "application/octet-stream",
             Kind::Text => "text/plain; charset=utf-8",
             Kind::Bytes => "application/octet-stream",
         }
@@ -141,14 +141,12 @@ fn extension(name: &str) -> String {
     }
 }
 
-/// Classify an upload by filename extension. Unknown extensions default to PDF
-/// (PDF construction validates the magic bytes, so non-PDF junk is rejected
-/// downstream rather than silently mistyped).
-fn kind_from_filename(name: &str) -> Kind {
+fn kind_from_filename(name: &str) -> Result<Kind, AppError> {
     match extension(name).as_str() {
-        "png" | "jpg" | "jpeg" | "webp" => Kind::Image,
-        "svg" => Kind::Svg,
-        _ => Kind::Pdf,
+        "pdf" => Ok(Kind::Pdf),
+        "png" | "jpg" | "jpeg" | "webp" => Ok(Kind::Image),
+        "svg" => Ok(Kind::Svg),
+        _ => Err(bad_req("unsupported file extension")),
     }
 }
 
@@ -160,7 +158,8 @@ fn upload_content_type(name: &str, kind: Kind) -> &'static str {
         match extension(name).as_str() {
             "jpg" | "jpeg" => "image/jpeg",
             "webp" => "image/webp",
-            _ => "image/png",
+            "png" => "image/png",
+            _ => "application/octet-stream",
         }
     } else {
         kind.content_type()
@@ -268,10 +267,10 @@ impl AppState {
         }
     }
 
-    /// Lock the store, recovering the guard if a previous holder panicked
-    /// (poison only means an unfinished mutation, not corrupt data here).
-    fn lock(&self) -> MutexGuard<'_, Store> {
-        self.store.lock().unwrap_or_else(|e| e.into_inner())
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Store>, AppError> {
+        self.store
+            .lock()
+            .map_err(|_| internal("artifact store lock poisoned"))
     }
 
     fn next_seq(&self) -> u64 {
@@ -282,9 +281,10 @@ impl AppState {
         self.max_upload_bytes
     }
 
-    fn max_body_bytes(&self) -> u64 {
+    fn max_body_bytes(&self) -> Result<u64, AppError> {
         self.max_upload_bytes
-            .saturating_add(MULTIPART_BODY_OVERHEAD_BYTES)
+            .checked_add(MULTIPART_BODY_OVERHEAD_BYTES)
+            .ok_or_else(|| internal("upload body limit overflow"))
     }
 
     /// Store a temp file under a fresh UUID and return that id. Owns the
@@ -295,9 +295,9 @@ impl AppState {
         kind: Kind,
         content_type: &'static str,
         size: u64,
-    ) -> String {
+    ) -> Result<String, AppError> {
         let id = Uuid::new_v4().to_string();
-        self.lock().insert(
+        self.lock()?.insert(
             id.clone(),
             StoredArtifact {
                 file,
@@ -308,7 +308,7 @@ impl AppState {
                 last_access: Instant::now(),
             },
         );
-        id
+        Ok(id)
     }
 
     /// Spawn a background task that periodically evicts expired artifacts.
@@ -318,10 +318,10 @@ impl AppState {
             let mut ticker = tokio::time::interval(SWEEP_INTERVAL);
             loop {
                 ticker.tick().await;
-                store
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .sweep_expired();
+                match store.lock() {
+                    Ok(mut store) => store.sweep_expired(),
+                    Err(_) => panic!("artifact store lock poisoned"),
+                }
             }
         });
     }
@@ -333,6 +333,7 @@ impl Default for AppState {
     }
 }
 
+#[derive(Debug)]
 struct AppError(StatusCode, String);
 
 impl IntoResponse for AppError {
@@ -437,7 +438,7 @@ async fn read_stored(
     id: &str,
 ) -> Result<(Vec<u8>, Kind, &'static str), AppError> {
     let (path, kind, content_type) = {
-        let mut guard = state.lock();
+        let mut guard = state.lock()?;
         let stored = guard.artifacts.get_mut(id).ok_or_else(not_found)?;
         stored.last_access = Instant::now();
         (
@@ -455,7 +456,7 @@ async fn open_stored_stream(
     id: &str,
 ) -> Result<(tokio::fs::File, u64, &'static str), AppError> {
     let (path, size, content_type) = {
-        let mut guard = state.lock();
+        let mut guard = state.lock()?;
         let stored = guard.artifacts.get_mut(id).ok_or_else(not_found)?;
         stored.last_access = Instant::now();
         (
@@ -479,7 +480,7 @@ async fn store_artifact(state: &AppState, artifact: Artifact) -> Result<String, 
         Ok((tmp, size))
     })
     .await?;
-    Ok(state.store_file(tmp, kind, kind.content_type(), size))
+    state.store_file(tmp, kind, kind.content_type(), size)
 }
 
 async fn build_store(
@@ -502,7 +503,7 @@ fn enforce_total_stored_size<'a>(
     state: &AppState,
     ids: impl IntoIterator<Item = &'a str>,
 ) -> Result<(), AppError> {
-    let guard = state.lock();
+    let guard = state.lock()?;
     let mut total = 0u64;
     for id in ids {
         let stored = guard.artifacts.get(id).ok_or_else(not_found)?;
@@ -625,8 +626,9 @@ async fn static_asset(Path(file): Path<String>) -> Response {
 }
 
 // GET /api/schema
-async fn api_schema() -> Json<Vec<FamilySchema>> {
-    Json(schema::schema())
+async fn api_schema() -> Result<Json<Vec<FamilySchema>>, AppError> {
+    let schema = schema::schema().map_err(internal)?;
+    Ok(Json(schema))
 }
 
 // POST /api/upload
@@ -645,8 +647,11 @@ async fn api_upload(
         if files.len() >= MAX_UPLOAD_FILES {
             return Err(bad_req(format!("too many files: max {MAX_UPLOAD_FILES}")));
         }
-        let filename = field.file_name().unwrap_or("file").to_string();
-        let kind = kind_from_filename(&filename);
+        let filename = field
+            .file_name()
+            .ok_or_else(|| bad_req("uploaded file is missing a filename"))?
+            .to_string();
+        let kind = kind_from_filename(&filename)?;
         let content_type = upload_content_type(&filename, kind);
         let mut tmp = blocking_io(upload_temp_file).await?;
         let mut size = 0u64;
@@ -662,7 +667,7 @@ async fn api_upload(
             }
             tmp = write_temp_chunk(tmp, chunk).await?;
         }
-        let id = state.store_file(tmp, kind, content_type, size);
+        let id = state.store_file(tmp, kind, content_type, size)?;
         files.push(FileRef { id, filename });
     }
     Ok(Json(serde_json::json!({ "files": files })))
@@ -821,6 +826,9 @@ async fn api_file(
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, ct.parse().unwrap());
     headers.insert(header::CONTENT_LENGTH, size.into());
+    if ct == "application/octet-stream" {
+        headers.insert(header::CONTENT_DISPOSITION, "attachment".parse().unwrap());
+    }
     Ok((headers, Body::from_stream(ReaderStream::new(file))).into_response())
 }
 
@@ -830,12 +838,15 @@ async fn api_head_file(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
-    let mut guard = state.lock();
+    let mut guard = state.lock()?;
     let stored = guard.artifacts.get_mut(&id).ok_or_else(not_found)?;
     stored.last_access = Instant::now();
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, stored.content_type.parse().unwrap());
     headers.insert(header::CONTENT_LENGTH, stored.size.into());
+    if stored.content_type == "application/octet-stream" {
+        headers.insert(header::CONTENT_DISPOSITION, "attachment".parse().unwrap());
+    }
     Ok((headers, Body::empty()).into_response())
 }
 
@@ -844,7 +855,7 @@ async fn api_delete_file(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    state.lock().remove(&id).ok_or_else(not_found)?;
+    state.lock()?.remove(&id).ok_or_else(not_found)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -884,7 +895,10 @@ async fn require_auth(State(auth): State<Auth>, request: Request, next: Next) ->
     let Ok(AuthBasic((user, pass))) = AuthBasic::from_request_parts(&mut parts, &()).await else {
         return unauthorized();
     };
-    if ct_eq(&user, &auth.username) && ct_eq(pass.as_deref().unwrap_or(""), &auth.password) {
+    let Some(pass) = pass else {
+        return unauthorized();
+    };
+    if ct_eq(&user, &auth.username) && ct_eq(&pass, &auth.password) {
         next.run(Request::from_parts(parts, body)).await
     } else {
         unauthorized()
@@ -931,6 +945,13 @@ async fn require_same_origin(request: Request, next: Next) -> Response {
 }
 
 pub fn router(state: AppState, auth: Option<Auth>) -> Router {
+    let body_limit = match state.max_body_bytes() {
+        Ok(limit) => match usize::try_from(limit) {
+            Ok(limit) => limit,
+            Err(_) => panic!("upload body limit does not fit in usize"),
+        },
+        Err(error) => panic!("invalid upload body limit: {error:?}"),
+    };
     let mut app = Router::new()
         .route("/", get(index))
         .route("/static/{file}", get(static_asset))
@@ -942,9 +963,7 @@ pub fn router(state: AppState, auth: Option<Auth>) -> Router {
             "/api/file/{id}",
             get(api_file).head(api_head_file).delete(api_delete_file),
         )
-        .layer(DefaultBodyLimit::max(
-            usize::try_from(state.max_body_bytes()).unwrap_or(usize::MAX),
-        ))
+        .layer(DefaultBodyLimit::max(body_limit))
         .layer(middleware::from_fn(require_same_origin));
     if let Some(auth) = auth {
         app = app.layer(middleware::from_fn_with_state(auth, require_auth));
@@ -1119,7 +1138,7 @@ mod tests {
 
         assert_eq!(state.max_upload_bytes(), 100 * 1024 * 1024);
         assert_eq!(
-            state.max_body_bytes(),
+            state.max_body_bytes().unwrap(),
             100 * 1024 * 1024 + MULTIPART_BODY_OVERHEAD_BYTES
         );
     }
@@ -1129,9 +1148,11 @@ mod tests {
         let state = AppState::with_upload_limit(10_000, 100);
         state
             .lock()
+            .unwrap()
             .insert("a".into(), artifact(60, state.next_seq()));
         state
             .lock()
+            .unwrap()
             .insert("b".into(), artifact(50, state.next_seq()));
 
         let error = enforce_total_stored_size(&state, ["a", "b"]).unwrap_err();
@@ -1145,6 +1166,7 @@ mod tests {
         let state = AppState::with_upload_limit(10_000, 100);
         state
             .lock()
+            .unwrap()
             .insert("a".into(), artifact(60, state.next_seq()));
 
         assert!(enforce_total_stored_size(&state, ["a"]).is_ok());

@@ -2,7 +2,7 @@ mod op_schema;
 mod parse;
 
 use op_schema::op_schema;
-pub use parse::parse_op;
+pub(crate) use parse::parse_op;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -22,23 +22,26 @@ pub struct FamilySchema {
     pub ops: Vec<OpMeta>,
 }
 
-fn family(name: &'static str, ops: Vec<(&'static str, bool, &'static str)>) -> FamilySchema {
-    FamilySchema {
-        name,
-        ops: ops
-            .into_iter()
-            .map(|(op_name, multi_input, output_type)| OpMeta {
+fn family(
+    name: &'static str,
+    ops: Vec<(&'static str, bool, &'static str)>,
+) -> Result<FamilySchema, serde_json::Error> {
+    let ops = ops
+        .into_iter()
+        .map(|(op_name, multi_input, output_type)| {
+            Ok(OpMeta {
                 name: op_name,
                 multi_input,
                 output_type,
-                schema: op_schema(name, op_name),
+                schema: op_schema(name, op_name)?,
             })
-            .collect(),
-    }
+        })
+        .collect::<Result<Vec<_>, serde_json::Error>>()?;
+    Ok(FamilySchema { name, ops })
 }
 
-pub fn schema() -> Vec<FamilySchema> {
-    vec![
+pub(crate) fn schema() -> Result<Vec<FamilySchema>, serde_json::Error> {
+    Ok(vec![
         family(
             "PdfEdit",
             vec![
@@ -71,7 +74,7 @@ pub fn schema() -> Vec<FamilySchema> {
                 ("InteractiveRemove", false, "pdf"),
                 ("Compression", false, "pdf"),
             ],
-        ),
+        )?,
         family(
             "PdfInspect",
             vec![
@@ -86,7 +89,7 @@ pub fn schema() -> Vec<FamilySchema> {
                 ("Images", false, "text"),
                 ("ImageExtract", false, "image"),
             ],
-        ),
+        )?,
         family(
             "PdfSecurity",
             vec![
@@ -95,11 +98,11 @@ pub fn schema() -> Vec<FamilySchema> {
                 ("PermissionsGet", false, "text"),
                 ("PermissionsSet", false, "pdf"),
             ],
-        ),
+        )?,
         family(
             "PdfCompare",
             vec![("Report", true, "text"), ("VisualDiff", true, "image")],
-        ),
+        )?,
         family(
             "PdfSign",
             vec![
@@ -107,6 +110,6 @@ pub fn schema() -> Vec<FamilySchema> {
                 ("Verify", false, "text"),
                 ("DeleteField", false, "pdf"),
             ],
-        ),
-    ]
+        )?,
+    ])
 }

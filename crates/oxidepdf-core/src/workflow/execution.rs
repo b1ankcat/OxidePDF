@@ -93,7 +93,6 @@ where
 
     let mut worker = WorkerBuilder::new("oxidepdf-workflow")
         .backend(backend)
-        .catch_panic()
         .concurrency(max_parallel_tasks)
         .option_layer(rate_limit_layer(limits.rate_limit_per_second))
         .retry(apalis::layers::retry::RetryPolicy::retries(
@@ -158,13 +157,8 @@ where
     // (or other blocking calls) don't stall the shared async executor — a
     // single current_thread runtime (e.g. #[tokio::test]) would serialize all
     // tasks if tokio::spawn were used here.
-    tokio::task::spawn_blocking(move || {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("workflow sub-runtime")
-            .block_on(future)
-    })
+    let handle = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || handle.block_on(future))
 }
 
 impl apalis::prelude::Backend for WorkflowBackend {
