@@ -4,6 +4,8 @@ use clap::Parser;
 use oxidepdf_web::{AllowedHosts, Auth, DEFAULT_MAX_UPLOAD_BYTES, parse_size};
 use std::net::{IpAddr, SocketAddr};
 
+const DEFAULT_PASSWORD: &str = "admin";
+
 /// Web front end for OxidePDF.
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -61,11 +63,10 @@ async fn main() {
     let cli = Cli::parse();
     let socket = SocketAddr::new(cli.addr, cli.port);
 
-    let auth = match (cli.auth_user, cli.auth_pass) {
-        (Some(username), Some(password)) => Some(Auth { username, password }),
-        (None, None) => None,
-        _ => {
-            eprintln!("error: --auth-user and --auth-pass must be set together");
+    let auth = match resolve_auth(cli.auth_user, cli.auth_pass) {
+        Ok(auth) => auth,
+        Err(error) => {
+            eprintln!("error: {error}");
             std::process::exit(2);
         }
     };
@@ -106,5 +107,56 @@ async fn main() {
     if let Err(error) = axum::serve(listener, app).await {
         eprintln!("error: server failed: {error}");
         std::process::exit(1);
+    }
+}
+
+fn resolve_auth(
+    auth_user: Option<String>,
+    auth_pass: Option<String>,
+) -> Result<Option<Auth>, &'static str> {
+    match (auth_user, auth_pass) {
+        (Some(username), Some(password)) => {
+            if username.is_empty() || password.is_empty() {
+                return Err("--auth-user and --auth-pass must not be empty");
+            }
+            if password == DEFAULT_PASSWORD {
+                return Err("--auth-pass must be changed from the default value");
+            }
+            Ok(Some(Auth { username, password }))
+        }
+        (None, None) => Ok(None),
+        _ => Err("--auth-user and --auth-pass must be set together"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_auth;
+
+    #[test]
+    fn auth_can_be_disabled_for_loopback_development() {
+        assert!(resolve_auth(None, None).unwrap().is_none());
+    }
+
+    #[test]
+    fn auth_requires_user_and_password_together() {
+        assert!(resolve_auth(Some("admin".to_owned()), None).is_err());
+        assert!(resolve_auth(None, Some("secret".to_owned())).is_err());
+    }
+
+    #[test]
+    fn auth_rejects_empty_or_default_password() {
+        assert!(resolve_auth(Some("admin".to_owned()), Some(String::new())).is_err());
+        assert!(resolve_auth(Some("admin".to_owned()), Some("admin".to_owned())).is_err());
+    }
+
+    #[test]
+    fn auth_accepts_non_default_password() {
+        let auth = resolve_auth(Some("admin".to_owned()), Some("not-admin".to_owned()))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(auth.username, "admin");
+        assert_eq!(auth.password, "not-admin");
     }
 }

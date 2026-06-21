@@ -30,7 +30,11 @@ pub(crate) fn write_bash_completion(output: &mut impl Write) {
     generate(Bash, &mut command, "oxidepdf", output);
 }
 
-pub(crate) fn write_completion_file(path: &Path, bytes: &[u8], force: bool) -> Result<(), CliError> {
+pub(crate) fn write_completion_file(
+    path: &Path,
+    bytes: &[u8],
+    force: bool,
+) -> Result<(), CliError> {
     // Use the same atomic, symlink-safe, clobber-checked write path as every
     // other CLI output instead of a racy exists()+write that follows symlinks.
     let parent = path

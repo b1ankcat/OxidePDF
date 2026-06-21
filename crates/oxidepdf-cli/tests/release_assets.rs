@@ -44,7 +44,23 @@ fn check_script_runs_release_build_for_primary_linux_target() {
         script.contains("cargo clippy --workspace --all-targets --all-features -- -D warnings")
     );
     assert!(script.contains("cargo test --workspace --all-targets --all-features"));
+    assert!(script.contains("cargo-audit is required"));
+    assert!(script.contains("cargo audit"));
     assert!(script.contains("TARGETS=x86_64-unknown-linux-musl scripts/release.sh"));
+}
+
+#[test]
+fn github_ci_runs_the_same_core_quality_gates_as_check_script() {
+    let workflow = read(".github/workflows/ci.yml");
+
+    assert!(workflow.contains("cargo fmt --all -- --check"));
+    assert!(
+        workflow.contains("cargo clippy --workspace --all-targets --all-features -- -D warnings")
+    );
+    assert!(workflow.contains("cargo test --workspace --all-targets --all-features"));
+    assert!(workflow.contains("tool: cargo-audit"));
+    assert!(workflow.contains("cargo audit"));
+    assert!(workflow.contains("scripts/bench-smoke.sh"));
 }
 
 #[test]
@@ -64,9 +80,10 @@ fn dockerfile_uses_prebuilt_static_web_binary() {
     assert!(dockerfile.contains("VOLUME [\"/var/lib/oxidepdf/upload\"]"));
     assert!(dockerfile.contains("EXPOSE 19898"));
     assert!(dockerfile.contains("ENV OXIDEPDF_AUTH_USER=admin"));
-    assert!(dockerfile.contains("ENV OXIDEPDF_AUTH_PASS=admin"));
+    assert!(!dockerfile.contains("ENV OXIDEPDF_AUTH_PASS=admin"));
+    assert!(dockerfile.contains("provide"));
+    assert!(dockerfile.contains("OXIDEPDF_AUTH_PASS at runtime"));
     assert!(dockerfile.contains("ENTRYPOINT [\"/var/lib/oxidepdf/oxidepdf-web\"]"));
-    assert!(dockerfile.contains("OXIDEPDF_AUTH_USER/OXIDEPDF_AUTH_PASS"));
     assert!(dockerfile.contains("CMD [\"--addr\", \"0.0.0.0\", \"--port\", \"19898\"]"));
 }
 
@@ -80,7 +97,8 @@ fn readme_documents_open_source_distribution_and_milestones() {
     assert!(readme.contains("Deployment and Distribution"));
     assert!(readme.contains("OXIDEPDF_MAX_UPLOAD=256M"));
     assert!(readme.contains("BUILD_DOCKER_IMAGE=true"));
-    assert!(readme.contains("admin / admin"));
+    assert!(readme.contains("admin / change-me"));
+    assert!(readme.contains("does not ship with a default password"));
     assert!(readme.contains("DejaVu and Noto CJK system fonts"));
     assert!(readme.contains("English/Chinese text watermarks and overlays"));
     assert!(readme.contains("/var/lib/oxidepdf/upload"));

@@ -19,11 +19,9 @@ VOLUME ["/var/lib/oxidepdf/upload"]
 EXPOSE 19898
 
 ENV OXIDEPDF_AUTH_USER=admin
-ENV OXIDEPDF_AUTH_PASS=admin
 
 ENTRYPOINT ["/var/lib/oxidepdf/oxidepdf-web"]
-# Defaults listen on all container interfaces and require HTTP Basic auth
-# (admin:admin). Override OXIDEPDF_AUTH_USER/OXIDEPDF_AUTH_PASS before exposing
-# outside a trusted development environment.
+# Defaults listen on all container interfaces and require callers to provide
+# OXIDEPDF_AUTH_PASS at runtime. The server rejects the old admin/admin default.
 # Tune per-file upload limits with OXIDEPDF_MAX_UPLOAD, e.g. 256M.
 CMD ["--addr", "0.0.0.0", "--port", "19898"]

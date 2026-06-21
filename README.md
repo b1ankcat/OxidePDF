@@ -1,6 +1,6 @@
 # OxidePDF 🦀📄
 
-OxidePDF 0.4.1 is a Rust PDF toolkit for editing, inspecting, signing, comparing, and automating document workflows. It ships as a CLI, a workflow engine, and a web UI.
+OxidePDF 0.4.3 is a Rust PDF toolkit for editing, inspecting, signing, comparing, and automating document workflows. It ships as a CLI, a workflow engine, and a web UI.
 
 ## Highlights ✨
 
@@ -143,15 +143,17 @@ English/Chinese text watermarks and overlays, and serves it on port 19898:
 cargo zigbuild --release --target x86_64-unknown-linux-musl -p oxidepdf-web
 docker build -t oxidepdf:local .
 docker run --rm -p 19898:19898 \
+  -e OXIDEPDF_AUTH_PASS=change-me \
   -v "$PWD/oxidepdf-upload:/var/lib/oxidepdf/upload" \
   oxidepdf:local
-# then open http://localhost:19898 and sign in with admin / admin
+# then open http://localhost:19898 and sign in with admin / change-me
 ```
 
-The container binds `0.0.0.0` and enables HTTP Basic auth by default with
-`admin` / `admin`. Override both credentials before exposing it outside a trusted
-development environment. Every flag also has an environment variable, so the same
-options work via `docker run -e`:
+The container binds `0.0.0.0` and sets the HTTP Basic username to `admin`, but
+it does not ship with a default password. Provide `OXIDEPDF_AUTH_PASS` at
+startup; the server rejects the old `admin` password and empty credentials.
+Every flag also has an environment variable, so the same options work via
+`docker run -e`:
 
 ```sh
 docker run --rm -p 19898:19898 \
@@ -159,9 +161,17 @@ docker run --rm -p 19898:19898 \
   -e OXIDEPDF_AUTH_PASS=change-me \
   -e OXIDEPDF_MAX_STORAGE=1G \
   -e OXIDEPDF_MAX_UPLOAD=256M \
+  -e OXIDEPDF_ALLOWED_HOSTS=pdf.example.com \
   -v "$PWD/oxidepdf-upload:/var/lib/oxidepdf/upload" \
   oxidepdf:local
 ```
+
+When serving through a reverse proxy under a real hostname, set
+`OXIDEPDF_ALLOWED_HOSTS` to the public host name, for example
+`pdf.example.com`. The default allowlist only accepts loopback hosts
+(`localhost`, `127.0.0.1`, and `[::1]`) to protect the same-origin checks from
+DNS rebinding; otherwise proxied requests can fail with `host not allowed`.
+List multiple host names with commas.
 
 `OXIDEPDF_MAX_UPLOAD` limits each uploaded file and matching workflow resource
 limits. The HTTP request body allows a small multipart overhead above that
@@ -317,14 +327,15 @@ Configuration (every flag has a matching environment variable):
 | `--auth-user` | `OXIDEPDF_AUTH_USER` | — | HTTP Basic username (enables auth with `--auth-pass`) |
 | `--auth-pass` | `OXIDEPDF_AUTH_PASS` | — | HTTP Basic password |
 | `--allow-unauth-network` | `OXIDEPDF_ALLOW_UNAUTH_NETWORK` | `false` | Explicitly allow unauthenticated non-loopback binds |
+| `--allowed-host` | `OXIDEPDF_ALLOWED_HOSTS` | `localhost, 127.0.0.1, [::1]` | Host header allowlist; set to the public hostname when serving through a reverse proxy |
 
 > ⚠️ Auth is **off** unless both `--auth-user` and `--auth-pass` are set; then
 > every request requires HTTP Basic credentials. The server binds to loopback by
 > default. Binding to a non-loopback address without auth is refused unless
 > `--allow-unauth-network` is set.
-> The Docker image differs intentionally: it binds `0.0.0.0` and sets default
-> credentials `admin` / `admin` so published ports work immediately while still
-> requiring authentication.
+> The Docker image differs intentionally: it binds `0.0.0.0` and sets only the
+> default username `admin`; provide `OXIDEPDF_AUTH_PASS` at runtime. The server
+> rejects empty passwords and the old `admin` password.
 > Uploaded and produced files are held under `./upload` and evicted
 > automatically (oldest-first past 256 files / the storage cap, and after 30
 > minutes idle).

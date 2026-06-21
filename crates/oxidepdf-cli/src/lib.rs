@@ -16,11 +16,10 @@ use oxidepdf_core::{
     PageSelectionOptions, PdfCompareOptions, PdfEditOptions, PdfInspectOptions, PdfOperatorRunner,
     PdfSecurityOptions, PdfSignOptions, PermissionPolicy, RenderOptions, ReorderOptions,
     ResourceLimits, RotateOptions, ScalePagesOptions, SecurityDecryptOptions,
-    SecurityEncryptOptions,
-    SecurityPermissionGetOptions, SecurityPermissionSetOptions, SignatureAddOptions,
-    SignatureDeleteFieldOptions, SignatureOptions, SinglePageOptions, SplitOptions,
-    SvgToPdfOptions, TaskId, TaskSpec, TimestampAddOptions, VisualDiffOptions, WatermarkKind,
-    WatermarkOptions, Workflow, WorkflowMetadata, WorkflowVersion, execute_workflow,
+    SecurityEncryptOptions, SecurityPermissionGetOptions, SecurityPermissionSetOptions,
+    SignatureAddOptions, SignatureDeleteFieldOptions, SignatureOptions, SinglePageOptions,
+    SplitOptions, SvgToPdfOptions, TaskId, TaskSpec, TimestampAddOptions, VisualDiffOptions,
+    WatermarkKind, WatermarkOptions, Workflow, WorkflowMetadata, WorkflowVersion, execute_workflow,
 };
 use std::fs;
 use std::io::{self, Read, Write};

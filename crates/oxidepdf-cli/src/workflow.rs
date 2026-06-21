@@ -17,8 +17,7 @@ pub(crate) async fn run_workflow(
     }
 
     let workflow_from_stdin = is_stdio(&args.workflow);
-    let workflow_bytes =
-        read_path_or_stdin(&args.workflow, stdin, &ResourceLimits::default())?;
+    let workflow_bytes = read_path_or_stdin(&args.workflow, stdin, &ResourceLimits::default())?;
     let workflow = parse_workflow(&workflow_bytes, &args.workflow)?;
 
     let stdin_inputs = workflow

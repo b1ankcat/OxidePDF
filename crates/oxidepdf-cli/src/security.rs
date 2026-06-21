@@ -17,11 +17,8 @@ pub(crate) async fn run_encrypt(
     stdin: &[u8],
     stdout: &mut impl Write,
 ) -> Result<(), CliError> {
-    let owner_password = resolve_required_password(
-        "owner",
-        args.owner_password,
-        args.owner_password_file,
-    )?;
+    let owner_password =
+        resolve_required_password("owner", args.owner_password, args.owner_password_file)?;
     let user_password =
         resolve_required_password("user", args.user_password, args.user_password_file)?;
     let workflow = one_input_workflow(
@@ -64,8 +61,7 @@ pub(crate) async fn run_permissions(
 ) -> Result<(), CliError> {
     match command {
         PermissionsCommand::Get(args) => {
-            let password =
-                resolve_optional_password(args.password, args.password_file)?;
+            let password = resolve_optional_password(args.password, args.password_file)?;
             let workflow = one_input_workflow(
                 args.input,
                 args.output,
@@ -77,16 +73,10 @@ pub(crate) async fn run_permissions(
             execute_and_write_workflow(workflow, stdin, args.force, stdout).await
         }
         PermissionsCommand::Set(args) => {
-            let owner_password = resolve_required_password(
-                "owner",
-                args.owner_password,
-                args.owner_password_file,
-            )?;
-            let user_password = resolve_required_password(
-                "user",
-                args.user_password,
-                args.user_password_file,
-            )?;
+            let owner_password =
+                resolve_required_password("owner", args.owner_password, args.owner_password_file)?;
+            let user_password =
+                resolve_required_password("user", args.user_password, args.user_password_file)?;
             let workflow = one_input_workflow(
                 args.input,
                 args.output,
@@ -142,9 +132,8 @@ fn resolve_optional_password(
 
 fn read_password_file(path: &Path) -> Result<String, CliError> {
     let bytes = fs::read(path).map_err(CliError::Input)?;
-    let text = String::from_utf8(bytes).map_err(|_| {
-        CliError::Workflow("password file is not valid UTF-8".to_owned())
-    })?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_| CliError::Workflow("password file is not valid UTF-8".to_owned()))?;
     let password = text.trim_end_matches(['\n', '\r']).to_owned();
     if password.is_empty() {
         return Err(CliError::Workflow("password file is empty".to_owned()));
