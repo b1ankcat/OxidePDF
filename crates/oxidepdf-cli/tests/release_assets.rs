@@ -29,6 +29,10 @@ fn release_script_builds_musl_targets_and_checks_linkage() {
     assert!(script.contains("validate_version"));
     assert!(script.contains("*[!A-Za-z0-9._+-]*"));
     assert!(script.contains("VERSION=\"${VERSION:-$(package_version)}\""));
+    assert!(script.contains("BUILD_DOCKER_IMAGE=\"${BUILD_DOCKER_IMAGE:-false}\""));
+    assert!(script.contains("DOCKER_IMAGE=\"${DOCKER_IMAGE:-oxidepdf:local}\""));
+    assert!(script.contains("validate_docker_image"));
+    assert!(script.contains("docker build -t \"$DOCKER_IMAGE\" ."));
 }
 
 #[test]
@@ -59,9 +63,11 @@ fn dockerfile_uses_prebuilt_static_web_binary() {
     assert!(dockerfile.contains("WORKDIR /var/lib/oxidepdf"));
     assert!(dockerfile.contains("VOLUME [\"/var/lib/oxidepdf/upload\"]"));
     assert!(dockerfile.contains("EXPOSE 19898"));
+    assert!(dockerfile.contains("ENV OXIDEPDF_AUTH_USER=admin"));
+    assert!(dockerfile.contains("ENV OXIDEPDF_AUTH_PASS=admin"));
     assert!(dockerfile.contains("ENTRYPOINT [\"/var/lib/oxidepdf/oxidepdf-web\"]"));
     assert!(dockerfile.contains("OXIDEPDF_AUTH_USER/OXIDEPDF_AUTH_PASS"));
-    assert!(dockerfile.contains("OXIDEPDF_ALLOW_UNAUTH_NETWORK=true"));
+    assert!(dockerfile.contains("CMD [\"--addr\", \"0.0.0.0\", \"--port\", \"19898\"]"));
 }
 
 #[test]
@@ -73,6 +79,8 @@ fn readme_documents_open_source_distribution_and_milestones() {
     assert!(readme.contains("oxidepdf completion bash"));
     assert!(readme.contains("Deployment and Distribution"));
     assert!(readme.contains("OXIDEPDF_MAX_UPLOAD=256M"));
+    assert!(readme.contains("BUILD_DOCKER_IMAGE=true"));
+    assert!(readme.contains("admin / admin"));
     assert!(readme.contains("DejaVu and Noto CJK system fonts"));
     assert!(readme.contains("English/Chinese text watermarks and overlays"));
     assert!(readme.contains("/var/lib/oxidepdf/upload"));

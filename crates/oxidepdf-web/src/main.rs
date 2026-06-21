@@ -73,13 +73,28 @@ async fn main() {
 
     let state = oxidepdf_web::AppState::with_upload_limit(cli.max_storage, cli.max_upload);
     state.spawn_sweeper();
-    let app = oxidepdf_web::router(state, auth.clone());
-    let listener = tokio::net::TcpListener::bind(socket).await.unwrap();
+    let app = match oxidepdf_web::router(state, auth.clone()) {
+        Ok(app) => app,
+        Err(error) => {
+            eprintln!("error: {error}");
+            std::process::exit(2);
+        }
+    };
+    let listener = match tokio::net::TcpListener::bind(socket).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("error: failed to bind {socket}: {error}");
+            std::process::exit(2);
+        }
+    };
     println!(
         "oxidepdf-web listening on http://{socket} (auth: {}, max storage: {} bytes, max upload: {} bytes)",
         if auth.is_some() { "on" } else { "off" },
         cli.max_storage,
         cli.max_upload
     );
-    axum::serve(listener, app).await.unwrap();
+    if let Err(error) = axum::serve(listener, app).await {
+        eprintln!("error: server failed: {error}");
+        std::process::exit(1);
+    }
 }

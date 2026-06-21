@@ -11,8 +11,14 @@ pub fn validate_workflow(workflow: &Workflow) -> Result<ExecutionPlan, OxideErro
     check_resource_limit_entrypoint(&workflow.limits)?;
     enforce_task_count_limit(workflow.tasks.len(), &workflow.limits)?;
     let ids = collect_ids(workflow)?;
-    validate_task_references(workflow, &ids)?;
-    validate_output_references(workflow, &ids)?;
+    let output_ids = workflow
+        .outputs
+        .iter()
+        .map(|output| output.id.clone())
+        .collect::<BTreeSet<_>>();
+    let artifact_refs = ids.difference(&output_ids).cloned().collect::<BTreeSet<_>>();
+    validate_task_references(workflow, &artifact_refs)?;
+    validate_output_references(workflow, &artifact_refs)?;
     let (task_order, layers) = build_execution_graph(workflow)?;
 
     let task_index = workflow

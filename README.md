@@ -117,7 +117,10 @@ scripts/release.sh
 ```
 
 The release script rejects empty or whitespace-only `TARGETS` and accepts
-standard Cargo version strings, including build metadata.
+standard Cargo version strings, including build metadata. Set
+`BUILD_DOCKER_IMAGE=true` to also build the local Docker image after the
+`x86_64-unknown-linux-musl` web binary is available; override the image tag with
+`DOCKER_IMAGE=...`.
 
 Each zip contains:
 
@@ -140,16 +143,15 @@ English/Chinese text watermarks and overlays, and serves it on port 19898:
 cargo zigbuild --release --target x86_64-unknown-linux-musl -p oxidepdf-web
 docker build -t oxidepdf:local .
 docker run --rm -p 19898:19898 \
-  -e OXIDEPDF_AUTH_USER=admin \
-  -e OXIDEPDF_AUTH_PASS=change-me \
   -v "$PWD/oxidepdf-upload:/var/lib/oxidepdf/upload" \
   oxidepdf:local
-# then open http://localhost:19898
+# then open http://localhost:19898 and sign in with admin / admin
 ```
 
-Because the container binds `0.0.0.0`, auth is required by default when exposing
-it. Every flag also has an environment variable, so the same options work via
-`docker run -e`:
+The container binds `0.0.0.0` and enables HTTP Basic auth by default with
+`admin` / `admin`. Override both credentials before exposing it outside a trusted
+development environment. Every flag also has an environment variable, so the same
+options work via `docker run -e`:
 
 ```sh
 docker run --rm -p 19898:19898 \
@@ -297,7 +299,7 @@ same validation and execution path as workflow documents.
 `oxidepdf-web` is a self-contained web front end for uploads, single operations,
 visual workflow building, previews, and downloads. The interface supports
 English and Chinese, includes a drag-and-drop upload preview zone, and binds to
-`127.0.0.1:19898` by default.
+`127.0.0.1:19898` by default when run directly.
 
 ```sh
 cargo run -p oxidepdf-web
@@ -320,6 +322,9 @@ Configuration (every flag has a matching environment variable):
 > every request requires HTTP Basic credentials. The server binds to loopback by
 > default. Binding to a non-loopback address without auth is refused unless
 > `--allow-unauth-network` is set.
+> The Docker image differs intentionally: it binds `0.0.0.0` and sets default
+> credentials `admin` / `admin` so published ports work immediately while still
+> requiring authentication.
 > Uploaded and produced files are held under `./upload` and evicted
 > automatically (oldest-first past 256 files / the storage cap, and after 30
 > minutes idle).

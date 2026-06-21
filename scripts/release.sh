@@ -7,6 +7,8 @@ BIN="${BIN:-oxidepdf}"
 WEB_PACKAGE="${WEB_PACKAGE:-oxidepdf-web}"
 WEB_BIN="${WEB_BIN:-oxidepdf-web}"
 DIST_DIR="${DIST_DIR:-dist}"
+BUILD_DOCKER_IMAGE="${BUILD_DOCKER_IMAGE:-false}"
+DOCKER_IMAGE="${DOCKER_IMAGE:-oxidepdf:local}"
 
 validate_component() {
   name="$1"
@@ -23,6 +25,15 @@ validate_version() {
   case "$VERSION" in
     "" | /* | *..* | *[!A-Za-z0-9._+-]*)
       echo "Invalid VERSION: $VERSION" >&2
+      exit 2
+      ;;
+  esac
+}
+
+validate_docker_image() {
+  case "$DOCKER_IMAGE" in
+    "" | *[[:space:]]* | *[\;\&\|\>\<\`\"\'\$]*)
+      echo "Invalid DOCKER_IMAGE: $DOCKER_IMAGE" >&2
       exit 2
       ;;
   esac
@@ -59,6 +70,16 @@ validate_component BIN "$BIN"
 validate_component WEB_PACKAGE "$WEB_PACKAGE"
 validate_component WEB_BIN "$WEB_BIN"
 validate_component DIST_DIR "$DIST_DIR"
+case "$BUILD_DOCKER_IMAGE" in
+  true | false) ;;
+  *)
+    echo "Invalid BUILD_DOCKER_IMAGE: $BUILD_DOCKER_IMAGE" >&2
+    exit 2
+    ;;
+esac
+if [ "$BUILD_DOCKER_IMAGE" = true ]; then
+  validate_docker_image
+fi
 
 if ! cargo zigbuild --help >/dev/null 2>&1; then
   echo "cargo-zigbuild is required; install with: cargo install cargo-zigbuild" >&2
@@ -145,3 +166,15 @@ for target in $TARGETS; do
   (cd "$DIST_DIR" && zip -qr "$BIN-$VERSION-$target.zip" "$BIN-$VERSION-$target")
   sha256sum "$DIST_DIR/$BIN-$VERSION-$target.zip" > "$DIST_DIR/$BIN-$VERSION-$target.zip.sha256"
 done
+
+if [ "$BUILD_DOCKER_IMAGE" = true ]; then
+  command -v docker >/dev/null 2>&1 || {
+    echo "docker is required when BUILD_DOCKER_IMAGE=true" >&2
+    exit 127
+  }
+  if [ ! -x "target/x86_64-unknown-linux-musl/release/$WEB_BIN" ]; then
+    echo "Docker image build requires target/x86_64-unknown-linux-musl/release/$WEB_BIN" >&2
+    exit 1
+  fi
+  docker build -t "$DOCKER_IMAGE" .
+fi

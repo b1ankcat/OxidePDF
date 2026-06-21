@@ -18,8 +18,12 @@ VOLUME ["/var/lib/oxidepdf/upload"]
 
 EXPOSE 19898
 
+ENV OXIDEPDF_AUTH_USER=admin
+ENV OXIDEPDF_AUTH_PASS=admin
+
 ENTRYPOINT ["/var/lib/oxidepdf/oxidepdf-web"]
-# Override --addr only together with OXIDEPDF_AUTH_USER/OXIDEPDF_AUTH_PASS, or
-# pass OXIDEPDF_ALLOW_UNAUTH_NETWORK=true behind a trusted boundary.
+# Defaults listen on all container interfaces and require HTTP Basic auth
+# (admin:admin). Override OXIDEPDF_AUTH_USER/OXIDEPDF_AUTH_PASS before exposing
+# outside a trusted development environment.
 # Tune per-file upload limits with OXIDEPDF_MAX_UPLOAD, e.g. 256M.
-CMD ["--addr", "127.0.0.1", "--port", "19898"]
+CMD ["--addr", "0.0.0.0", "--port", "19898"]
